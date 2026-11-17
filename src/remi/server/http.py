@@ -38,6 +38,8 @@ log = logging.getLogger(__name__)
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 COOKIE = "remi_session"
 ATTACHMENT_WAIT = 20.0
+UPLOAD_MAX = 50 * 1024 * 1024  # 実際の上限はRedmineの設定で決まる(超えたらRedmineが拒否する)
+PENDING_KEEP = 50
 EXTERNAL_IMAGE_MAX = 10 * 1024 * 1024
 SSE_KEEPALIVE = 15.0
 
@@ -54,6 +56,9 @@ class LocalServer:
         self._methods = api.methods()
         self._external_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
         self._attachment_events: dict[tuple[int, int], threading.Event] = {}
+        # 送信前の添付(画像の表示用)。id -> (server_id, filename, content_type, data)
+        self._pending: OrderedDict[int, tuple[int, str, str, bytes]] = OrderedDict()
+        self._pending_seq = 0
         self._lock = threading.Lock()
         api.ctx.bus.on(self._on_event)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
@@ -109,6 +114,27 @@ class LocalServer:
                 return None
         ctype = a.content_type or mimetypes.guess_type(a.filename)[0] or "application/octet-stream"
         return Path(a.local_path), ctype
+
+    def upload(self, server_id: int, filename: str, data: bytes) -> dict[str, Any]:
+        """Redmineへファイルをアップロードし、トークンを返す(設計書 §6.3)。"""
+        from remi.api.errors import RedmineError
+
+        client = self.api.sync.client(server_id) if self.api.sync is not None else None
+        if client is None:
+            raise RpcError("connection_failed")
+        try:
+            token = client.upload(data, filename)
+        except RedmineError as e:
+            raise RpcError(e.code.value, e.detail) from e
+        ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        with self._lock:
+            self._pending_seq += 1
+            pid = self._pending_seq
+            self._pending[pid] = (server_id, filename, ctype, data)
+            while len(self._pending) > PENDING_KEEP:
+                self._pending.popitem(last=False)
+        return {"id": pid, "token": token, "filename": filename, "contentType": ctype, "size": len(data),
+                "isImage": ctype.startswith("image/") and ctype != "image/svg+xml", "url": f"/pending/{pid}"}
 
     def external_image(self, url: str) -> tuple[bytes, str] | None:
         if not self.api.ctx.settings.get("allow_external_images"):
@@ -203,6 +229,13 @@ class LocalServer:
                     return self._send(HTTPStatus.OK, css.encode(), "text/css; charset=utf-8")
                 if url.path.startswith("/attachments/"):
                     return self._attachment(url.path)
+                if url.path.startswith("/pending/"):
+                    pid = url.path.rsplit("/", 1)[-1]
+                    with server._lock:
+                        got = server._pending.get(int(pid)) if pid.isdigit() else None
+                    if got is None or not got[2].startswith("image/") or got[2] == "image/svg+xml":
+                        return self._deny(HTTPStatus.NOT_FOUND)
+                    return self._send(HTTPStatus.OK, got[3], got[2])
                 if url.path == "/external-image":
                     got = server.external_image(query.get("url", [""])[0])
                     if got is None:
@@ -275,15 +308,17 @@ class LocalServer:
             def do_POST(self) -> None:  # noqa: N802
                 # 接続を使い回すので、拒否する場合も先に本文を読み切っておく
                 length = int(self.headers.get("Content-Length") or 0)
-                if length > 10 * 1024 * 1024:
+                if length > UPLOAD_MAX:
                     self.close_connection = True
                     return self._deny(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
                 raw = self.rfile.read(length) if length else b""
                 if not self._host_ok() or not self._authed():
                     return self._deny()
+                url = urlparse(self.path)
+                if url.path == "/upload":
+                    return self._upload(url, raw)
                 if not self.headers.get("Content-Type", "").startswith("application/json"):
                     return self._deny(HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
-                url = urlparse(self.path)
                 if not url.path.startswith("/api/"):
                     return self._deny(HTTPStatus.NOT_FOUND)
                 method = server._methods.get(url.path[len("/api/"):])
@@ -305,6 +340,24 @@ class LocalServer:
                 except Exception:  # noqa: BLE001
                     log.exception("RPC %s failed", url.path)
                     return self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": {"code": "internal"}})
+                self._json(HTTPStatus.OK, {"result": result})
+
+            def _upload(self, url, raw: bytes) -> None:
+                # 別サイトからのフォーム送信を防ぐため、専用ヘッダーを必須にする(CSRF対策)
+                if self.headers.get("X-Remi-Upload") != "1":
+                    return self._deny()
+                q = parse_qs(url.query)
+                try:
+                    server_id = int(q["serverId"][0])
+                    filename = q["filename"][0].replace("/", "_").replace("\\", "_").strip()
+                except (KeyError, ValueError, IndexError):
+                    return self._json(HTTPStatus.BAD_REQUEST, {"error": {"code": "bad_request"}})
+                if not filename or not raw:
+                    return self._json(HTTPStatus.BAD_REQUEST, {"error": {"code": "bad_request"}})
+                try:
+                    result = server.upload(server_id, filename, raw)
+                except RpcError as e:
+                    return self._json(HTTPStatus.OK, {"error": {"code": e.code, "detail": e.detail}})
                 self._json(HTTPStatus.OK, {"result": result})
 
         return Handler

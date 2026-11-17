@@ -115,3 +115,42 @@ def test_probe_returns_user_counts_and_format(fake, client):
 ])
 def test_guess_text_format(texts, expected):
     assert guess_text_format(texts).text_format == expected
+
+
+def test_update_issue_with_changes_and_upload(fake, client):
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "x")
+    token = client.upload(b"\x89PNG", "clip.png")
+    client.update_issue(10, notes="添付します", changes={"status_id": 2, "assigned_to_id": 7, "priority_id": 3},
+                        uploads=[{"token": token, "filename": "clip.png", "content_type": "image/png"}])
+    j = fake.journals[10][-1]
+    assert j["notes"] == "添付します"
+    names = {d["name"] for d in j["details"] if d["property"] == "attr"}
+    assert names == {"status_id", "assigned_to_id", "priority_id"}
+    assert any(d["property"] == "attachment" and d["new_value"] == "clip.png" for d in j["details"])
+    assert fake.issues[10]["assigned_to"]["id"] == 7
+    client.update_issue(10, changes={"assigned_to_id": None})
+    assert "assigned_to" not in fake.issues[10]
+    with pytest.raises(ValueError):
+        client.update_issue(10, changes={"subject": "x"})
+
+
+def test_upload_too_large(fake, client):
+    fake.max_upload = 3
+    with pytest.raises(RedmineError) as e:
+        client.upload(b"12345", "a.bin")
+    assert e.value.code == ErrorCode.UNPROCESSABLE
+
+
+def test_edit_options_and_watchers(fake, client):
+    fake.add_project(1, "A")
+    fake.members[1] = [ME, 7]
+    fake.add_issue(10, 1, "x", assigned_to=7)
+    assert [s["id"] for s in client.allowed_statuses(10)] == [1, 2, 5]
+    fake.allowed_statuses_supported = False
+    assert client.allowed_statuses(10) is None
+    assert {m["user"]["id"] for m in client.memberships(1)} == {ME, 7}
+    client.add_watcher(10, ME)
+    assert ME in fake.watchers[10]
+    client.remove_watcher(10, ME)
+    assert ME not in fake.watchers[10]

@@ -189,3 +189,93 @@ def test_open_issue_and_active_are_tracked(db):
     assert api.open_issue == (1, 5) and api.active is False
     api.setOpenIssue(None, None)
     assert api.open_issue is None
+
+
+def _register(app, fake):
+    from remi.store.servers import Server
+
+    sid = app.ctx.servers.save(Server(name="S", url=fake.base_url, my_user_id=ME, my_group_ids=[100]),
+                               api_key=API_KEY).server_id
+    app.sync.restart()
+    return sid
+
+
+def test_relation_filter(app, fake):
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(11, 1, "ウォッチ", assigned_to=7, watchers={ME})
+    fake.add_issue(12, 1, "両方", watchers={ME})
+    fake.add_issue(13, 1, "グループ", assigned_to=100)
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 4)
+    ids = lambda rel: sorted(i["issueId"] for i in app.rpc("listIssues", relation=rel)["issues"])  # noqa: E731
+    assert ids("all") == [10, 11, 12, 13]
+    assert ids("assigned") == [10, 12, 13]
+    assert ids("watching") == [11, 12]
+    assert ids("authored") == []
+    assert app.rpc_error("listIssues", relation="x")["code"] == "invalid_input"
+    assert app.rpc("setSetting", key="relation_filter", value="watching")["relation_filter"] == "watching"
+
+
+def test_edit_upload_and_watch(app, fake):
+    fake.add_project(1, "A")
+    fake.members[1] = [ME, 7]
+    fake.add_issue(10, 1, "x")
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None and app.ctx.issues.journals_synced(sid, 10))
+
+    opts = app.rpc("getEditOptions", serverId=sid, issueId=10)
+    assert [s["name"] for s in opts["statuses"]] == ["新規", "進行中", "終了"] and opts["statusesExact"]
+    assert [s["closed"] for s in opts["statuses"]] == [False, False, True]
+    assert {a["id"] for a in opts["assignees"]} == {ME, 7}
+    assert opts["current"]["assigned_to_id"] == ME and opts["me"] == ME
+
+    # アップロード(専用ヘッダーがないものは拒否)
+    url = f"{app.server.origin}/upload?serverId={sid}&filename=clip.png"
+    assert app.http.post(url, data=b"\x89PNG").status_code == 403
+    up = app.http.post(url, data=b"\x89PNG", headers={"X-Remi-Upload": "1"}).json()["result"]
+    assert up["isImage"] and up["token"]
+    assert app.http.get(app.server.origin + up["url"]).content == b"\x89PNG"
+    out = app.rpc("preview", serverId=sid, issueId=10, text="![](clip.png)",
+                  pending=[{"filename": "clip.png", "id": up["id"]}])
+    assert f'src="{up["url"]}"' in out
+
+    # 変更 + 添付だけ(コメントなし)でも送れる
+    assert app.rpc_error("postNote", serverId=sid, issueId=10, changes={"subject": "x"})["code"] == "invalid_input"
+    app.rpc("postNote", serverId=sid, issueId=10, body="", changes={"status_id": 2, "assigned_to_id": 7},
+            uploads=[{"token": up["token"], "filename": "clip.png", "contentType": "image/png"}])
+    assert wait_until(lambda: (app.ctx.issues.get(sid, 10).status_id == 2))
+    conv = app.rpc("getConversation", serverId=sid, issueId=10)
+    texts = [d["text"] for j in conv["journals"] for d in j["details"]]
+    assert any("clip.png" in t_ for t_ in texts) and conv["assignedToId"] == 7
+    # 担当を外れても、ウォッチしていれば監視対象に残る
+    assert conv["relations"] == ["assigned"]
+    app.rpc("setWatching", serverId=sid, issueId=10, watching=True)
+    assert wait_until(lambda: ME in fake.watchers[10] and app.ctx.issues.get(sid, 10).relation_flags & 2)
+    app.rpc("setWatching", serverId=sid, issueId=10, watching=False)
+    assert wait_until(lambda: ME not in fake.watchers[10])
+
+
+def test_open_redmine_falls_back_to_browser(db, monkeypatch):
+    from remi.context import AppContext
+    from remi.server.api import RemiApi
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+
+    class Win:
+        def __init__(self):
+            self.urls = []
+
+        def open_redmine(self, url):
+            self.urls.append(url)
+            return True
+
+    win = Win()
+    api = RemiApi(AppContext(db), window=win)
+    assert api.openRedmine("https://rm.example/issues/1") == "app"
+    assert api.openRedmine("https://rm.example/issues/1", external=True) == "browser"
+    api.setSetting("redmine_open_in", "browser")
+    assert api.openRedmine("https://rm.example/issues/2") == "browser"
+    assert win.urls == ["https://rm.example/issues/1"]
+    assert opened == ["https://rm.example/issues/1", "https://rm.example/issues/2"]

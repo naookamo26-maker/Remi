@@ -133,19 +133,23 @@ class ServerWorker(threading.Thread):
             (aid,) = args
             if aid not in self.sched.attachments:
                 self.sched.attachments.append(aid)
-        elif cmd == "post":
-            self._post_note(*args)
+        elif cmd == "update":
+            self._update_issue(*args)
+        elif cmd == "watch":
+            self._set_watching(*args)
 
-    # --- コメント投稿 ------------------------------------------------------------
-    def _post_note(self, issue_id: int, notes: str, private: bool) -> None:
+    # --- コメント投稿・項目の変更・ウォッチ ------------------------------------------
+    def _update_issue(self, issue_id: int, notes: str, private: bool, changes: dict | None,
+                      uploads: list | None) -> None:
         assert self.sync is not None
         issues = self.sync.issues
         try:
-            self.sync.client.add_note(issue_id, notes, private)
+            self.sync.client.update_issue(issue_id, notes=notes, private=private, changes=changes, uploads=uploads)
         except RedmineError as e:
-            log.warning("posting a note to #%s failed: %s", issue_id, e)
+            log.warning("updating #%s failed: %s", issue_id, e)
             # 送信に失敗したら、下書きとして残して再送できるようにする(設計書 §6)
-            issues.save_draft(self.server_id, issue_id, notes, private, failed=True, error=e.code.value)
+            if notes:
+                issues.save_draft(self.server_id, issue_id, notes, private, failed=True, error=e.code.value)
             self.bus.publish("noteFinished", serverId=self.server_id, issueId=issue_id,
                              error=e.code.value, detail=e.detail)
             return
@@ -153,10 +157,25 @@ class ServerWorker(threading.Thread):
         self.bus.publish("noteFinished", serverId=self.server_id, issueId=issue_id, error=None, detail="")
         try:
             r = self.sync.fetch_journals(issue_id, notify=False)
-            self.sync.issues.mark_read(self.server_id, issue_id)
+            issues.mark_read(self.server_id, issue_id)
             self._emit(r, extra={issue_id})
         except RedmineError as e:
-            log.info("refetch after posting failed: %s", e)
+            log.info("refetch after updating failed: %s", e)
+
+    def _set_watching(self, issue_id: int, watching: bool) -> None:
+        assert self.sync is not None
+        me = self.sync.server.my_user_id
+        try:
+            if watching:
+                self.sync.client.add_watcher(issue_id, me)
+            else:
+                self.sync.client.remove_watcher(issue_id, me)
+        except RedmineError as e:
+            self.bus.publish("watchFinished", serverId=self.server_id, issueId=issue_id, error=e.code.value)
+            return
+        self.sync.set_watching_flag(issue_id, watching)
+        self.bus.publish("watchFinished", serverId=self.server_id, issueId=issue_id, error=None)
+        self.bus.publish("dataChanged", serverId=self.server_id, issueIds=[issue_id])
 
     # --- tick ----------------------------------------------------------------
     def _retention(self) -> int:
@@ -384,9 +403,26 @@ class SyncManager:
         w.send("attachment", attachment_id)
         return True
 
-    def post_note(self, server_id: int, issue_id: int, notes: str, private: bool) -> bool:
+    def post_note(self, server_id: int, issue_id: int, notes: str, private: bool,
+                  changes: dict | None = None, uploads: list | None = None) -> bool:
+        """コメント・項目の変更・添付をまとめて送る。結果は noteFinished イベントで届く。"""
         w = self._worker(server_id)
         if w is None:
             return False
-        w.send("post", issue_id, notes, private)
+        w.send("update", issue_id, notes, private, changes, uploads)
         return True
+
+    def set_watching(self, server_id: int, issue_id: int, watching: bool) -> bool:
+        w = self._worker(server_id)
+        if w is None:
+            return False
+        w.send("watch", issue_id, watching)
+        return True
+
+    def client(self, server_id: int) -> RedmineClient | None:
+        """画面からの問い合わせ(編集の選択肢・アップロード)に使うクライアント。
+
+        RedmineClient はリクエストを1本ずつ送るので、同期スレッドと共有してよい。
+        """
+        w = self._worker(server_id)
+        return w.sync.client if w is not None and w.sync is not None else None

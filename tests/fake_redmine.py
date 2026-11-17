@@ -11,6 +11,7 @@ import re
 import threading
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 API_KEY = "test-key"
@@ -44,7 +45,13 @@ class FakeRedmine:
         self.requests: list[tuple[str, str]] = []
         self.rest_enabled = True
         self.fail_next: int | None = None  # 次のリクエストを指定ステータスで失敗させる
+        self.fail_next_put: int | None = None  # 次の更新(PUT)だけを失敗させる
         self._next_journal = 1000
+        self._next_upload = 0
+        self.uploads: dict[str, tuple[str, bytes]] = {}
+        self.max_upload = 5 * 1024 * 1024
+        self.members: dict[int, list[int]] = {}  # project_id -> user_id
+        self.allowed_statuses_supported = True
         self._lock = threading.RLock()
 
     # --- テスト用のデータ操作 ------------------------------------------------
@@ -115,6 +122,48 @@ class FakeRedmine:
         self.add_journal(iid, by, details=[{"property": "attr", "name": "status_id",
                                             "old_value": str(old), "new_value": str(status_id)}])
 
+    def _update(self, iid: int, data: dict) -> tuple[int, Any]:
+        """PUT /issues/:id.json: コメント・項目の変更・添付をまとめて1つの journal にする。"""
+        notes = data.get("notes", "") or ""
+        details = []
+        issue = self.issues[iid]
+        if "status_id" in data:
+            new = self._status(int(data["status_id"]))
+            details.append({"property": "attr", "name": "status_id", "old_value": str(issue["status"]["id"]),
+                            "new_value": str(new["id"])})
+            issue["status"] = new
+            if new["is_closed"]:
+                issue["closed_on"] = now()
+        if "assigned_to_id" in data:
+            old = issue.get("assigned_to", {}).get("id")
+            new_id = data["assigned_to_id"]
+            if new_id in ("", None):
+                issue.pop("assigned_to", None)
+            else:
+                if int(new_id) not in self.users and int(new_id) != 100:
+                    return 422, {"errors": ["Assignee is invalid"]}
+                issue["assigned_to"] = self._user_ref(int(new_id))
+            details.append({"property": "attr", "name": "assigned_to_id", "old_value": str(old) if old else None,
+                            "new_value": str(new_id) if new_id not in ("", None) else None})
+        if "priority_id" in data:
+            details.append({"property": "attr", "name": "priority_id", "old_value": str(issue["priority"]["id"]),
+                            "new_value": str(data["priority_id"])})
+            issue["priority"] = next(p for p in self.priorities if p["id"] == int(data["priority_id"]))
+        if "done_ratio" in data:
+            details.append({"property": "attr", "name": "done_ratio", "old_value": str(issue.get("done_ratio", 0)),
+                            "new_value": str(data["done_ratio"])})
+            issue["done_ratio"] = int(data["done_ratio"])
+        for up in data.get("uploads") or []:
+            filename, content = self.uploads.pop(up["token"])
+            aid = 9000 + len(self.attachments)
+            self.add_attachment(iid, aid, up.get("filename") or filename, content,
+                                up.get("content_type") or "application/octet-stream")
+            details.append({"property": "attachment", "name": str(aid), "new_value": up.get("filename") or filename})
+        if not notes.strip() and not details:
+            return 422, {"errors": ["Notes can't be blank"]}
+        self.add_journal(iid, ME, notes, details=details, private=bool(data.get("private_notes")))
+        return 204, None
+
     # --- 内部 -----------------------------------------------------------------
     def _status(self, sid: int) -> dict:
         s = next(x for x in self.statuses if x["id"] == sid)
@@ -161,6 +210,9 @@ class FakeRedmine:
             if self.fail_next is not None:
                 code, self.fail_next = self.fail_next, None
                 return code, {"errors": ["forced"]}
+            if self.fail_next_put is not None and method == "PUT":
+                code, self.fail_next_put = self.fail_next_put, None
+                return code, {"errors": ["forced"]}
             if headers.get("X-Redmine-API-Key") != API_KEY:
                 return 401, {}
             if not self.rest_enabled:
@@ -189,12 +241,7 @@ class FakeRedmine:
                 if iid not in self.issues:
                     return 404, {}
                 if method == "PUT":
-                    data = json.loads(body or b"{}").get("issue", {})
-                    notes = data.get("notes", "")
-                    if not notes.strip():
-                        return 422, {"errors": ["Notes can't be blank"]}
-                    self.add_journal(iid, ME, notes, private=bool(data.get("private_notes")))
-                    return 204, None
+                    return self._update(iid, json.loads(body or b"{}").get("issue", {}))
                 issue = dict(self.issues[iid])
                 inc = query.get("include", "").split(",")
                 if "journals" in inc:
@@ -207,7 +254,33 @@ class FakeRedmine:
                     ]
                 if "watchers" in inc:
                     issue["watchers"] = [self._user_ref(u) for u in self.watchers[iid]]
+                if "allowed_statuses" in inc and self.allowed_statuses_supported:
+                    issue["allowed_statuses"] = [{"id": x["id"], "name": x["name"], "is_closed": x["is_closed"]}
+                                                 for x in self.statuses]
                 return 200, {"issue": issue}
+            if path == "/uploads.json" and method == "POST":
+                if len(body) > self.max_upload:
+                    return 422, {"errors": ["This file cannot be uploaded because it exceeds the maximum allowed file size"]}
+                self._next_upload += 1
+                token = f"{self._next_upload}.tok"
+                self.uploads[token] = (query.get("filename", "file"), body)
+                return 201, {"upload": {"id": self._next_upload, "token": token}}
+            m = re.match(r"^/projects/(\d+)/memberships\.json$", path)
+            if m:
+                items = [{"id": i, "project": {"id": int(m.group(1))}, "user": self._user_ref(uid), "roles": []}
+                         for i, uid in enumerate(self.members.get(int(m.group(1)), []), 1)]
+                return 200, self._page(items, query, "memberships")
+            m = re.match(r"^/issues/(\d+)/watchers(?:/(\d+))?\.json$", path)
+            if m:
+                iid = int(m.group(1))
+                if iid not in self.issues:
+                    return 404, {}
+                if method == "POST":
+                    self.watchers[iid].add(int(json.loads(body or b"{}")["user_id"]))
+                    return 204, None
+                if method == "DELETE":
+                    self.watchers[iid].discard(int(m.group(2)))
+                    return 204, None
             m = re.match(r"^/attachments/download/(\d+)/", path)
             if m:
                 a = self.attachments.get(int(m.group(1)))
@@ -256,6 +329,12 @@ class FakeRedmine:
 
             def do_PUT(self):  # noqa: N802
                 self._do("PUT")
+
+            def do_POST(self):  # noqa: N802
+                self._do("POST")
+
+            def do_DELETE(self):  # noqa: N802
+                self._do("DELETE")
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.base_url = f"http://127.0.0.1:{self.httpd.server_address[1]}"

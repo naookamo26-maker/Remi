@@ -159,8 +159,51 @@ class RedmineClient:
         return self.get_json(f"/issues/{issue_id}.json", params)["issue"]
 
     def add_note(self, issue_id: int, notes: str, private: bool = False) -> None:
-        body = {"issue": {"notes": notes, "private_notes": bool(private)}}
-        self.request("PUT", f"/issues/{issue_id}.json", json=body)
+        self.update_issue(issue_id, notes=notes, private=private)
+
+    # 変更できる項目(設計書 §6.2)
+    UPDATABLE = ("status_id", "assigned_to_id", "priority_id", "done_ratio")
+
+    def update_issue(self, issue_id: int, *, notes: str = "", private: bool = False,
+                     changes: dict[str, Any] | None = None, uploads: list[dict[str, Any]] | None = None) -> None:
+        """コメント・項目の変更・添付をまとめて1回で送る(Redmineの編集フォームと同じ)。"""
+        issue: dict[str, Any] = {}
+        if notes:
+            issue["notes"] = notes
+            issue["private_notes"] = bool(private)
+        for k, v in (changes or {}).items():
+            if k not in self.UPDATABLE:
+                raise ValueError(k)
+            issue[k] = "" if v is None else v  # 担当者を外すときは空文字を送る
+        if uploads:
+            issue["uploads"] = [
+                {"token": u["token"], "filename": u["filename"], "content_type": u.get("content_type")}
+                for u in uploads
+            ]
+        self.request("PUT", f"/issues/{issue_id}.json", json={"issue": issue})
+
+    def upload(self, data: bytes, filename: str) -> str:
+        """ファイルをアップロードし、添付に使うトークンを返す。"""
+        resp = self.request("POST", "/uploads.json", params={"filename": filename}, data=data,
+                            headers={"Content-Type": "application/octet-stream"})
+        try:
+            return resp.json()["upload"]["token"]
+        except (ValueError, KeyError) as e:
+            raise RedmineError(ErrorCode.INVALID_RESPONSE, resp.status_code, "no upload token") from e
+
+    def allowed_statuses(self, issue_id: int) -> list[dict[str, Any]] | None:
+        """ワークフロー上、遷移できるステータス(Redmine 5.0 以降)。取得できなければ None。"""
+        data = self.issue(issue_id, include="allowed_statuses")
+        return data.get("allowed_statuses")
+
+    def memberships(self, project_id: int) -> list[dict[str, Any]]:
+        return list(self.paged(f"/projects/{project_id}/memberships.json", "memberships"))
+
+    def add_watcher(self, issue_id: int, user_id: int) -> None:
+        self.request("POST", f"/issues/{issue_id}/watchers.json", json={"user_id": user_id})
+
+    def remove_watcher(self, issue_id: int, user_id: int) -> None:
+        self.request("DELETE", f"/issues/{issue_id}/watchers/{user_id}.json")
 
     def download(self, url: str, dest: Path, max_bytes: int) -> int:
         """添付ファイルをダウンロードする。上限を超えたら TOO_LARGE。"""

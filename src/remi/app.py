@@ -50,7 +50,21 @@ class WebviewWindow:
         # Redmineのページのログイン状態を残すため、WebView2のデータを保存する
         storage = data_dir() / "webview"
         storage.mkdir(parents=True, exist_ok=True)
-        webview.start(gui=gui, private_mode=False, storage_path=str(storage), debug=False)
+        webview.start(gui=gui, private_mode=False, storage_path=str(storage), debug=False, icon=self._icon_path())
+
+    @staticmethod
+    def _icon_path() -> str | None:
+        """タイトルバーのアイコン。exe化していない(python -m remi で起動した)ときもRemiのアイコンにする。"""
+        try:
+            from remi.system.tray import make_icon
+
+            path = data_dir() / "remi.ico"
+            make_icon(unread=False, dark_taskbar=False, size=256).save(
+                path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+            return str(path)
+        except Exception:  # noqa: BLE001 - アイコンがなくても起動はできる
+            log.debug("could not write the window icon", exc_info=True)
+            return None
 
     def _dark(self) -> bool:
         theme = self.ctx.settings.get("theme")

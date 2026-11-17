@@ -1,6 +1,6 @@
 """1台のサーバーの同期処理(設計書 §4)。
 
-Qtに依存しない同期的な処理だけをここに置く(テストしやすくするため)。
+スレッドやイベントに依存しない、同期的な処理だけをここに置く(テストしやすくするため)。
 スケジュールとスレッドは remi.sync.worker が受け持つ。
 """
 
@@ -206,6 +206,8 @@ class ServerSync:
         for j in data.get("journals") or []:
             u = j.get("user") or {}
             self.masters.remember(self.server_id, "user", u.get("id"), u.get("name"))
+        for cf in data.get("custom_fields") or []:
+            self.masters.remember(self.server_id, "custom_field", cf.get("id"), cf.get("name"))
         if first_fetch:
             self.issues.apply_read_baseline(self.server_id, issue_id)
         if new_ids:

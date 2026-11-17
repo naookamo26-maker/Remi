@@ -1,114 +1,92 @@
 """多重起動の防止(設計書 §2.5)。
 
-最初に起動したプロセスが QLocalServer を立てる。2つ目のプロセスはそこへ "show" を送り、
-すぐに終了する。最初のプロセスは activateRequested を受けてウィンドウを前面に出す。
+最初に起動したプロセスが名前付きパイプ(Windows)/ UNIXソケット(開発用)で待ち受ける。
+2つ目のプロセスはそこへ "show" を送って終了する。最初のプロセスは on_show を呼ぶ。
 """
 
 from __future__ import annotations
 
 import getpass
 import hashlib
-
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
+import logging
+import os
+import sys
+import tempfile
+import threading
+from collections.abc import Callable
+from multiprocessing.connection import Client, Listener
 
 from remi import APP_NAME
 
+log = logging.getLogger(__name__)
 
-def default_server_name() -> str:
+_AUTH = b"remi-single-instance"
+
+
+def default_address() -> str:
     try:
         user = getpass.getuser()
     except Exception:  # noqa: BLE001
         user = "user"
     digest = hashlib.sha1(user.encode("utf-8")).hexdigest()[:12]
-    return f"{APP_NAME}-{digest}"
+    if sys.platform == "win32":
+        return rf"\\.\pipe\{APP_NAME}-{digest}"
+    return os.path.join(tempfile.gettempdir(), f"{APP_NAME.lower()}-{digest}.sock")
 
 
-class SingleInstance(QObject):
-    activateRequested = Signal()
+class SingleInstance:
+    def __init__(self, address: str | None = None) -> None:
+        self.address = address or default_address()
+        self._listener: Listener | None = None
+        self._thread: threading.Thread | None = None
 
-    def __init__(self, name: str | None = None, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self.name = name or default_server_name()
-        self._server: QLocalServer | None = None
-        self._connections: set[_Connection] = set()
-
-    def notify_existing(self, timeout_ms: int = 500) -> bool:
+    def notify_existing(self) -> bool:
         """既に起動しているRemiがあれば前面表示を依頼して True を返す。"""
-        sock = QLocalSocket()
-        sock.connectToServer(self.name)
-        if not sock.waitForConnected(timeout_ms):
+        try:
+            conn = Client(self.address, authkey=_AUTH)
+        except (OSError, EOFError):
             return False
-        sock.write(b"show\n")
-        sock.flush()
-        sock.waitForBytesWritten(timeout_ms)
-        # 受け取ったことを相手が返すまで待つ(すぐ切断すると、Windowsでは届かないことがある)
-        sock.waitForReadyRead(timeout_ms * 4)
-        sock.disconnectFromServer()
+        try:
+            conn.send("show")
+            conn.recv()  # 受け取ったことの確認を待つ
+        except (OSError, EOFError):
+            pass
+        finally:
+            conn.close()
         return True
 
-    def listen(self) -> bool:
-        server = QLocalServer(self)
-        if not server.listen(self.name):
-            # 前回の異常終了でソケットが残っている場合
-            QLocalServer.removeServer(self.name)
-            if not server.listen(self.name):
-                return False
-        server.newConnection.connect(self._on_connection)
-        self._server = server
-        return True
+    def listen(self, on_show: Callable[[], None]) -> bool:
+        if sys.platform != "win32" and os.path.exists(self.address):
+            os.unlink(self.address)  # 前回の異常終了で残ったソケット
+        try:
+            self._listener = Listener(self.address, authkey=_AUTH)
+        except OSError:
+            log.exception("could not listen on %s", self.address)
+            return False
 
-    def _on_connection(self) -> None:
-        assert self._server is not None
-        while self._server.hasPendingConnections():
-            sock = self._server.nextPendingConnection()
-            handler = _Connection(sock, self.activateRequested.emit)
-            self._connections.add(handler)
-            handler.finished = lambda h=handler: self._connections.discard(h)
+        def serve() -> None:
+            listener = self._listener
+            while listener is not None:
+                try:
+                    conn = listener.accept()
+                except (OSError, EOFError):
+                    break
+                except Exception:  # noqa: BLE001 - 認証失敗など
+                    continue
+                try:
+                    if conn.recv() == "show":
+                        conn.send("ok")
+                        on_show()
+                except (OSError, EOFError):
+                    pass
+                finally:
+                    conn.close()
+
+        self._thread = threading.Thread(target=serve, name="single-instance", daemon=True)
+        self._thread.start()
+        return True
 
     def close(self) -> None:
-        for c in list(self._connections):
-            c.dispose()
-        self._connections.clear()
-        if self._server is not None:
-            self._server.close()
-            self._server.deleteLater()
-            self._server = None
-
-
-class _Connection:
-    """受け付けた1本の接続。"show" を受け取ったら応答して閉じる。"""
-
-    def __init__(self, sock: QLocalSocket, on_show) -> None:
-        self.sock: QLocalSocket | None = sock
-        self.on_show = on_show
-        self.buf = b""
-        self.finished = lambda: None
-        sock.readyRead.connect(self._read)
-        sock.disconnected.connect(self._read)
-        # Windowsの名前付きパイプでは、受け付けた時点でデータが届いていて
-        # readyRead が来ないことがあるので、ここでも読む
-        if sock.bytesAvailable():
-            self._read()
-
-    def _read(self) -> None:
-        if self.sock is None:
-            return
-        self.buf += bytes(self.sock.readAll().data())
-        if b"show" in self.buf:
-            self.sock.write(b"ok\n")
-            self.sock.flush()
-            self.on_show()
-            self.dispose()
-        elif self.sock.state() == QLocalSocket.LocalSocketState.UnconnectedState:
-            self.dispose()
-
-    def dispose(self) -> None:
-        sock, self.sock = self.sock, None
-        if sock is None:
-            return
-        sock.readyRead.disconnect(self._read)
-        sock.disconnected.disconnect(self._read)
-        sock.disconnectFromServer()
-        sock.deleteLater()
-        self.finished()
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            listener.close()

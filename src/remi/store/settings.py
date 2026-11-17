@@ -21,7 +21,8 @@ DEFAULTS: dict[str, Any] = {
     "mine_side": "right",
     "window_geometry": None,
     "splitter_state": None,
-    "tree_expanded": [],
+    "tree_collapsed": [],
+    "pane_sizes": [260, 360],
 }
 
 

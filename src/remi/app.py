@@ -1,24 +1,114 @@
-"""QApplication の組み立てと起動。"""
+"""アプリの組み立てと起動。"""
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
+import threading
+import webbrowser
 
-from PySide6.QtWidgets import QApplication, QMessageBox
-
-from remi import APP_NAME, APP_USER_MODEL_ID, __version__
-from remi.i18n import install_translators, resolve_language
+from remi import APP_NAME, APP_USER_MODEL_ID
+from remi.context import AppContext
+from remi.i18n import resolve_language, t
 from remi.logging_setup import setup_logging
 from remi.paths import db_path
-from remi.context import AppContext
+from remi.server.api import RemiApi
+from remi.server.http import LocalServer
 from remi.store.db import SchemaTooNewError, open_database
 from remi.sync.worker import SyncManager
+from remi.system import windows
 from remi.system.single_instance import SingleInstance
-from remi.ui.main_window import MainWindow
-from remi.ui.theme import ThemeManager
 
 log = logging.getLogger(__name__)
+
+
+class WebviewWindow:
+    """pywebview(WebView2)のウィンドウ(設計書 §2.6, §8)。"""
+
+    def __init__(self, ctx: AppContext, sync: SyncManager, start_hidden: bool = False) -> None:
+        self.ctx = ctx
+        self.sync = sync
+        self.start_hidden = start_hidden
+        self.window = None
+        self.minimize_to_tray = False  # トレイが使えるときに True にする
+        self._quitting = False
+
+    def run(self, url: str) -> None:
+        import webview
+
+        self.window = webview.create_window(
+            APP_NAME, url, width=1280, height=800, min_size=(900, 560), hidden=self.start_hidden,
+            background_color="#1E1F22" if self._dark() else "#FFFFFF", text_select=True,
+        )
+        self.window.events.closing += self._on_closing
+        self.window.events.shown += lambda: self.apply_theme(self.ctx.settings.get("theme"))
+        gui = "edgechromium" if sys.platform == "win32" else None
+        webview.start(gui=gui, private_mode=True, debug=False)
+
+    def _dark(self) -> bool:
+        theme = self.ctx.settings.get("theme")
+        return theme == "dark" or (theme == "system" and windows.apps_use_dark())
+
+    def _on_closing(self) -> bool:
+        if self._quitting or not self.minimize_to_tray:
+            return True
+        self.hide()
+        return False  # 閉じる操作を取り消して、トレイへ格納する
+
+    # --- WindowController ---
+    def show(self) -> None:
+        if self.window is not None:
+            self.window.show()
+            self.window.restore()
+
+    def hide(self) -> None:
+        if self.window is not None:
+            self.window.hide()
+
+    def quit(self) -> None:
+        self._quitting = True
+        if self.window is not None:
+            self.window.destroy()
+
+    def apply_theme(self, theme: str) -> None:
+        if self.window is None or sys.platform != "win32":
+            return
+        try:
+            hwnd = int(self.window.native.Handle.ToInt64())
+        except Exception:  # noqa: BLE001
+            return
+        windows.set_dark_title_bar(hwnd, self._dark())
+
+
+class BrowserWindow:
+    """開発モード: 既定のブラウザで画面を開く。"""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.url = ""
+
+    def run(self, url: str) -> None:
+        self.url = url
+        webbrowser.open(url)
+        print(f"Remi is running at {url}  (Ctrl+C to quit)", flush=True)
+        try:
+            while not self.done.wait(0.5):
+                pass
+        except KeyboardInterrupt:
+            pass
+
+    def show(self) -> None:
+        webbrowser.open(self.url)
+
+    def hide(self) -> None:
+        pass
+
+    def quit(self) -> None:
+        self.done.set()
+
+    def apply_theme(self, theme: str) -> None:
+        pass
 
 
 def _set_app_user_model_id() -> None:
@@ -32,57 +122,47 @@ def _set_app_user_model_id() -> None:
         log.exception("failed to set AppUserModelID")
 
 
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="remi")
+    p.add_argument("--browser", action="store_true", help="open the UI in the default browser (development)")
+    p.add_argument("--background", action="store_true", help="start hidden in the tray (used by autostart)")
+    p.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
+    return p.parse_args(argv[1:])
+
+
 def run(argv: list[str]) -> int:
+    args = parse_args(argv)
     setup_logging()
     _set_app_user_model_id()
-
-    app = QApplication.instance() or QApplication(argv)
-    app.setApplicationName(APP_NAME)
-    app.setApplicationVersion(__version__)
-    app.setQuitOnLastWindowClosed(False)
 
     single = SingleInstance()
     if single.notify_existing():
         log.info("another instance is running; asked it to show itself")
         return 0
-    single.listen()
 
     try:
         db = open_database(db_path())
     except SchemaTooNewError:
-        QMessageBox.critical(
-            None,
-            APP_NAME,
-            app.translate(
-                "App",
-                "The data was created by a newer version of Remi. Please update Remi.",
-            ),
-        )
+        lang = resolve_language("system")
+        windows.message_box(APP_NAME, t("app.schemaTooNew", lang))
         return 1
     ctx = AppContext(db)
-
-    lang = resolve_language(ctx.settings.get("language"))
-    app._remi_translators = install_translators(app, lang)  # type: ignore[attr-defined]
-    ctx.theme = ThemeManager(app, ctx.settings.get("theme"))
-
-    sync = SyncManager(db, app)
-    sync.dataChanged.connect(ctx.signals.dataChanged)
-    sync.stateChanged.connect(ctx.signals.syncStateChanged)
-    ctx.signals.serversChanged.connect(sync.restart)
-    ctx.signals.projectSettingsChanged.connect(lambda _sid: sync.sync_now())
-
-    window = MainWindow(ctx, sync)
-    single.activateRequested.connect(window.bring_to_front)
-    window.show()
+    sync = SyncManager(db, ctx.bus)
+    window = BrowserWindow() if args.browser else WebviewWindow(ctx, sync, start_hidden=args.background)
+    api = RemiApi(ctx, sync, window, autostart=windows.set_autostart)
+    server = LocalServer(api, port=args.port)
+    server.start()
+    single.listen(window.show)
     sync.restart()
-    if not ctx.servers.list():
-        # 初回起動: サーバー登録を案内する
-        from PySide6.QtCore import QTimer
-
-        QTimer.singleShot(300, window.open_settings)
-
-    code = app.exec()
-    sync.stop_all()
-    single.close()
-    db.close_all()
-    return code
+    try:
+        window.run(server.start_url)
+    except Exception:
+        log.exception("could not start the window")
+        windows.message_box(APP_NAME, t("app.webview2Missing", api.lang))
+        return 1
+    finally:
+        sync.stop_all(timeout=2.0)
+        server.stop()
+        single.close()
+        db.close_all()
+    return 0

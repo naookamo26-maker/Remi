@@ -1,0 +1,25 @@
+/* 画面のスタイル(設計書 §9.2)。色はすべてCSS変数(セマンティックトークン)で指定する。 */
+:root {
+  color-scheme: light;
+  --window: #FFFFFF; --surface: #F7F8FA; --surface-alt: #FAFBFC; --selection: #E3EDF8;
+  --text: #1F2328; --text-muted: #5B6270; --border: #DDE1E6;
+  --accent: #0F6CBD; --on-accent: #FFFFFF; --link: #0F6CBD;
+  --bubble-other: #FFFFFF; --bubble-other-border: #E1E4E8; --bubble-mine: #DCEBFA;
+  --bubble-private: #FFFDF0; --bubble-private-border: #EADFA8;
+  --code-bg: #F6F8FA; --code-border: #E1E4E8; --mention-bg: #C3DBF5; --mention-fg: #0B4F8A;
+  --danger: #A40E26; --success: #116329; --warning-bg: #FFF8C5; --warning-fg: #6F4E00;
+  --font: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", system-ui, sans-serif;
+  --mono: "Cascadia Mono", Consolas, "BIZ UDGothic", "Noto Sans Mono CJK JP", monospace;
+}
+:root.theme-dark {
+  color-scheme: dark;
+  --window: #1E1F22; --surface: #26282C; --surface-alt: #1A1B1E; --selection: #203A57;
+  --text: #E6E8EB; --text-muted: #A3A9B3; --border: #3A3D42;
+  --accent: #62A8F0; --on-accent: #0B1620; --link: #6CB4FF;
+  --bubble-other: #2B2D31; --bubble-other-border: #3A3D42; --bubble-mine: #1F3A5A;
+  --bubble-private: #332D1A; --bubble-private-border: #5C5130;
+  --code-bg: #16171A; --code-border: #3A3D42; --mention-bg: #23466E; --mention-fg: #CFE6FF;
+  --danger: #FF8A80; --success: #6FDD8B; --warning-bg: #3D3000; --warning-fg: #F2CC60;
+}
+html, body { margin: 0; height: 100%; background: var(--window); color: var(--text); font: 13px/1.5 var(--font); }
+.app-loading { display: grid; place-items: center; height: 100%; color: var(--text-muted); }

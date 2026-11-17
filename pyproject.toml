@@ -10,12 +10,12 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
-    "PySide6-Essentials>=6.8",
+    "pywebview>=5.3",
     "requests>=2.32",
     "truststore>=0.10",
     "keyring>=25",
     "markdown-it-py>=3",
-    "mdit-py-plugins>=0.4",
+    "linkify-it-py>=2",
     "textile>=4.0.3",
     "nh3>=0.2.18",
     "Pygments>=2.18",
@@ -31,7 +31,7 @@ version = { attr = "remi.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-remi = ["i18n/*.qm", "ui/icons/*.svg"]
+remi = ["i18n/*.json", "web/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -10,7 +10,8 @@ Redmineのチケットを、チャットアプリのように監視・コメン�
 
 | 項目 | 内容 |
 | --- | --- |
-| 言語・取得方法 | Python / Redmine REST API(ポーリング) |
+| 言語・取得方法 | Python 3.14 / Redmine REST API(ポーリング) |
+| パッケージ管理 | pip(`venv` + `requirements.txt`。開発用は `requirements-dev.txt` に分ける) |
 | 対象OS | Windowsのみ |
 | Redmine | 新しめのバージョン(5.x / 6.x 想定) |
 | サーバー | 複数。ユーザーが登録・編集できる |

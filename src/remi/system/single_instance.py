@@ -41,6 +41,8 @@ class SingleInstance(QObject):
         sock.write(b"show\n")
         sock.flush()
         sock.waitForBytesWritten(timeout_ms)
+        # 受け取ったことを相手が返すまで待つ(すぐ切断すると、Windowsでは届かないことがある)
+        sock.waitForReadyRead(timeout_ms * 4)
         sock.disconnectFromServer()
         return True
 
@@ -71,6 +73,8 @@ class SingleInstance(QObject):
         buf = sock._remi_buf + bytes(sock.readAll().data())  # type: ignore[attr-defined]
         if b"show" in buf and not getattr(sock, "_remi_done", False):
             sock._remi_done = True  # type: ignore[attr-defined]
+            sock.write(b"ok\n")
+            sock.flush()
             self.activateRequested.emit()
             sock.disconnectFromServer()
             sock.deleteLater()

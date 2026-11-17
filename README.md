@@ -21,6 +21,15 @@ python -m remi --browser     # 開発モード: 既定のブラウザで画面�
 python -m pytest             # テスト
 ```
 
+## 配布物の作成
+
+Windowsで次を実行すると、`dist/Remi/`(実行ファイル一式)と `dist/Remi-<バージョン>-win64.zip` ができます。
+GitHub Actions の「Build」ワークフローでも、mainへのマージのたびに同じzipが作られます(成果物「Remi-windows」)。
+
+```powershell
+python tools/build.py
+```
+
 ## 構成
 
 | 場所 | 内容 |
@@ -32,6 +41,8 @@ python -m pytest             # テスト
 | `src/remi/server/` | 画面向けのローカルAPIサーバー(RPC、SSE) |
 | `src/remi/web/` | 画面(HTML / CSS / JavaScript) |
 | `src/remi/i18n/` | 翻訳カタログ(`en.json` / `ja.json`) |
+| `src/remi/system/` | Windows固有の処理、トレイ、通知、多重起動の防止 |
+| `tools/` | デモ(`demo.py`)、配布物の作成(`build.py`) |
 
 ## 翻訳
 

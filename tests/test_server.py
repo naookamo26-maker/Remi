@@ -166,3 +166,26 @@ def test_preview_and_external_open_validation(app, fake):
     app.ctx.servers.save(__import__("remi.store.servers", fromlist=["Server"]).Server(name="S", url=fake.base_url), api_key=API_KEY)
     assert "<strong>x</strong>" in app.rpc("preview", serverId=1, issueId=1, text="**x**")
     assert app.rpc_error("openExternal", url="file:///etc/passwd")["code"] == "invalid_url"
+
+
+def test_autostart_setting_calls_registry_hook(db):
+    from remi.context import AppContext
+    from remi.server.api import RemiApi
+
+    calls = []
+    api = RemiApi(AppContext(db), autostart=calls.append)
+    api.setSetting("autostart", True)
+    api.setSetting("autostart", False)
+    assert calls == [True, False]
+
+
+def test_open_issue_and_active_are_tracked(db):
+    from remi.context import AppContext
+    from remi.server.api import RemiApi
+
+    api = RemiApi(AppContext(db))
+    api.setOpenIssue(1, 5)
+    api.setActive(False)
+    assert api.open_issue == (1, 5) and api.active is False
+    api.setOpenIssue(None, None)
+    assert api.open_issue is None

@@ -8,7 +8,7 @@ import sys
 import threading
 import webbrowser
 
-from remi import APP_NAME, APP_USER_MODEL_ID
+from remi import APP_NAME, APP_USER_MODEL_ID, __version__
 from remi.context import AppContext
 from remi.i18n import resolve_language, t
 from remi.logging_setup import setup_logging
@@ -18,7 +18,9 @@ from remi.server.http import LocalServer
 from remi.store.db import SchemaTooNewError, open_database
 from remi.sync.worker import SyncManager
 from remi.system import windows
+from remi.system.notifier import Notifier
 from remi.system.single_instance import SingleInstance
+from remi.system.tray import Tray
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +129,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--browser", action="store_true", help="open the UI in the default browser (development)")
     p.add_argument("--background", action="store_true", help="start hidden in the tray (used by autostart)")
     p.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
+    p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     return p.parse_args(argv[1:])
 
 
@@ -153,6 +156,21 @@ def run(argv: list[str]) -> int:
     server = LocalServer(api, port=args.port)
     server.start()
     single.listen(window.show)
+
+    def open_issue(server_id: int, issue_id: int) -> None:
+        window.show()
+        ctx.bus.publish("openIssue", serverId=server_id, issueId=issue_id)
+
+    notifier = Notifier(ctx, api, open_issue)
+    tray = None
+    if not args.browser:
+        tray = Tray(ctx, on_open=window.show, on_sync=sync.sync_now, on_quit=window.quit, notifier=notifier,
+                    on_settings=lambda: (window.show(), ctx.bus.publish("openSettings")))
+        window.minimize_to_tray = tray.start()
+        # トレイがない環境で非表示のまま起動すると操作できなくなるので、その場合は表示する
+        window.start_hidden = args.background and window.minimize_to_tray
+        if ctx.settings.get("autostart"):
+            windows.set_autostart(True)  # exeの場所が変わっても登録を最新にする
     sync.restart()
     try:
         window.run(server.start_url)
@@ -161,6 +179,8 @@ def run(argv: list[str]) -> int:
         windows.message_box(APP_NAME, t("app.webview2Missing", api.lang))
         return 1
     finally:
+        if tray is not None and tray.icon is not None:
+            tray.icon.stop()
         sync.stop_all(timeout=2.0)
         server.stop()
         single.close()

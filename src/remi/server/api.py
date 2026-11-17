@@ -97,6 +97,9 @@ class RemiApi:
         self.sync = sync
         self.window: WindowController = window or NullWindow()
         self.autostart = autostart
+        # 通知の判定に使う: 画面で開いているチケットと、ウィンドウがアクティブか
+        self.open_issue: tuple[int, int] | None = None
+        self.active = True
 
     def methods(self) -> dict[str, Callable]:
         return {name: getattr(self, name) for name in dir(self)
@@ -382,6 +385,7 @@ class RemiApi:
 
     @rpc
     def setOpenIssue(self, serverId: int | None, issueId: int | None) -> None:  # noqa: N802,N803
+        self.open_issue = (serverId, issueId) if serverId and issueId else None
         if self.sync is not None:
             self.sync.set_open_issue(serverId, issueId)
 
@@ -436,6 +440,7 @@ class RemiApi:
 
     @rpc
     def setActive(self, active: bool) -> None:  # noqa: N802
+        self.active = bool(active)
         if self.sync is not None:
             self.sync.set_active(bool(active))
 
@@ -444,6 +449,15 @@ class RemiApi:
         if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
             raise RpcError("invalid_url")
         webbrowser.open(url)
+
+    @rpc
+    def openAttachment(self, serverId: int, attachmentId: int) -> None:  # noqa: N802,N803
+        """画像以外の添付は、Redmineのページをブラウザで開く。"""
+        a = self.ctx.issues.get_attachment(serverId, attachmentId)
+        server = self.ctx.servers.get(serverId)
+        if a is None or server is None:
+            raise RpcError("not_found")
+        webbrowser.open(f"{server.url}/attachments/{attachmentId}")
 
     @rpc
     def hideWindow(self) -> None:  # noqa: N802

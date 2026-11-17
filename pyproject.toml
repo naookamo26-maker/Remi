@@ -19,6 +19,9 @@ dependencies = [
     "textile>=4.0.3",
     "nh3>=0.2.18",
     "Pygments>=2.18",
+    "pystray>=0.19",
+    "Pillow>=11",
+    "windows-toasts>=1.3; sys_platform == 'win32'",
 ]
 
 [project.scripts]
@@ -36,3 +39,4 @@ remi = ["i18n/*.json", "web/**/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+timeout = 180

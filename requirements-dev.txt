@@ -1,5 +1,6 @@
 # 開発用: pip install -r requirements-dev.txt
 -e .
 pytest>=8
+pytest-timeout>=2.3
 playwright>=1.48
 pyinstaller>=6.16

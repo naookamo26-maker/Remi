@@ -22,5 +22,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+      - name: 画面テスト用のブラウザ(Playwright Chromium)
+        run: python -m playwright install --with-deps chromium
       - name: テスト
-        run: python -m pytest
+        run: python -m pytest -v --durations=15

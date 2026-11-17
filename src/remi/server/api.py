@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import webbrowser
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -41,7 +43,14 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "mine_side": lambda v: v in ("right", "left"),
     "pane_sizes": lambda v: isinstance(v, list) and len(v) <= 3 and all(isinstance(x, int | float) for x in v),
     "tree_collapsed": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+    "redmine_open_in": lambda v: v in ("app", "browser"),
+    "relation_filter": lambda v: v in RELATION_FILTERS,
 }
+# 一覧の絞り込み(設計書 §5.1)
+RELATION_FILTERS = {"all": 0, "assigned": REL_ASSIGNED, "watching": REL_WATCHING, "authored": REL_AUTHORED}
+# 画面から変更できる項目(設計書 §6.2)
+EDITABLE = ("status_id", "assigned_to_id", "priority_id")
+MEMBERS_TTL = 600
 
 
 class RpcError(Exception):
@@ -54,12 +63,16 @@ class RpcError(Exception):
 class WindowController(Protocol):
     def show(self) -> None: ...
     def hide(self) -> None: ...
+    def open_redmine(self, url: str) -> bool: ...
     def quit(self) -> None: ...
     def apply_theme(self, theme: str) -> None: ...
 
 
 class NullWindow:
     """ウィンドウがない場合(ブラウザでの開発モード、テスト)。"""
+
+    def open_redmine(self, url: str) -> bool:
+        return False
 
     def show(self) -> None:
         pass
@@ -100,6 +113,8 @@ class RemiApi:
         # 通知の判定に使う: 画面で開いているチケットと、ウィンドウがアクティブか
         self.open_issue: tuple[int, int] | None = None
         self.active = True
+        self._members: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
+        self._members_lock = threading.Lock()
 
     def methods(self) -> dict[str, Callable]:
         return {name: getattr(self, name) for name in dir(self)
@@ -268,7 +283,7 @@ class RemiApi:
     # --- 一覧 ---------------------------------------------------------------------
     @rpc
     def listIssues(self, serverId: int | None = None, projectId: int | None = None,  # noqa: N802,N803
-                   unreadOnly: bool = False, search: str = "") -> dict[str, Any]:  # noqa: N803
+                   unreadOnly: bool = False, search: str = "", relation: str = "all") -> dict[str, Any]:  # noqa: N803
         server_ids = [serverId] if serverId else [s.server_id for s in self.ctx.servers.list(enabled_only=True)]
         project_ids = None
         if serverId and projectId:
@@ -276,9 +291,14 @@ class RemiApi:
         show_closed = bool(self.ctx.settings.get("show_closed"))
         rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
                                            unread_only=unreadOnly, search=search)
+        if relation not in RELATION_FILTERS:
+            raise RpcError("invalid_input", "relation")
+        want = RELATION_FILTERS[relation]
         names: dict[int, dict[str, Any]] = {}
         out = []
         for r in rows:
+            if want and not r.relation_flags & want:
+                continue
             n = names.get(r.server_id)
             if n is None:
                 n = names[r.server_id] = {
@@ -369,6 +389,8 @@ class RemiApi:
             "closed": row.status_id in m.closed_status_ids(serverId),
             "priority": m.names(serverId, "priority").get(row.priority_id or -1, ""),
             "assignee": row.assigned_to_name, "author": row.author_name, "authorId": row.author_id,
+            "statusId": row.status_id, "priorityId": row.priority_id, "assignedToId": row.assigned_to_id,
+            "relations": _flags(row.relation_flags), "watching": bool(row.relation_flags & REL_WATCHING),
             "createdOn": row.created_on, "updatedOn": row.updated_on,
             "descriptionHtml": render(row.description, rctx) if row.description else "",
             "journals": items, "total": total, "hasMore": total > len(journals),
@@ -411,26 +433,109 @@ class RemiApi:
 
     # --- 投稿・下書き ------------------------------------------------------------------
     @rpc
-    def preview(self, serverId: int, issueId: int, text: str) -> str:  # noqa: N803
+    def preview(self, serverId: int, issueId: int, text: str,  # noqa: N803
+                pending: list[dict[str, Any]] | None = None) -> str:
+        """入力中の本文のプレビュー。pending は送信前の添付 [{filename, id}](画像を表示するため)。"""
         server = self.ctx.servers.get(serverId)
         if server is None:
             raise RpcError("not_found")
-        return render(text, self._render_ctx(server, issueId))
+        rctx = self._render_ctx(server, issueId)
+        rctx.pending = {str(p["filename"]).lower(): f"/pending/{int(p['id'])}" for p in (pending or [])}
+        return render(text, rctx)
 
     @rpc
     def saveDraft(self, serverId: int, issueId: int, body: str, private: bool = False) -> None:  # noqa: N802,N803
         self.ctx.issues.save_draft(serverId, issueId, body, private)
 
     @rpc
-    def postNote(self, serverId: int, issueId: int, body: str, private: bool = False) -> dict[str, Any]:  # noqa: N802,N803
-        """コメントを送信する。結果は noteFinished イベントで届く。失敗しても下書きは残る。"""
-        if not body.strip():
+    def postNote(self, serverId: int, issueId: int, body: str = "", private: bool = False,  # noqa: N802,N803
+                 changes: dict[str, Any] | None = None, uploads: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """コメント・項目の変更・添付をまとめて送る。結果は noteFinished イベントで届く。
+
+        失敗してもコメントは下書きとして残る(設計書 §6)。
+        """
+        changes = dict(changes or {})
+        if any(k not in EDITABLE for k in changes):
+            raise RpcError("invalid_input", "changes")
+        ups = []
+        for u in uploads or []:
+            if not isinstance(u, dict) or not u.get("token") or not u.get("filename"):
+                raise RpcError("invalid_input", "uploads")
+            ups.append({"token": str(u["token"]), "filename": str(u["filename"]),
+                        "content_type": u.get("contentType") or u.get("content_type")})
+        if not body.strip() and not changes and not ups:
             raise RpcError("unprocessable", "empty")
-        self.ctx.issues.save_draft(serverId, issueId, body, private)
-        if self.sync is None or not self.sync.post_note(serverId, issueId, body, private):
-            self.ctx.issues.save_draft(serverId, issueId, body, private, failed=True, error="connection_failed")
+        if body.strip():
+            self.ctx.issues.save_draft(serverId, issueId, body, private)
+        if self.sync is None or not self.sync.post_note(serverId, issueId, body if body.strip() else "",
+                                                        private, changes, ups):
+            if body.strip():
+                self.ctx.issues.save_draft(serverId, issueId, body, private, failed=True, error="connection_failed")
             raise RpcError("connection_failed")
         return {"accepted": True}
+
+    # --- 編集(設計書 §6.2) -------------------------------------------------------------
+    def _client(self, server_id: int):
+        client = self.sync.client(server_id) if self.sync is not None else None
+        if client is None:
+            raise RpcError("connection_failed")
+        return client
+
+    def _members_of(self, server_id: int, project_id: int) -> list[dict[str, Any]]:
+        key = (server_id, project_id)
+        with self._members_lock:
+            cached = self._members.get(key)
+            if cached and time.monotonic() - cached[0] < MEMBERS_TTL:
+                return cached[1]
+        out: dict[int, dict[str, Any]] = {}
+        for m in self._client(server_id).memberships(project_id):
+            ref = m.get("user") or m.get("group")
+            if ref and ref.get("id") is not None:
+                out[int(ref["id"])] = {"id": int(ref["id"]), "name": ref.get("name", ""), "group": "group" in m}
+                self.ctx.masters.remember(server_id, "user", ref.get("id"), ref.get("name"))
+        members = sorted(out.values(), key=lambda x: (x["group"], x["name"]))
+        with self._members_lock:
+            self._members[key] = (time.monotonic(), members)
+        return members
+
+    @rpc
+    def getEditOptions(self, serverId: int, issueId: int) -> dict[str, Any]:  # noqa: N802,N803
+        """ヘッダで変更できる項目の選択肢。ステータスはワークフロー上遷移できるものだけにする。"""
+        row = self.ctx.issues.get(serverId, issueId)
+        server = self.ctx.servers.get(serverId)
+        if row is None or server is None:
+            raise RpcError("not_found")
+        try:
+            allowed = self._client(serverId).allowed_statuses(issueId)
+            members = self._members_of(serverId, row.project_id)
+        except RedmineError as e:
+            raise RpcError(e.code.value, e.detail) from e
+        closed = self.ctx.masters.closed_status_ids(serverId)
+        status_names = self.ctx.masters.names(serverId, "status")
+        if allowed is None:  # Redmine 5.0 より前: すべてのステータスを出し、だめならサーバーが拒否する
+            statuses = [{"id": k, "name": v} for k, v in status_names.items()]
+        else:
+            statuses = [{"id": int(x["id"]), "name": x.get("name", "")} for x in allowed]
+        if row.status_id is not None and all(x["id"] != row.status_id for x in statuses):
+            statuses.insert(0, {"id": row.status_id, "name": status_names.get(row.status_id, f"#{row.status_id}")})
+        for x in statuses:
+            x["closed"] = x["id"] in closed
+        if row.assigned_to_id is not None and all(m["id"] != row.assigned_to_id for m in members):
+            members = [{"id": row.assigned_to_id, "name": row.assigned_to_name or f"#{row.assigned_to_id}",
+                        "group": False}, *members]
+        priorities = [{"id": k, "name": v} for k, v in self.ctx.masters.names(serverId, "priority").items()]
+        return {
+            "statuses": statuses, "statusesExact": allowed is not None,
+            "assignees": members, "priorities": priorities, "me": server.my_user_id,
+            "current": {"status_id": row.status_id, "assigned_to_id": row.assigned_to_id,
+                        "priority_id": row.priority_id},
+        }
+
+    @rpc
+    def setWatching(self, serverId: int, issueId: int, watching: bool) -> None:  # noqa: N802,N803
+        """自分をウォッチャーに追加・削除する。結果は watchFinished イベントで届く。"""
+        if self.sync is None or not self.sync.set_watching(serverId, issueId, bool(watching)):
+            raise RpcError("connection_failed")
 
     # --- 同期・ウィンドウ ----------------------------------------------------------------
     @rpc
@@ -451,13 +556,23 @@ class RemiApi:
         webbrowser.open(url)
 
     @rpc
+    def openRedmine(self, url: str, external: bool = False) -> str:  # noqa: N802
+        """Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザで開く(設計書 §5.4)。"""
+        if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+            raise RpcError("invalid_url")
+        if not external and self.ctx.settings.get("redmine_open_in") == "app" and self.window.open_redmine(url):
+            return "app"
+        webbrowser.open(url)
+        return "browser"
+
+    @rpc
     def openAttachment(self, serverId: int, attachmentId: int) -> None:  # noqa: N802,N803
         """画像以外の添付は、Redmineのページをブラウザで開く。"""
         a = self.ctx.issues.get_attachment(serverId, attachmentId)
         server = self.ctx.servers.get(serverId)
         if a is None or server is None:
             raise RpcError("not_found")
-        webbrowser.open(f"{server.url}/attachments/{attachmentId}")
+        self.openRedmine(f"{server.url}/attachments/{attachmentId}")
 
     @rpc
     def hideWindow(self) -> None:  # noqa: N802

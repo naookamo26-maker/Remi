@@ -147,9 +147,14 @@ class App {
     }
   }
 
-  openIssueInBrowser(serverId, issueId, note = null) {
+  openIssueInBrowser(serverId, issueId, note = null, { external = false } = {}) {
     const server = this.tree.data?.servers.find((s) => s.serverId === serverId);
-    if (server) call("openExternal", { url: `${server.url}/issues/${issueId}${note ? `#note-${note}` : ""}` });
+    if (server) this.openRedmine(`${server.url}/issues/${issueId}${note ? `#note-${note}` : ""}`, { external });
+  }
+
+  // Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザ(Shift+クリックで常にブラウザ)
+  openRedmine(url, { external = false } = {}) {
+    return call("openRedmine", { url, external });
   }
 
   openSettings() {
@@ -212,6 +217,9 @@ class App {
         break;
       case "openIssue":
         this.openIssue(e.serverId, e.issueId);
+        break;
+      case "watchFinished":
+        if (e.error) toast(t(`errors.${e.error}`));
         break;
       case "openSettings":
         this.openSettings();

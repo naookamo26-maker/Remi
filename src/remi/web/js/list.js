@@ -18,12 +18,18 @@ export class IssueList {
       onInput: debounce(() => { this.search = this.searchInput.value; this.refresh(); }, 200) });
     this.unreadFirst = h("input", { type: "checkbox", onChange: () => app.saveSetting("unread_first", this.unreadFirst.checked).then(() => this.refresh()) });
     this.showClosed = h("input", { type: "checkbox", onChange: () => app.saveSetting("show_closed", this.showClosed.checked).then(() => this.refresh()) });
+    // 関係での絞り込み(すべて / 担当 / ウォッチ / 作成)
+    this.relationButtons = ["all", "assigned", "watching", "authored"].map((value) =>
+      h("button", { type: "button", dataset: { value }, "aria-pressed": "false",
+        onClick: () => app.saveSetting("relation_filter", value).then(() => this.refresh()) },
+        t(`list.filter.${value}`)));
     this.el = h("ul", { class: "issue-list", role: "listbox", "aria-label": t("list.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.root = h("section", { class: "pane pane-list", "aria-label": t("list.label") },
       h("div", { class: "list-header" },
         h("div", { class: "list-title" }, this.title, this.crumb),
         h("label", { class: "search" }, icon("search"), this.searchInput),
+        h("div", { class: "segmented", role: "group", "aria-label": t("list.filter.label") }, this.relationButtons),
         h("div", { class: "toggles" },
           h("label", {}, this.unreadFirst, t("list.unreadFirst")),
           h("label", {}, this.showClosed, t("list.showClosed")))),
@@ -36,6 +42,7 @@ export class IssueList {
     if (sel.serverId) params.serverId = sel.serverId;
     if (sel.projectId) params.projectId = sel.projectId;
     if (sel.kind === "unread") params.unreadOnly = true;
+    params.relation = this.app.settings.relation_filter || "all";
     const token = Symbol();
     this._token = token;
     const res = await call("listIssues", params);
@@ -50,6 +57,8 @@ export class IssueList {
     this.crumb.textContent = [crumb, t("list.count", { count: this.issues.length })].filter(Boolean).join(" · ");
     this.unreadFirst.checked = !!this.app.settings.unread_first;
     this.showClosed.checked = !!this.app.settings.show_closed;
+    const rel = this.app.settings.relation_filter || "all";
+    for (const b of this.relationButtons) b.setAttribute("aria-pressed", String(b.dataset.value === rel));
     const scroll = this.el.scrollTop;
     clear(this.el);
     if (!this.issues.length) {
@@ -107,7 +116,8 @@ export class IssueList {
       { label: t("menu.markRead"), disabled: !it.unread, onClick: () => call("markRead", { serverId: it.serverId, issueId: it.issueId }) },
       { label: t("menu.markUnread"), onClick: () => call("markUnread", { serverId: it.serverId, issueId: it.issueId }) },
       { sep: true },
-      { label: t("menu.openInBrowser"), onClick: () => this.app.openIssueInBrowser(it.serverId, it.issueId) },
+      { label: t("menu.openRedmine"), onClick: () => this.app.openIssueInBrowser(it.serverId, it.issueId) },
+      { label: t("menu.openInBrowser"), onClick: () => this.app.openIssueInBrowser(it.serverId, it.issueId, null, { external: true }) },
     ]);
   }
 }

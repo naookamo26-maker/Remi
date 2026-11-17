@@ -233,6 +233,18 @@ class ServerSync:
     def pending_journal_issue_ids(self, limit: int = 20) -> list[int]:
         return self.issues.issues_needing_journals(self.server_id, limit)
 
+    def set_watching_flag(self, issue_id: int, watching: bool) -> None:
+        """ウォッチの追加・解除をローカルの関係フラグにも反映する。"""
+        row = self.issues.get(self.server_id, issue_id)
+        if row is None:
+            return
+        flags = (row.relation_flags | REL_WATCHING) if watching else (row.relation_flags & ~REL_WATCHING)
+        self.issues.set_relation_flags(self.server_id, issue_id, flags)
+        if not flags:
+            self.issues.set_monitored(self.server_id, [issue_id], False)
+        elif not row.monitored and watching:
+            self.issues.set_monitored(self.server_id, [issue_id], True)
+
     # --- 関係が外れた・クローズ・削除(設計書 §4.7) ------------------------------
     def reconcile(self) -> SyncResult:
         """未完了のチケットの一覧を取り直し、関係が外れたチケットを監視対象外にする。"""

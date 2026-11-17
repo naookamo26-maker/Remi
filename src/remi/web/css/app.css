@@ -229,3 +229,30 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; background: #fff; }
 .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 80; padding: 8px 14px; border-radius: 8px;
   background: var(--text); color: var(--window); font-size: 12px; box-shadow: 0 6px 18px rgb(0 0 0 / .25); }
+
+/* ---- 絞り込み・編集・添付 ---- */
+.segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.segmented button { flex: 1; min-height: 28px; border: 0; border-right: 1px solid var(--border); background: var(--window);
+  color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.segmented button:last-child { border-right: 0; }
+.segmented button[aria-pressed=true] { background: var(--selection); color: var(--text); font-weight: 600; }
+.conv-header .actions { display: flex; gap: 6px; flex: none; }
+.split { display: inline-flex; }
+.split .btn:first-child { border-radius: 6px 0 0 6px; }
+.split .btn:last-child { border-radius: 0 6px 6px 0; border-left: 0; padding: 0 8px; }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+.fields { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12px; color: var(--text-muted); }
+.fields label { display: inline-flex; align-items: center; gap: 6px; }
+.fields select { height: 28px; max-width: 220px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--window); color: var(--text); font-size: 12px; }
+.fields select.changed { border-color: var(--accent); background: var(--selection); }
+.fields .static b { color: var(--text); font-weight: 500; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: 12px;
+  background: var(--selection); font-size: 12px; max-width: 100%; }
+.chip button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 4px; border-radius: 8px; }
+.chip button:hover { color: var(--text); }
+.chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+.chip.busy { opacity: .7; }
+.chip.error { background: color-mix(in srgb, var(--danger) 14%, var(--window)); }
+.composer.dragging { outline: 2px dashed var(--accent); outline-offset: -4px; }

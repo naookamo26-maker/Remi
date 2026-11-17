@@ -152,7 +152,9 @@ export function settingsDialog(app) {
       h("span", { class: "label" }, t("settings.notifications")), check("notify_enabled", t("settings.showNotifications")),
       h("span", { class: "label" }, t("settings.startup")), check("autostart", t("settings.autostart")),
       field(t("settings.retention"), retention, t("settings.retentionHelp")),
-      h("span", { class: "label" }, t("settings.images")), check("allow_external_images", t("settings.externalImages")));
+      h("span", { class: "label" }, t("settings.images")), check("allow_external_images", t("settings.externalImages")),
+      field(t("settings.redmineOpenIn"), select("redmine_open_in", [["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
+        t("settings.redmineOpenInHelp")));
   };
 
   const servers = () => {

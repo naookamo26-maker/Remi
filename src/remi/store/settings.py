@@ -22,6 +22,8 @@ DEFAULTS: dict[str, Any] = {
     "window_geometry": None,
     "splitter_state": None,
     "tree_collapsed": [],
+    "redmine_open_in": "app",  # app / browser(設計書 §5.4)
+    "relation_filter": "all",  # 一覧の絞り込み: all / assigned / watching / authored
     "pane_sizes": [260, 360],
 }
 

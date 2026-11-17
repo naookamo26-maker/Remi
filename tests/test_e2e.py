@@ -134,7 +134,7 @@ def test_conversation_post_and_live_update(page, remi, fake):
     assert img.evaluate("i => i.naturalWidth") == 1
 
     # 投稿(Ctrl+Enter)
-    box = conv.get_by_label("コメント")
+    box = conv.get_by_role("textbox", name="コメント")
     box.fill("**対応します**")
     conv.get_by_role("tab", name="プレビュー").click()
     playwright_api.expect(conv.locator(".preview strong")).to_have_text("対応します")
@@ -166,11 +166,13 @@ def test_failed_post_keeps_draft_and_retry(page, remi, fake):
     page.goto(remi.server.start_url)
     page.locator(".issue", has_text="CSVが文字化けする").click()
     conv = page.locator(".pane-conv")
-    fake.fail_next = 500
-    conv.get_by_label("コメント").fill("失敗するコメント")
+    # 編集の選択肢の読み込み(Redmineへの問い合わせ)が終わってから、次の送信を失敗させる
+    playwright_api.expect(conv.get_by_label("ステータス", exact=True)).to_be_enabled(timeout=15000)
+    fake.fail_next_put = 500
+    conv.get_by_role("textbox", name="コメント").fill("失敗するコメント")
     conv.get_by_role("button", name="送信").click()
     playwright_api.expect(conv.get_by_role("alert")).to_contain_text("送信できませんでした", timeout=20000)
-    playwright_api.expect(conv.get_by_label("コメント")).to_have_value("失敗するコメント")
+    playwright_api.expect(conv.get_by_role("textbox", name="コメント")).to_have_value("失敗するコメント")
     conv.get_by_role("button", name="再送").click()
     playwright_api.expect(conv.locator(".msg.mine .bubble", has_text="失敗するコメント")).to_be_visible(timeout=20000)
 
@@ -216,3 +218,91 @@ def test_project_menu_sets_watch_authored(page, remi, fake):
         time.sleep(0.1)
     assert remi.ctx.projects.get_setting(1, 1, "watch_authored") is True
     assert remi.ctx.projects.effective_setting(1, 2, "watch_authored") is True
+
+
+PASTE_JS = """(b64) => {
+  const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const dt = new DataTransfer();
+  dt.items.add(new File([bin], "image.png", {type: "image/png"}));
+  document.querySelector('.composer textarea').dispatchEvent(
+    new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+}"""
+
+
+def test_relation_filter(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    filters = page.get_by_role("group", name="関係で絞り込み")
+    filters.get_by_role("button", name="担当").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(page.locator(".issue")).to_contain_text("CSVが文字化けする")
+    filters.get_by_role("button", name="ウォッチ").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    filters.get_by_role("button", name="作成").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(0)
+    assert remi.ctx.settings.get("relation_filter") == "authored"
+
+
+def test_change_status_paste_image_and_watch(page, remi, fake):
+    import base64
+
+    seed(fake)
+    fake.members[2] = [ME, 7]
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="メールの宛先").click()
+    conv = page.locator(".pane-conv")
+    status = conv.get_by_label("ステータス", exact=True)
+    playwright_api.expect(status).to_be_enabled(timeout=15000)
+    status.select_option(label="進行中")
+    conv.get_by_label("担当者", exact=True).select_option(label="自分に割り当て")
+    playwright_api.expect(conv.locator(".chip")).to_have_count(2)
+
+    page.evaluate(PASTE_JS, base64.b64encode(_png()).decode())
+    chip_img = conv.locator(".chip img")
+    playwright_api.expect(chip_img).to_be_visible(timeout=15000)
+    box = conv.get_by_role("textbox", name="コメント")
+    playwright_api.expect(box).to_have_value(__import__("re").compile(r"!\[\]\(clipboard-\d{12}-\w{5}\.png\)"))
+    conv.get_by_role("tab", name="プレビュー").click()
+    playwright_api.expect(conv.locator(".preview img")).to_have_count(1)
+    conv.get_by_role("tab", name="編集").click()
+
+    conv.get_by_role("button", name="送信").click()
+    playwright_api.expect(conv.locator(".chip")).to_have_count(0, timeout=20000)
+    issue = fake.issues[11]
+    assert issue["status"]["id"] == 2 and issue["assigned_to"]["id"] == ME
+    last = fake.journals[11][-1]
+    assert any(d["property"] == "attachment" for d in last["details"])
+    playwright_api.expect(conv.locator(".bubble img").last).to_be_visible(timeout=20000)
+    playwright_api.expect(conv.locator(".system", has_text="ステータス")).to_have_count(1)
+
+    # ウォッチの切り替え
+    watch = conv.get_by_role("button", name="ウォッチ中")
+    watch.click()
+    playwright_api.expect(conv.get_by_role("button", name="ウォッチする")).to_be_visible(timeout=15000)
+    assert ME not in fake.watchers[11]
+    assert not page.errors, page.errors
+
+
+def test_open_redmine_menu(page, remi, fake, monkeypatch):
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    seed(fake)
+    add_server(remi, fake)
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    conv.get_by_role("button", name="Redmineで開く").click()
+    for _ in range(50):
+        if opened:
+            break
+        time.sleep(0.1)
+    # ウィンドウを持たない環境では既定のブラウザで開く
+    assert opened == [f"{fake.base_url}/issues/10"]
+    conv.get_by_role("button", name="その他の操作").click()
+    page.get_by_role("menuitem", name="URLをコピー").click()
+    playwright_api.expect(page.get_by_role("status")).to_contain_text("コピーしました")
+    assert page.evaluate("() => navigator.clipboard.readText()") == f"{fake.base_url}/issues/10"

@@ -32,6 +32,8 @@ def seed(fake) -> None:
     fake.add_project(2, "受注管理", parent=1)
     fake.add_project(3, "在庫管理", parent=1)
     fake.add_project(4, "社内ポータル")
+    for pid in (1, 2, 3, 4):
+        fake.members[pid] = [ME, 7, 8, 100]
     fake.add_issue(1234, 2, "受注一覧のCSV出力で文字化けする", watchers={ME}, updated_on=ts(3000),
                    description="受注一覧からCSVを出力すると、Excelで開いたときに文字化けします。")
     fake.set_status(1234, 2)

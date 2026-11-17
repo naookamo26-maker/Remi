@@ -38,12 +38,21 @@ class RenderContext:
     project_identifier: str | None = None
     allow_external_images: bool = False
     user_names: dict[int, str] = field(default_factory=dict)
+    pending: dict[str, str] = field(default_factory=dict)  # 送信前の添付: ファイル名(小文字) -> URL
 
     def attachment_id(self, name: str) -> int | None:
         return self.attachments.get(name.strip().lower())
 
     def attachment_url(self, aid: int) -> str:
         return f"/attachments/{self.server_id}/{aid}"
+
+    def resolve(self, name: str) -> str | None:
+        """ファイル名から画像・添付のURLを引く(送信前の添付を優先)。"""
+        key = name.strip().lower()
+        if key in self.pending:
+            return self.pending[key]
+        aid = self.attachments.get(key)
+        return self.attachment_url(aid) if aid is not None else None
 
 
 # --- サニタイズの設定 -----------------------------------------------------------
@@ -75,17 +84,14 @@ def _attribute_filter(ctx: RenderContext):
             v = value.strip()
             if re.match(r"^https?://", v, re.I):
                 return _EXT_IMG + v
-            aid = ctx.attachment_id(v.rsplit("/", 1)[-1])
-            if aid is None:
-                return None  # 見つからない添付やその他のURLは読み込まない
-            return ctx.attachment_url(aid)
+            return ctx.resolve(v.rsplit("/", 1)[-1])  # 見つからない添付やその他のURLは読み込まない
         if tag == "a" and attr == "href":
             v = value.strip()
             if not re.match(r"^(https?://|mailto:|remi://|/|#)", v, re.I):
                 # 相対リンク(Redmine内のパス)はサーバーのURLに結びつける
-                aid = ctx.attachment_id(v)
-                if aid is not None:
-                    return ctx.attachment_url(aid)
+                url = ctx.resolve(v)
+                if url is not None:
+                    return url
                 return ctx.server_url.rstrip("/") + "/" + v.lstrip("./")
             if v.startswith("/") and not v.startswith("/attachments/"):
                 return ctx.server_url.rstrip("/") + v
@@ -214,13 +220,13 @@ def _ref_html(m: re.Match, ctx: RenderContext, ph: _Placeholders) -> str:
         return ph.add(f'<span class="mention{me}">@{html.escape(login)}</span>')
     if g["attq"] or g["att"]:
         name = g["attq"] or g["att"]
-        aid = ctx.attachment_id(name)
-        if aid is None:
+        url = ctx.resolve(name)
+        if url is None:
             return ph.add(html.escape(m.group(0)))
         if re.search(r"\.(png|jpe?g|gif|bmp|webp)$", name, re.I):
-            return ph.add(f'<a href="{ctx.attachment_url(aid)}" class="attachment image">'
-                          f'<img src="{ctx.attachment_url(aid)}" alt="{html.escape(name)}" loading="lazy"></a>')
-        return ph.add(_link(ctx.attachment_url(aid), name, "attachment"))
+            return ph.add(f'<a href="{url}" class="attachment image">'
+                          f'<img src="{url}" alt="{html.escape(name)}" loading="lazy"></a>')
+        return ph.add(_link(url, name, "attachment"))
     if g["rev"]:
         href = f"{base}/projects/{quote(proj)}/repository/revisions/{g['rev']}" if proj else f"{base}/"
         return ph.add(_link(href, m.group(0), "ext"))
@@ -321,7 +327,7 @@ def _finish_images(out: str, ctx: RenderContext) -> str:
     # 見つからない添付の画像は、説明文だけを表示する
     out = re.sub(r'<img(?![^>]*\ssrc=)[^>]*>', missing, out)
     # 添付画像はクリックで拡大できるようにリンクで包む
-    return re.sub(r'(?<!class="attachment image">)(<img [^>]*src="(/attachments/\d+/\d+)"[^>]*>)',
+    return re.sub(r'(?<!class="attachment image">)(<img [^>]*src="(/(?:attachments/\d+|pending)/\d+)"[^>]*>)',
                   r'<a href="\2" class="attachment image">\1</a>', out)
 
 

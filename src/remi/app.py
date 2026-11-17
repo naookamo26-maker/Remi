@@ -12,7 +12,7 @@ from remi import APP_NAME, APP_USER_MODEL_ID, __version__
 from remi.context import AppContext
 from remi.i18n import resolve_language, t
 from remi.logging_setup import setup_logging
-from remi.paths import db_path
+from remi.paths import data_dir, db_path
 from remi.server.api import RemiApi
 from remi.server.http import LocalServer
 from remi.store.db import SchemaTooNewError, open_database
@@ -33,6 +33,7 @@ class WebviewWindow:
         self.sync = sync
         self.start_hidden = start_hidden
         self.window = None
+        self.redmine_window = None  # Redmineのページを開くウィンドウ(設計書 §5.4)
         self.minimize_to_tray = False  # トレイが使えるときに True にする
         self._quitting = False
 
@@ -46,7 +47,10 @@ class WebviewWindow:
         self.window.events.closing += self._on_closing
         self.window.events.shown += lambda: self.apply_theme(self.ctx.settings.get("theme"))
         gui = "edgechromium" if sys.platform == "win32" else None
-        webview.start(gui=gui, private_mode=True, debug=False)
+        # Redmineのページのログイン状態を残すため、WebView2のデータを保存する
+        storage = data_dir() / "webview"
+        storage.mkdir(parents=True, exist_ok=True)
+        webview.start(gui=gui, private_mode=False, storage_path=str(storage), debug=False)
 
     def _dark(self) -> bool:
         theme = self.ctx.settings.get("theme")
@@ -70,8 +74,37 @@ class WebviewWindow:
 
     def quit(self) -> None:
         self._quitting = True
+        if self.redmine_window is not None:
+            try:
+                self.redmine_window.destroy()
+            except Exception:  # noqa: BLE001
+                pass
         if self.window is not None:
             self.window.destroy()
+
+    def open_redmine(self, url: str) -> bool:
+        """Redmineのページをアプリ内のウィンドウで開く。2回目以降は同じウィンドウを使い回す。"""
+        import webview
+
+        try:
+            if self.redmine_window is not None:
+                self.redmine_window.load_url(url)
+                self.redmine_window.show()
+                self.redmine_window.restore()
+                return True
+            w = webview.create_window(f"{APP_NAME} — Redmine", url, width=1100, height=800, min_size=(640, 480),
+                                      text_select=True)
+
+            def closed() -> None:
+                self.redmine_window = None
+
+            w.events.closed += closed
+            self.redmine_window = w
+            return True
+        except Exception:  # noqa: BLE001 - 開けなければ既定のブラウザで開く
+            log.exception("could not open the Redmine window")
+            self.redmine_window = None
+            return False
 
     def apply_theme(self, theme: str) -> None:
         if self.window is None or sys.platform != "win32":
@@ -102,6 +135,9 @@ class BrowserWindow:
 
     def show(self) -> None:
         webbrowser.open(self.url)
+
+    def open_redmine(self, url: str) -> bool:
+        return False  # 開発モードでは既定のブラウザで開く
 
     def hide(self) -> None:
         pass

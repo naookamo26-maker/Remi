@@ -1,6 +1,7 @@
 # Remi(レミ)
 
 Redmineのチケットを、チャットアプリのように監視・コメントできるWindows向けデスクトップアプリです。
+画面はHTML/CSSで作り、Windows標準の WebView2 で表示します。
 
 - 設計書: [docs/design.md](docs/design.md)
 - 変更履歴: [CHANGELOG.md](CHANGELOG.md)
@@ -9,26 +10,34 @@ Redmineのチケットを、チャットアプリのように監視・コメン�
 
 - Python 3.14
 - pip(venv)
+- Windows 10/11(WebView2 ランタイム)。画面の開発だけなら、どのOSでも `--browser` で動かせます
 
 ```powershell
 py -3.14 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements-dev.txt
-python tools/i18n.py build   # 翻訳ファイル(.qm)を生成
-python -m remi               # 起動
+python -m remi               # 起動(WebView2のウィンドウ)
+python -m remi --browser     # 開発モード: 既定のブラウザで画面を開く
 python -m pytest             # テスト
 ```
 
+## 構成
+
+| 場所 | 内容 |
+| --- | --- |
+| `src/remi/api/` | Redmine REST APIクライアント、接続テスト |
+| `src/remi/store/` | SQLiteへの保存(キャッシュ、既読、下書き、設定) |
+| `src/remi/sync/` | 差分同期エンジンと、サーバーごとの同期スレッド |
+| `src/remi/render/` | 本文(Markdown / Textile)のレンダリング、変更履歴の文章化 |
+| `src/remi/server/` | 画面向けのローカルAPIサーバー(RPC、SSE) |
+| `src/remi/web/` | 画面(HTML / CSS / JavaScript) |
+| `src/remi/i18n/` | 翻訳カタログ(`en.json` / `ja.json`) |
+
 ## 翻訳
 
-ソースコード内の文字列は英語で書き、日本語訳は `src/remi/i18n/remi_ja.ts` で管理します。
-
-```powershell
-python tools/i18n.py update   # ソースから文字列を抽出して .ts を更新
-pyside6-linguist src/remi/i18n/remi_ja.ts   # 翻訳を編集
-python tools/i18n.py build    # .qm を生成
-python tools/i18n.py check    # 未翻訳の文字列がないか確認
-```
+翻訳はキー方式のJSONカタログ(`src/remi/i18n/en.json`、`ja.json`)で管理します。
+画面とPythonで同じカタログを使います。キーを追加したら、両方のファイルに追加してください
+(キーのそろい具合と差し込み値の一致はテストで確認します)。
 
 ## バージョン
 

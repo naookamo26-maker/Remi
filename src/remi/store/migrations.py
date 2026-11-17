@@ -109,6 +109,8 @@ CREATE TABLE read_state (
     issue_id             INTEGER NOT NULL,
     last_read_journal_id INTEGER NOT NULL DEFAULT 0,
     read_at              TEXT,
+    -- 初めて journal を取得したとき、この時刻(サーバー時刻)以前の journal を既読にする
+    read_baseline        TEXT,
     PRIMARY KEY (server_id, issue_id)
 );
 

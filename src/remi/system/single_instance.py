@@ -59,13 +59,23 @@ class SingleInstance(QObject):
         assert self._server is not None
         while self._server.hasPendingConnections():
             sock = self._server.nextPendingConnection()
+            sock._remi_buf = b""  # type: ignore[attr-defined]
             sock.readyRead.connect(lambda s=sock: self._on_ready(s))
+            sock.disconnected.connect(lambda s=sock: self._on_ready(s))
+            # Windowsの名前付きパイプでは、受け付けた時点でデータが届いていることがあり、
+            # その場合 readyRead が来ないので、ここでも読む
+            if sock.bytesAvailable():
+                self._on_ready(sock)
 
     def _on_ready(self, sock: QLocalSocket) -> None:
-        data = bytes(sock.readAll().data())
-        if b"show" in data:
+        buf = sock._remi_buf + bytes(sock.readAll().data())  # type: ignore[attr-defined]
+        if b"show" in buf and not getattr(sock, "_remi_done", False):
+            sock._remi_done = True  # type: ignore[attr-defined]
             self.activateRequested.emit()
-        sock.disconnectFromServer()
+            sock.disconnectFromServer()
+            sock.deleteLater()
+            return
+        sock._remi_buf = buf  # type: ignore[attr-defined]
 
     def close(self) -> None:
         if self._server is not None:

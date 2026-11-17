@@ -1,0 +1,10 @@
+# 実行に必要なライブラリ(pyproject.toml の dependencies と揃える)
+PySide6-Essentials>=6.8
+requests>=2.32
+truststore>=0.10
+keyring>=25
+markdown-it-py>=3
+mdit-py-plugins>=0.4
+textile>=4.0.3
+nh3>=0.2.18
+Pygments>=2.18

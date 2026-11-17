@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+# 翻訳のコンパイル結果(tools/i18n.py build で生成する)
+*.qm

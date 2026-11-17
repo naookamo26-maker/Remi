@@ -47,11 +47,8 @@ def test_translate_with_params_and_fallback():
     ("system", "fr_FR.UTF-8", "en"),
 ])
 def test_resolve_language(monkeypatch, setting, env, expected):
-    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr("locale.getlocale", lambda: (None, None))
-    if env:
-        monkeypatch.setenv("LANG", env)
+    # Windowsの表示言語や環境変数の読み取り結果を差し替える
+    monkeypatch.setattr("remi.i18n._system_language_codes", lambda: [env] if env else [])
     assert resolve_language(setting) == expected
 
 

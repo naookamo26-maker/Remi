@@ -17,27 +17,114 @@ log = logging.getLogger(__name__)
 SNOOZE_SECONDS = 3600
 
 
-def make_icon(unread: bool, dark_taskbar: bool, size: int = 64):
-    """トレイアイコンの画像。タスクバーの色に合わせ、未読があれば赤い点を付ける。"""
-    from PIL import Image, ImageDraw, ImageFont
+# アイコンの形(100x100 の座標。web/icon.svg と同じ)
+BUBBLE_PATH = "M26 6H74C86 6 94 14 94 26V64C94 76 86 84 74 84H36L16 96L20 82C11 79 6 72 6 63V26C6 14 14 6 26 6Z"
+R_PATH = ("M27 17H56C70 17 79 26.5 79 39C79 48.5 73.5 55.5 65 58.5L81 83H62L48.5 60.5H44V83H27Z "
+          "M44 31V47H55C60.5 47 63 44 63 39C63 34 60.5 31 55 31Z")
+# R の配置(吹き出しの本体の中央に寄せる): translate(50 45) scale(0.92) translate(-53 -50)
+R_TRANSFORM = (0.92, 50 - 53 * 0.92, 45 - 50 * 0.92)
+GRADIENT = ((0x2B, 0x88, 0xD8), (0x0B, 0x5A, 0x9E))  # 左上 → 右下
 
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    bg = (98, 168, 240, 255) if dark_taskbar else (15, 108, 189, 255)
-    fg = (11, 22, 32, 255) if dark_taskbar else (255, 255, 255, 255)
-    pad = size // 16
-    d.rounded_rectangle((pad, pad, size - pad, size - pad), radius=size // 5, fill=bg)
-    try:
-        font = ImageFont.load_default(size=int(size * 0.62))
-    except TypeError:  # 古いPillow
-        font = ImageFont.load_default()
-    d.text((size / 2, size / 2), "R", fill=fg, font=font, anchor="mm")
+
+def _path_polygons(d: str, steps: int = 16) -> list[list[tuple[float, float]]]:
+    """M / H / V / L / C / Z(絶対座標)だけからなるSVGパスを、多角形のリストにする。"""
+    import re
+
+    tokens = re.findall(r"[MHVLCZ]|-?\d*\.?\d+", d)
+    polys: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = []
+    x = y = 0.0
+    i = 0
+    cmd = ""
+    while i < len(tokens):
+        if tokens[i] in "MHVLCZ":
+            cmd = tokens[i]
+            i += 1
+            if cmd == "Z":
+                if cur:
+                    polys.append(cur)
+                cur = []
+                continue
+        nums = lambda n: [float(v) for v in tokens[i:i + n]]  # noqa: E731
+        if cmd == "M":
+            if cur:
+                polys.append(cur)
+            x, y = nums(2)
+            cur = [(x, y)]
+            i += 2
+            cmd = "L"
+        elif cmd == "L":
+            x, y = nums(2)
+            cur.append((x, y))
+            i += 2
+        elif cmd == "H":
+            (x,) = nums(1)
+            cur.append((x, y))
+            i += 1
+        elif cmd == "V":
+            (y,) = nums(1)
+            cur.append((x, y))
+            i += 1
+        elif cmd == "C":
+            x1, y1, x2, y2, x3, y3 = nums(6)
+            x0, y0 = x, y
+            for k in range(1, steps + 1):
+                t_ = k / steps
+                u = 1 - t_
+                cur.append((u ** 3 * x0 + 3 * u * u * t_ * x1 + 3 * u * t_ * t_ * x2 + t_ ** 3 * x3,
+                            u ** 3 * y0 + 3 * u * u * t_ * y1 + 3 * u * t_ * t_ * y2 + t_ ** 3 * y3))
+            x, y = x3, y3
+            i += 6
+        else:
+            i += 1
+    if cur:
+        polys.append(cur)
+    return polys
+
+
+def make_icon(unread: bool, dark_taskbar: bool, size: int = 64):
+    """アイコンの画像: 青い吹き出しの中に白いR。未読があれば右上に赤い点を付ける。
+
+    dark_taskbar は互換のために残している(吹き出しはどちらの背景でも見えるので、色は変えない)。
+    """
+    from PIL import Image, ImageDraw
+
+    scale = 8 if size <= 64 else 4  # 大きく描いてから縮小し、縁を滑らかにする
+    big = size * scale
+    f = big / 100
+
+    def pts(poly, t=(1.0, 0.0, 0.0)):
+        k, dx, dy = t
+        return [((px * k + dx) * f, (py * k + dy) * f) for px, py in poly]
+
+    # 吹き出しの形を切り抜いたグラデーション
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).polygon(pts(_path_polygons(BUBBLE_PATH)[0]), fill=255)
+    grad = Image.new("RGBA", (big, big))
+    (r0, g0, b0), (r1, g1, b1) = GRADIENT
+    gdraw = ImageDraw.Draw(grad)
+    for i in range(0, 2 * big, 2):  # 左上から右下への斜めのグラデーション
+        t_ = i / (2 * big)
+        color = (int(r0 + (r1 - r0) * t_), int(g0 + (g1 - g0) * t_), int(b0 + (b1 - b0) * t_), 255)
+        gdraw.line([(i, 0), (0, i)], fill=color, width=3)
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    img.paste(grad, (0, 0), mask)
+
+    # R(外形を白で塗り、穴を吹き出しの色に戻す)
+    outer, hole = _path_polygons(R_PATH)
+    rmask = Image.new("L", (big, big), 0)
+    rd = ImageDraw.Draw(rmask)
+    rd.polygon(pts(outer, R_TRANSFORM), fill=255)
+    rd.polygon(pts(hole, R_TRANSFORM), fill=0)
+    img.paste(Image.new("RGBA", (big, big), (255, 255, 255, 255)), (0, 0), rmask)
+
     if unread:
-        r = size // 5
-        cx, cy = size - r - 1, r + 1
-        d.ellipse((cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2), fill=(0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        r = big // 5
+        cx, cy = big - r - scale, r + scale
+        d.ellipse((cx - r - 2 * scale, cy - r - 2 * scale, cx + r + 2 * scale, cy + r + 2 * scale), fill=(255, 255, 255, 255))
         d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(207, 34, 46, 255))
-    return img
+    return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
 class Tray:

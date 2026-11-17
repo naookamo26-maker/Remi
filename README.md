@@ -24,7 +24,6 @@ python -m pytest             # テスト
 ## 配布物の作成
 
 Windowsで次を実行すると、`dist/Remi/`(実行ファイル一式)と `dist/Remi-<バージョン>-win64.zip` ができます。
-GitHub Actions の「Build」ワークフローでも、mainへのマージのたびに同じzipが作られます(成果物「Remi-windows」)。
 
 ```powershell
 python tools/build.py

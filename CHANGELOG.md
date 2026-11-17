@@ -32,6 +32,5 @@
 - デスクトップ通知(グローバル → サーバー → プロジェクトの設定、表示中のチケットは通知しない、複数件をまとめる、
   クリックでそのチケットを開く)
 - Windowsのサインイン時の自動起動
-- PyInstaller での配布物の作成(`tools/build.py`、exe のファイルバージョンとアイコン、truststore の runtime hook)と、
-  Windows でのビルドを行う GitHub Actions
+- PyInstaller での配布物の作成(`tools/build.py`、exe のファイルバージョンとアイコン、truststore の runtime hook)
 

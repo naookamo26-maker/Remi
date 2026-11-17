@@ -31,6 +31,7 @@ class SingleInstance(QObject):
         super().__init__(parent)
         self.name = name or default_server_name()
         self._server: QLocalServer | None = None
+        self._connections: set[_Connection] = set()
 
     def notify_existing(self, timeout_ms: int = 500) -> bool:
         """既に起動しているRemiがあれば前面表示を依頼して True を返す。"""
@@ -61,27 +62,53 @@ class SingleInstance(QObject):
         assert self._server is not None
         while self._server.hasPendingConnections():
             sock = self._server.nextPendingConnection()
-            sock._remi_buf = b""  # type: ignore[attr-defined]
-            sock.readyRead.connect(lambda s=sock: self._on_ready(s))
-            sock.disconnected.connect(lambda s=sock: self._on_ready(s))
-            # Windowsの名前付きパイプでは、受け付けた時点でデータが届いていることがあり、
-            # その場合 readyRead が来ないので、ここでも読む
-            if sock.bytesAvailable():
-                self._on_ready(sock)
-
-    def _on_ready(self, sock: QLocalSocket) -> None:
-        buf = sock._remi_buf + bytes(sock.readAll().data())  # type: ignore[attr-defined]
-        if b"show" in buf and not getattr(sock, "_remi_done", False):
-            sock._remi_done = True  # type: ignore[attr-defined]
-            sock.write(b"ok\n")
-            sock.flush()
-            self.activateRequested.emit()
-            sock.disconnectFromServer()
-            sock.deleteLater()
-            return
-        sock._remi_buf = buf  # type: ignore[attr-defined]
+            handler = _Connection(sock, self.activateRequested.emit)
+            self._connections.add(handler)
+            handler.finished = lambda h=handler: self._connections.discard(h)
 
     def close(self) -> None:
+        for c in list(self._connections):
+            c.dispose()
+        self._connections.clear()
         if self._server is not None:
             self._server.close()
+            self._server.deleteLater()
             self._server = None
+
+
+class _Connection:
+    """受け付けた1本の接続。"show" を受け取ったら応答して閉じる。"""
+
+    def __init__(self, sock: QLocalSocket, on_show) -> None:
+        self.sock: QLocalSocket | None = sock
+        self.on_show = on_show
+        self.buf = b""
+        self.finished = lambda: None
+        sock.readyRead.connect(self._read)
+        sock.disconnected.connect(self._read)
+        # Windowsの名前付きパイプでは、受け付けた時点でデータが届いていて
+        # readyRead が来ないことがあるので、ここでも読む
+        if sock.bytesAvailable():
+            self._read()
+
+    def _read(self) -> None:
+        if self.sock is None:
+            return
+        self.buf += bytes(self.sock.readAll().data())
+        if b"show" in self.buf:
+            self.sock.write(b"ok\n")
+            self.sock.flush()
+            self.on_show()
+            self.dispose()
+        elif self.sock.state() == QLocalSocket.LocalSocketState.UnconnectedState:
+            self.dispose()
+
+    def dispose(self) -> None:
+        sock, self.sock = self.sock, None
+        if sock is None:
+            return
+        sock.readyRead.disconnect(self._read)
+        sock.disconnected.disconnect(self._read)
+        sock.disconnectFromServer()
+        sock.deleteLater()
+        self.finished()

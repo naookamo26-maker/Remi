@@ -181,6 +181,7 @@ def build_stylesheet(p: Palette) -> str:
         background: {p.accent}; color: {p.on_accent}; border: none;
         border-radius: 6px; padding: 6px 18px; font-weight: 600;
     }}
+    QPushButton[primary="true"]:disabled {{ background: {p.border}; color: {p.text_muted}; }}
     QLabel[muted="true"] {{ color: {p.text_muted}; }}
     QLabel[error="true"] {{ color: {p.danger}; }}
     QLabel[success="true"] {{ color: {p.success}; }}

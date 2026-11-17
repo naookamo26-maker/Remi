@@ -11,8 +11,9 @@ from remi import APP_NAME, APP_USER_MODEL_ID, __version__
 from remi.i18n import install_translators, resolve_language
 from remi.logging_setup import setup_logging
 from remi.paths import db_path
+from remi.context import AppContext
 from remi.store.db import SchemaTooNewError, open_database
-from remi.store.settings import Settings
+from remi.sync.worker import SyncManager
 from remi.system.single_instance import SingleInstance
 from remi.ui.main_window import MainWindow
 from remi.ui.theme import ThemeManager
@@ -58,18 +59,30 @@ def run(argv: list[str]) -> int:
             ),
         )
         return 1
-    settings = Settings(db)
+    ctx = AppContext(db)
 
-    lang = resolve_language(settings.get("language"))
+    lang = resolve_language(ctx.settings.get("language"))
     app._remi_translators = install_translators(app, lang)  # type: ignore[attr-defined]
-    theme = ThemeManager(app, settings.get("theme"))
-    app._remi_theme = theme  # type: ignore[attr-defined]
+    ctx.theme = ThemeManager(app, ctx.settings.get("theme"))
 
-    window = MainWindow()
+    sync = SyncManager(db, app)
+    sync.dataChanged.connect(ctx.signals.dataChanged)
+    sync.stateChanged.connect(ctx.signals.syncStateChanged)
+    ctx.signals.serversChanged.connect(sync.restart)
+    ctx.signals.projectSettingsChanged.connect(lambda _sid: sync.sync_now())
+
+    window = MainWindow(ctx, sync)
     single.activateRequested.connect(window.bring_to_front)
     window.show()
+    sync.restart()
+    if not ctx.servers.list():
+        # 初回起動: サーバー登録を案内する
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(300, window.open_settings)
 
     code = app.exec()
+    sync.stop_all()
     single.close()
     db.close_all()
     return code

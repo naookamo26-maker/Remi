@@ -28,3 +28,57 @@ def db(tmp_path):
     d = open_database(tmp_path / "test.db")
     yield d
     d.close_all()
+
+
+class _MemoryKeyring:
+    """テスト用: OSの資格情報マネージャーを使わず、メモリに保存する。"""
+
+    priority = 1
+
+    def __init__(self):
+        self.store = {}
+
+    def get_password(self, service, user):
+        return self.store.get((service, user))
+
+    def set_password(self, service, user, password):
+        self.store[(service, user)] = password
+
+    def delete_password(self, service, user):
+        import keyring.errors
+
+        if (service, user) not in self.store:
+            raise keyring.errors.PasswordDeleteError(user)
+        del self.store[(service, user)]
+
+
+@pytest.fixture(autouse=True)
+def memory_keyring(monkeypatch):
+    import keyring
+
+    kr = _MemoryKeyring()
+    monkeypatch.setattr(keyring, "get_password", kr.get_password)
+    monkeypatch.setattr(keyring, "set_password", kr.set_password)
+    monkeypatch.setattr(keyring, "delete_password", kr.delete_password)
+    return kr
+
+
+@pytest.fixture
+def fake():
+    from fake_redmine import FakeRedmine
+
+    f = FakeRedmine()
+    f.start()
+    yield f
+    f.stop()
+
+
+@pytest.fixture
+def client(fake):
+    from fake_redmine import API_KEY
+
+    from remi.api.client import RedmineClient
+
+    c = RedmineClient(fake.base_url, API_KEY, min_interval=0)
+    yield c
+    c.close()

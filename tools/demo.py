@@ -1,0 +1,125 @@
+"""見た目の確認用: サンプルデータ入りの偽Redmineにつないだ画面を起動する。
+
+    python tools/demo.py            # URLを表示して待つ(ブラウザで開く)
+    python tools/demo.py --port 8765
+
+データは一時フォルダに作り、終了すると消える。テストの偽Redmine(tests/fake_redmine.py)を使う。
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import tempfile
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "src"))
+
+
+def ts(minutes_ago: float) -> str:
+    return (datetime.now(UTC) - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def seed(fake) -> None:
+    from fake_redmine import ME
+
+    fake.add_project(1, "基幹システム")
+    fake.add_project(2, "受注管理", parent=1)
+    fake.add_project(3, "在庫管理", parent=1)
+    fake.add_project(4, "社内ポータル")
+    fake.add_issue(1234, 2, "受注一覧のCSV出力で文字化けする", watchers={ME}, updated_on=ts(3000),
+                   description="受注一覧からCSVを出力すると、Excelで開いたときに文字化けします。")
+    fake.set_status(1234, 2)
+    fake.add_journal(1234, 7, "再現手順です。\n\n1. 受注一覧で `得意先名` に「髙橋」を含む行を表示\n2. 「CSV出力」を押す\n"
+                     "3. Excelで開くと **文字化け** する\n\n出力処理はこのあたりです。\n\n```python\n# export.py\n"
+                     "def write_csv(rows, path):\n    with open(path, \"w\", encoding=\"utf-8\") as f:\n"
+                     "        csv.writer(f).writerows(rows)\n```", created_on=ts(2990))
+    png = (ROOT / "tools" / "demo_screenshot.png")
+    if png.exists():
+        fake.add_attachment(1234, 501, "excel_mojibake.png", png.read_bytes())
+        fake.add_journal(1234, 7, "Excelで開いたときの画面です。\n\n![](excel_mojibake.png)", created_on=ts(2985),
+                         details=[{"property": "attachment", "name": "501", "new_value": "excel_mojibake.png"}])
+    fake.add_journal(1234, 8, "顧客からは **今週中の修正** を求められています。#1198 の対応と合わせてリリースできますか?",
+                     private=True, created_on=ts(30))
+    fake.add_journal(1234, ME, "@tanaka 確認しました。#1198 と同じく BOM なしの UTF-8 が原因です。"
+                     "`encoding=\"utf-8-sig\"` に変更します。", created_on=ts(25))
+    fake.add_journal(1234, 7, "ありがとうございます!テスト環境で確認します。", created_on=ts(2))
+    fake.add_issue(1229, 2, "受注確定メールの宛先に営業担当を追加したい", assigned_to=7, watchers={ME}, updated_on=ts(45))
+    fake.add_journal(1229, 8, "仕様を確認しました。来週着手します。", created_on=ts(44))
+    fake.add_issue(1198, 2, "帳票出力の文字コードをShift_JISに統一する", assigned_to=100, updated_on=ts(1500))
+    fake.add_issue(1175, 3, "受注検索の日付範囲に「今月」プリセットを追加", assigned_to=7, author=ME, watchers={ME},
+                   updated_on=ts(4000))
+    fake.add_issue(1301, 3, "在庫引当のバッチが二重起動する", updated_on=ts(10))
+    fake.add_journal(1301, 8, "ログを添付します。attachment:batch.log を確認してください。", created_on=ts(9))
+    fake.add_attachment(1301, 502, "batch.log", b"2026-11-17 10:00:00 start\n", "text/plain")
+    for i in range(12):
+        fake.add_issue(1400 + i, 4, f"ポータルの改善要望 {i + 1}", assigned_to=None, watchers={ME}, updated_on=ts(6000 + i * 60))
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--port", type=int, default=0)
+    p.add_argument("--lang", default="ja")
+    p.add_argument("--theme", default="system")
+    p.add_argument("--unread", action="store_true", help="2件のコメントを未読にしておく")
+    args = p.parse_args()
+
+    tmp = tempfile.mkdtemp(prefix="remi-demo-")
+    os.environ["REMI_DATA_DIR"] = tmp
+    import keyring
+
+    store: dict = {}
+    keyring.get_password = lambda s, u: store.get((s, u))
+    keyring.set_password = lambda s, u, pw: store.__setitem__((s, u), pw)
+
+    from fake_redmine import API_KEY, FakeRedmine
+
+    from remi.context import AppContext
+    from remi.server.api import RemiApi
+    from remi.server.http import LocalServer
+    from remi.store.db import open_database
+    from remi.store.servers import Server
+    from remi.sync.worker import SyncManager
+
+    fake = FakeRedmine()
+    fake.start()
+    seed(fake)
+    db = open_database(Path(tmp) / "remi.db")
+    ctx = AppContext(db)
+    ctx.settings.set("language", args.lang)
+    ctx.settings.set("theme", args.theme)
+    ctx.servers.save(Server(name="社内Redmine", url=fake.base_url, text_format="common_mark"), api_key=API_KEY)
+    sync = SyncManager(db, ctx.bus)
+    server = LocalServer(RemiApi(ctx, sync), port=args.port)
+    server.start()
+    sync.restart()
+    # 同期が終わるのを待つ
+    end = time.monotonic() + 30
+    while time.monotonic() < end and not all(ctx.issues.journals_synced(1, i) for i in (1234, 1229, 1301)):
+        time.sleep(0.2)
+    if args.unread:
+        fake.add_journal(1229, 7, "追加の確認事項があります。宛先は CC にしますか?")
+        fake.add_journal(1301, 7, "@okamo 本番でも再現しました。至急お願いします。")
+        sync.sync_now()
+        end = time.monotonic() + 30
+        while time.monotonic() < end and not (ctx.issues.unread_count(1, 1229) and ctx.issues.unread_count(1, 1301)):
+            time.sleep(0.2)
+    print(server.start_url, flush=True)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sync.stop_all()
+        server.stop()
+        fake.stop()
+
+
+if __name__ == "__main__":
+    main()

@@ -446,6 +446,15 @@ class RemiApi:
         webbrowser.open(url)
 
     @rpc
+    def openAttachment(self, serverId: int, attachmentId: int) -> None:  # noqa: N802,N803
+        """画像以外の添付は、Redmineのページをブラウザで開く。"""
+        a = self.ctx.issues.get_attachment(serverId, attachmentId)
+        server = self.ctx.servers.get(serverId)
+        if a is None or server is None:
+            raise RpcError("not_found")
+        webbrowser.open(f"{server.url}/attachments/{attachmentId}")
+
+    @rpc
     def hideWindow(self) -> None:  # noqa: N802
         self.window.hide()
 

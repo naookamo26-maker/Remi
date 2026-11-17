@@ -100,6 +100,11 @@
   "menu.openInBrowser": "ブラウザで開く",
   "menu.showAllProjects": "すべてのプロジェクトを表示",
   "menu.watchAuthored": "作成したチケットを監視",
+  "notify.body": "{user}: {notes}",
+  "notify.others": {
+    "other": "ほか {count}件の新着コメント"
+  },
+  "notify.title": "#{id} {subject}",
   "relation.blocked": "ブロック元",
   "relation.blocks": "ブロック先",
   "relation.copied_from": "コピー元",
@@ -162,6 +167,16 @@
   "settings.startup": "自動起動",
   "settings.title": "設定",
   "time.yesterday": "昨日",
+  "tray.lastSynced": "最終同期 {time}",
+  "tray.open": "Remiを開く",
+  "tray.quit": "終了",
+  "tray.resume": "通知を再開",
+  "tray.settings": "設定…",
+  "tray.snooze": "通知を1時間停止",
+  "tray.syncNow": "今すぐ同期",
+  "tray.unread": {
+    "other": "未読 {count}件"
+  },
   "tree.all": "すべて",
   "tree.allServers": "すべてのサーバー",
   "tree.cannotSync": "同期できません。",

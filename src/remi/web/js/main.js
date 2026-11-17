@@ -213,6 +213,9 @@ class App {
       case "openIssue":
         this.openIssue(e.serverId, e.issueId);
         break;
+      case "openSettings":
+        this.openSettings();
+        break;
       case "resync":
         this.refreshSoon.flush();
         if (this.current) this.conv.load(this.current.serverId, this.current.issueId, { markRead: false });

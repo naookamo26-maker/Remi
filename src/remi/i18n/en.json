@@ -101,6 +101,12 @@
   "menu.openInBrowser": "Open in browser",
   "menu.showAllProjects": "Show all projects",
   "menu.watchAuthored": "Follow issues I created",
+  "notify.body": "{user}: {notes}",
+  "notify.others": {
+    "one": "and {count} more new comment",
+    "other": "and {count} more new comments"
+  },
+  "notify.title": "#{id} {subject}",
   "relation.blocked": "Blocked by",
   "relation.blocks": "Blocks",
   "relation.copied_from": "Copied from",
@@ -164,6 +170,17 @@
   "settings.startup": "Startup",
   "settings.title": "Settings",
   "time.yesterday": "Yesterday",
+  "tray.lastSynced": "Last synced {time}",
+  "tray.open": "Open Remi",
+  "tray.quit": "Quit",
+  "tray.resume": "Resume notifications",
+  "tray.settings": "Settings…",
+  "tray.snooze": "Pause notifications for 1 hour",
+  "tray.syncNow": "Sync now",
+  "tray.unread": {
+    "one": "{count} unread",
+    "other": "{count} unread"
+  },
   "tree.all": "All",
   "tree.allServers": "All servers",
   "tree.cannotSync": "Cannot sync.",

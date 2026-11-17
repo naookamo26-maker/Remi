@@ -1,0 +1,4 @@
+# 開発用: pip install -r requirements-dev.txt
+-e .
+pytest>=8
+pyinstaller>=6.16

@@ -45,7 +45,13 @@ export function debounce(fn, ms) {
     clearTimeout(timer);
     fn(...args);
   };
+  wrapped.cancel = () => clearTimeout(timer);
   return wrapped;
+}
+
+// 未読数のバッジの文字(大きな数は 999+ にまとめる)
+export function countText(n) {
+  return n > 999 ? "999+" : String(n);
 }
 
 let toastTimer = null;

@@ -38,7 +38,7 @@ python tools/build.py
 | `src/remi/sync/` | 差分同期エンジンと、サーバーごとの同期スレッド |
 | `src/remi/render/` | 本文(Markdown / Textile)のレンダリング、変更履歴の文章化 |
 | `src/remi/server/` | 画面向けのローカルAPIサーバー(RPC、SSE) |
-| `src/remi/web/` | 画面(HTML / CSS / JavaScript) |
+| `src/remi/web/` | 画面(HTML / CSS / JavaScript)。バックエンドとの間のデータの形は `js/types.js` |
 | `src/remi/i18n/` | 翻訳カタログ(`en.json` / `ja.json`) |
 | `src/remi/system/` | Windows固有の処理、トレイ、通知、多重起動の防止 |
 | `tools/` | デモ(`demo.py`)、配布物の作成(`build.py`) |

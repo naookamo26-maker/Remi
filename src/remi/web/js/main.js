@@ -8,6 +8,7 @@ import { IssueList } from "./list.js";
 import { selectionKey, Tree } from "./tree.js";
 
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const CONV_MIN_WIDTH = 360;
 
 class App {
   constructor(boot) {
@@ -33,6 +34,7 @@ class App {
     this.applyTheme();
     this.applyMineSide();
     darkQuery.addEventListener("change", () => this.applyTheme());
+    addEventListener("keydown", (e) => this.onGlobalKey(e));
     addEventListener("focus", () => this.onActive(true));
     addEventListener("blur", () => this.onActive(false));
     document.addEventListener("visibilitychange", () => this.onActive(document.visibilityState === "visible" && document.hasFocus()));
@@ -77,7 +79,10 @@ class App {
     sp.setPointerCapture(e.pointerId);
     sp.classList.add("dragging");
     const min = index === 0 ? 180 : 240;
-    const move = (ev) => { target.style.width = `${Math.max(min, Math.min(innerWidth * 0.5, startW + ev.clientX - startX))}px`; };
+    // 会話ペインの最小幅(CSSの .pane-conv と同じ)を残す
+    const other = (index === 0 ? this.list.root : this.tree.root).getBoundingClientRect().width;
+    const max = Math.max(min, Math.min(innerWidth * 0.5, innerWidth - other - CONV_MIN_WIDTH));
+    const move = (ev) => { target.style.width = `${Math.max(min, Math.min(max, startW + ev.clientX - startX))}px`; };
     const up = () => {
       sp.classList.remove("dragging");
       sp.removeEventListener("pointermove", move);
@@ -98,6 +103,25 @@ class App {
       setTimeout(() => location.reload(), 300);
     }
     return this.settings;
+  }
+
+  // --- キー操作 ---------------------------------------------------------------------
+  onGlobalKey(e) {
+    const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey;
+    if (e.key === "F5" || (ctrl && e.key.toLowerCase() === "r")) {
+      // 画面の再読み込み(送信前の添付などを失う)はせず、Redmineから読み込み直す。Shift・Ctrl付きも同じ
+      e.preventDefault();
+      if (!e.repeat) this.syncNow();
+    } else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "f" && !document.querySelector(".backdrop")) {
+      e.preventDefault();
+      this.list.focusSearch();
+    }
+  }
+
+  // 今すぐ同期する。開いているチケットは、更新日時が同じでもコメントごと取り直す
+  syncNow() {
+    call("syncNow", this.current ?? {}).catch(() => {});
+    toast(t("tree.syncStarted"));
   }
 
   // --- 選択 -------------------------------------------------------------------------
@@ -132,9 +156,23 @@ class App {
   async openIssue(serverId, issueId, { note = null } = {}) {
     this.current = { serverId, issueId };
     this.list.markSelected();
-    call("setOpenIssue", { serverId, issueId });
-    await this.conv.load(serverId, issueId, { markRead: document.hasFocus() || document.visibilityState === "visible", resetLimit: true });
+    call("setOpenIssue", { serverId, issueId }).catch(() => {});
+    try {
+      await this.conv.load(serverId, issueId, { markRead: document.hasFocus() || document.visibilityState === "visible", resetLimit: true });
+    } catch (e) {
+      toast(t(`errors.${e.code || "connection_failed"}`));
+      return;
+    }
     if (note) this.conv.scrollToNote(note);
+  }
+
+  // 開いている会話を閉じる(入力中の内容・送信前の添付も捨てる)
+  closeIssue() {
+    this.current = null;
+    this.pendingRead = false;
+    call("setOpenIssue", { serverId: null, issueId: null }).catch(() => {});
+    this.conv.showEmpty();
+    this.list.markSelected();
   }
 
   // 本文中の #123: 監視中なら開き、そうでなければブラウザで開く
@@ -174,9 +212,12 @@ class App {
       this.selection = { kind: "none" };
       this.current = null;
       this.conv.showWelcome();
-    } else if (this.selection.kind === "none" || (this.selection.serverId && !servers.some((s) => s.serverId === this.selection.serverId))) {
-      this.selection = servers.length === 1 ? { kind: "server", serverId: servers[0].serverId } : { kind: "all" };
-      if (!this.current) this.conv.showEmpty();
+    } else {
+      if (this.current && !servers.some((s) => s.serverId === this.current.serverId)) this.closeIssue(); // サーバーを削除した
+      if (this.selection.kind === "none" || (this.selection.serverId && !servers.some((s) => s.serverId === this.selection.serverId))) {
+        this.selection = servers.length === 1 ? { kind: "server", serverId: servers[0].serverId } : { kind: "all" };
+        if (!this.current) this.conv.showEmpty();
+      }
     }
     this.tree.render();
     this.list.refresh();
@@ -211,6 +252,10 @@ class App {
       case "serversChanged":
         this.onServersChanged();
         break;
+      case "serverCacheCleared":
+        // 接続先や認証ユーザーが変わった: 前のユーザーのデータ(入力中の内容・添付を含む)を残さない
+        if (this.current?.serverId === e.serverId) this.closeIssue();
+        break;
       case "noteFinished":
         this.conv.noteFinished(e);
         if (e.error) toast(t("conv.sendFailed"));
@@ -219,7 +264,13 @@ class App {
         this.openIssue(e.serverId, e.issueId);
         break;
       case "watchFinished":
-        if (e.error) toast(t(`errors.${e.error}`));
+        if (e.error) {
+          toast(t(`errors.${e.error}`));
+          // 失敗したときは dataChanged が来ないので、描き直してボタンを押せる状態に戻す
+          if (this.current && e.serverId === this.current.serverId && e.issueId === this.current.issueId) {
+            this.conv.load(this.current.serverId, this.current.issueId, { markRead: false });
+          }
+        }
         break;
       case "openSettings":
         this.openSettings();
@@ -231,9 +282,10 @@ class App {
     }
   }
 
+  // 届いたイベントでの描き直し。失敗しても(アプリの終了中など)次のイベントで描き直されるので無視する
   refreshSoon = debounce(() => {
-    this.tree.refresh();
-    this.list.refresh();
+    this.tree.refresh().catch((e) => console.warn("tree refresh failed", e));
+    this.list.refresh().catch((e) => console.warn("list refresh failed", e));
   }, 300);
 }
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import time
 
 import pytest
@@ -306,3 +307,159 @@ def test_open_redmine_menu(page, remi, fake, monkeypatch):
     page.get_by_role("menuitem", name="URLをコピー").click()
     playwright_api.expect(page.get_by_role("status")).to_contain_text("コピーしました")
     assert page.evaluate("() => navigator.clipboard.readText()") == f"{fake.base_url}/issues/10"
+
+
+def test_live_update_keeps_composer_state(page, remi, fake):
+    """同じチケットに更新が届いても、入力欄は作り直さない(入力中のフォーカス・カーソル・プレビューを保つ)。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    box = conv.get_by_role("textbox", name="コメント")
+    box.click()
+    box.press_sequentially("入力中")
+    box.press("ArrowLeft")
+    assert page.evaluate("getComputedStyle(document.querySelector('.chips')).display") == "none"
+    fake.add_journal(10, 8, "届いたコメント")
+    remi.sync.sync_now()
+    playwright_api.expect(conv.locator(".bubble", has_text="届いたコメント")).to_be_visible(timeout=30000)
+    assert box.evaluate("el => document.activeElement === el && el.selectionStart") == 2
+    assert box.input_value() == "入力中"
+    assert not page.errors, page.errors
+
+
+def test_switching_issue_while_sending(page, remi, fake):
+    """送信中に別のチケットへ移っても、移動先の入力欄は「送信中」にならない。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.get_by_label("ステータス", exact=True)).to_be_enabled(timeout=15000)
+    box = conv.get_by_role("textbox", name="コメント")
+    with fake._lock:  # 偽Redmineの応答を止めて、送信中の状態を作る
+        box.fill("送信中のコメント")
+        conv.get_by_role("button", name="送信").click()
+        playwright_api.expect(conv.locator(".msg.pending")).to_be_visible()
+        page.locator(".issue", has_text="メールの宛先").click()
+        playwright_api.expect(conv.locator("h1")).to_have_text("メールの宛先を追加したい")
+        playwright_api.expect(conv.locator(".msg.pending")).to_have_count(0)
+        box.fill("別のコメント")
+        playwright_api.expect(conv.get_by_role("button", name="送信")).to_be_enabled()
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(conv.locator(".msg.mine .bubble", has_text="送信中のコメント")).to_be_visible(timeout=20000)
+    playwright_api.expect(box).to_have_value("", timeout=10000)
+    assert not page.errors, page.errors
+
+
+def test_tree_toggle_and_settings_tabs(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    tree = page.locator(".tree")
+    playwright_api.expect(tree).to_contain_text("受注管理")
+    # 折りたたみは保存を待たずに反映され、←→キーでも操作できる
+    page.locator(".node.server .twisty").click()
+    playwright_api.expect(tree).not_to_contain_text("未読のみ", timeout=1000)
+    page.locator(".node.server .twisty").click()
+    playwright_api.expect(tree).to_contain_text("受注管理", timeout=1000)
+    page.locator(".node", has_text="基幹システム").click()
+    tree.press("ArrowLeft")
+    playwright_api.expect(tree).not_to_contain_text("受注管理", timeout=1000)
+    tree.press("ArrowRight")
+    playwright_api.expect(tree).to_contain_text("受注管理", timeout=1000)
+    assert remi.ctx.settings.get("tree_collapsed") == []
+
+    # 設定ダイアログ: タブを切り替えても、変更後の値が表示される
+    page.get_by_role("button", name="設定").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("外観").select_option("dark")
+    playwright_api.expect(page.locator("html")).to_have_class("theme-dark")
+    dialog.get_by_role("tab", name="サーバー").click()
+    dialog.get_by_role("tab", name="全般").click()
+    playwright_api.expect(dialog.get_by_label("外観")).to_have_value("dark")
+    assert not page.errors, page.errors
+
+
+def test_switching_user_closes_open_conversation(page, remi, fake):
+    """別のユーザーのAPIキーに替えたら、開いている会話(前のユーザーのデータ)を閉じる。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_have_text("CSVが文字化けする")
+    conv.get_by_role("textbox", name="コメント").fill("前のユーザーの入力")
+
+    fake.keys["key-b"] = 7
+    api = remi.server.api
+    probe = api.testConnection(url=fake.base_url, apiKey="key-b", serverId=1)
+    api.saveServer({"serverId": 1, "name": "社内Redmine", "url": fake.base_url, "apiKey": "key-b",
+                    "textFormat": "common_mark", "pollInterval": 180, "userId": probe["userId"],
+                    "login": probe["login"], "userName": probe["name"], "groupIds": probe["groupIds"]})
+    playwright_api.expect(conv.locator("h1")).to_have_count(0, timeout=10000)
+    playwright_api.expect(conv.get_by_role("textbox", name="コメント")).to_have_count(0)
+    assert api.open_issue is None  # 前のユーザーで開いていたチケットを、同期でも取りに行かない
+    assert remi.ctx.issues.journals(1, 10) == []
+    playwright_api.expect(page.locator(".issue", has_text="CSVが文字化けする")).to_have_count(0, timeout=10000)
+    playwright_api.expect(page.locator(".issue", has_text="メールの宛先")).to_be_visible(timeout=20000)
+    assert not page.errors, page.errors
+
+
+def test_f5_refetches_open_issue_without_reloading(page, remi, fake):
+    """F5・Ctrl+R は画面を再読み込みせず、開いているチケットのコメントをRedmineから取り直す。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_have_text("CSVが文字化けする")
+    time.sleep(2)  # 開いた直後の取り直しが終わるのを待つ
+    page.evaluate("window.__notReloaded = true")
+    # 同じ秒に入った(更新日時が変わらない)コメントは、通常の確認では見つからない
+    stamp = remi.ctx.issues.updated_on(1, 10)
+    fake.add_journal(10, 8, "見逃したコメント", created_on=stamp)
+    page.keyboard.press("F5")
+    playwright_api.expect(conv.locator(".bubble", has_text="見逃したコメント")).to_be_visible(timeout=8000)
+    page.keyboard.press("Control+r")
+    page.keyboard.press("Control+Shift+R")
+    time.sleep(0.5)
+    assert page.evaluate("window.__notReloaded") is True
+    assert not page.errors, page.errors
+
+
+def test_list_keys_search_shortcut_and_lightbox(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    # Ctrl+F で検索欄へ。Esc で絞り込みを解除
+    page.locator(".tree").click()
+    page.keyboard.press("Control+f")
+    search = page.get_by_role("searchbox", name="チケットを検索")
+    playwright_api.expect(search).to_be_focused()
+    search.press_sequentially("メール")
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    search.press("Escape")
+    playwright_api.expect(search).to_have_value("")
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    # Home / End で先頭・末尾のチケットを開く
+    search.press("ArrowDown")
+    page.keyboard.press("End")
+    playwright_api.expect(page.locator(".issue").last).to_have_class(re.compile("selected"))
+    page.keyboard.press("Home")
+    playwright_api.expect(page.locator(".issue").first).to_have_class(re.compile("selected"))
+
+    # 画像の拡大表示: 閉じるボタンにフォーカスがあり、Tabで外へ出ず、閉じると元の場所へ戻る
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    img = page.locator(".pane-conv .bubble img")
+    img.click()
+    box = page.get_by_role("dialog", name="画面")
+    close = box.get_by_role("button", name="閉じる")
+    playwright_api.expect(close).to_be_focused()
+    page.keyboard.press("Tab")
+    playwright_api.expect(close).to_be_focused()
+    page.keyboard.press("Enter")
+    playwright_api.expect(box).to_have_count(0)
+    assert not page.errors, page.errors

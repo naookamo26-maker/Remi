@@ -113,3 +113,29 @@ def test_attachment_download_and_cache_limit(db, fake):
         mgr.stop_all()
     prune_attachment_cache(db, limit_mb=0)
     assert store.get_attachment(sid, 9).local_path is None
+
+
+def test_opening_issue_refetches_comments_even_if_unchanged(db, fake):
+    """開いた直後は、更新日時が同じでも(同じ秒の更新を見逃していても)コメントごと取り直す。再起動の後でも。"""
+    fake.add_project(1, "A")
+    fake.add_issue(1, 1, "担当")
+    sid = ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
+    bus = EventBus()
+    mgr = SyncManager(db, bus)
+    mgr.restart()
+    store = IssueStore(db)
+    try:
+        assert wait_until(lambda: store.get(sid, 1) is not None and store.journals_synced(sid, 1))
+    finally:
+        mgr.stop_all()
+    # 同期した後、同じ秒に入ったコメント(updated_on が変わらない)を、再起動の後に開く
+    stamp = store.updated_on(sid, 1)
+    fake.add_journal(1, 7, "同じ秒のコメント", created_on=stamp)
+    assert fake.issues[1]["updated_on"] == stamp
+    mgr = SyncManager(db, bus)
+    mgr.restart()
+    try:
+        mgr.set_open_issue(sid, 1)
+        assert wait_until(lambda: any(j.notes == "同じ秒のコメント" for j in store.journals(sid, 1)))
+    finally:
+        mgr.stop_all()

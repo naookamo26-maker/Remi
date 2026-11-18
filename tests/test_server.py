@@ -279,3 +279,60 @@ def test_open_redmine_falls_back_to_browser(db, monkeypatch):
     assert api.openRedmine("https://rm.example/issues/2") == "browser"
     assert win.urls == ["https://rm.example/issues/1"]
     assert opened == ["https://rm.example/issues/1", "https://rm.example/issues/2"]
+
+
+def _save(app, fake, key, server_id=None, name="社内"):
+    probe = app.rpc("testConnection", url=fake.base_url, apiKey=key, serverId=server_id)
+    return app.rpc("saveServer", data={
+        "serverId": server_id, "name": name, "url": fake.base_url, "apiKey": key, "textFormat": "common_mark",
+        "pollInterval": 180, "userId": probe["userId"], "login": probe["login"], "userName": probe["name"],
+        "groupIds": probe["groupIds"]})["serverId"]
+
+
+def test_switching_user_clears_previous_users_data(app, fake):
+    """同じURLで別のユーザーのキーに替えたら、前のユーザーのデータを残さない。同じユーザーなら残す。"""
+    from remi.paths import attachment_cache_dir
+
+    fake.add_project(1, "基幹")
+    fake.add_issue(10, 1, "Aの担当", description="Aだけが見るチケット")
+    fake.add_journal(10, 7, "Aへのプライベートノート", private=True)
+    fake.add_attachment(10, 77, "shot.png", b"\x89PNG-data")
+    fake.add_issue(11, 1, "田中さんの担当", assigned_to=7)
+    fake.keys.update({"key-b": 7, "key-b2": 7})
+
+    sid = _save(app, fake, API_KEY)
+    assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10))
+    app.rpc("saveDraft", serverId=sid, issueId=10, body="Aの下書き")
+    assert app.http.get(app.server.origin + f"/attachments/{sid}/77").status_code == 200
+    assert any(attachment_cache_dir(sid).iterdir())
+    assert app.ctx.issues.get(sid, 11) is None
+
+    # 接続テストを経ていない新しいキーは保存できない(誰のキーか確かめられないため)
+    err = app.rpc_error("saveServer", data={"serverId": sid, "name": "社内", "url": fake.base_url, "apiKey": "key-b",
+                                            "textFormat": "common_mark", "pollInterval": 180})
+    assert err["code"] == "not_tested"
+    # 接続テストに失敗しても、既存のデータとキーはそのまま
+    assert app.rpc_error("testConnection", url=fake.base_url, apiKey="wrong", serverId=sid)["code"] == "unauthorized"
+    assert app.ctx.issues.get(sid, 10) is not None and app.ctx.servers.api_key(sid) == API_KEY
+
+    events = []
+    app.ctx.bus.on(events.append)
+    assert _save(app, fake, "key-b", sid) == sid
+    # 前のユーザー(A)のチケット・コメント・添付・下書き・画像キャッシュは残らない
+    assert app.ctx.issues.get(sid, 10) is None
+    assert app.ctx.issues.journals(sid, 10) == [] and app.ctx.issues.attachments(sid, 10) == []
+    assert app.ctx.issues.get_draft(sid, 10)[0] in ("", None)
+    assert not any(attachment_cache_dir(sid).iterdir())
+    assert app.http.get(app.server.origin + f"/attachments/{sid}/77").status_code == 404
+    assert any(e["type"] == "serverCacheCleared" and e["serverId"] == sid for e in events)
+    # 新しいユーザー(B)の担当で同期し直す
+    assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 11))
+    assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [11]
+    assert app.ctx.servers.get(sid).my_user_id == 7
+
+    # 同じユーザー(B)のキーに替えただけなら、初期化しない
+    events.clear()
+    _save(app, fake, "key-b2", sid)
+    assert app.ctx.issues.journals_synced(sid, 11)
+    assert app.ctx.servers.get(sid).initial_sync_done
+    assert not any(e["type"] == "serverCacheCleared" for e in events)

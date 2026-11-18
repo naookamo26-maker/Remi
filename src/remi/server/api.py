@@ -2,11 +2,14 @@
 
 画面から呼べるのは @rpc を付けたメソッドだけ。引数と戻り値はJSONで表せる値にする。
 エラーは RpcError(コード) で返し、文言は画面側で翻訳する。
+主な戻り値の形は src/remi/web/js/types.js に書いてある。項目を変えたら types.js も直すこと
+(tests/test_types_doc.py で一致を確認する)。
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 import webbrowser
@@ -19,6 +22,7 @@ from remi.api.errors import RedmineError
 from remi.api.probe import probe_server
 from remi.context import AppContext
 from remi.i18n import SUPPORTED_LANGUAGES, catalog, resolve_language
+from remi.paths import attachment_cache_dir
 from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
 from remi.server.tree import build_tree
@@ -51,6 +55,11 @@ RELATION_FILTERS = {"all": 0, "assigned": REL_ASSIGNED, "watching": REL_WATCHING
 # 画面から変更できる項目(設計書 §6.2)
 EDITABLE = ("status_id", "assigned_to_id", "priority_id")
 MEMBERS_TTL = 600
+# サーバーから取得したデータ(認証ユーザーの権限で見えるもの)と、その利用者の状態を持つテーブル。
+# 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
+SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters")
+# 初期化の前に同期スレッドを止めるときの待ち時間。通信中でも読み取りのタイムアウト(30秒)で終わる
+SYNC_STOP_TIMEOUT = 40.0
 
 
 class RpcError(Exception):
@@ -213,30 +222,54 @@ class RemiApi:
         api_key = str(data.get("apiKey") or "").strip() or None
         if existing is None and not api_key:
             raise RpcError("unauthorized")
-        if data.get("userId") is None and existing is None:
+        if data.get("userId") is None and (existing is None or api_key):
+            # 新しいキーは、接続テストで誰のキーかを確かめてから保存する(ユーザーの変更を見逃さないため)
             raise RpcError("not_tested")
 
         s = existing or Server(name=name, url=url, sort_order=len(self.ctx.servers.list()))
+        user_id = int(data["userId"]) if data.get("userId") is not None else None
         url_changed = existing is not None and existing.url != url
+        # 同じURLでも、別のユーザーのAPIキーに替えたら前のユーザーのデータ(プライベートノートなど)を見せない。
+        # 同じユーザーのキーを替えただけなら残す。ユーザーIDは接続テストに成功したときだけ届く
+        user_changed = existing is not None and user_id is not None and existing.my_user_id != user_id
+        reset = url_changed or user_changed
+        if reset and self.sync is not None:
+            # 初期化の後に、動いている同期スレッドが前のデータを書き戻さないよう、先に止める
+            self.sync.stop_all(SYNC_STOP_TIMEOUT)
         s.name, s.url, s.text_format, s.poll_interval = name, url, fmt, poll
         s.notify_enabled = bool(data.get("notifyEnabled", True))
         s.enabled = bool(data.get("enabled", True))
         s.proxy_mode, s.proxy_url = proxy_mode, (data.get("proxyUrl") or None)
-        if data.get("userId") is not None:
-            s.my_user_id = int(data["userId"])
+        if user_id is not None:
+            s.my_user_id = user_id
             s.my_login = data.get("login")
             s.my_name = data.get("userName")
             s.my_group_ids = [int(x) for x in data.get("groupIds", [])]
-        if url_changed:
-            # 別のサーバーになった: キャッシュを捨てて初回同期からやり直す
+        if reset:
+            # 別のサーバー・別のユーザーになった: キャッシュを捨てて初回同期からやり直す
             s.initial_sync_done, s.last_sync_cursor, s.last_error, s.last_synced_at = False, None, None, None
-        self.ctx.servers.save(s, api_key=api_key)
-        if url_changed:
-            with self.ctx.db.tx() as c:
-                for t_ in ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters"):
-                    c.execute(f"DELETE FROM {t_} WHERE server_id = ?", (s.server_id,))
-        self._servers_changed()
+        try:
+            self.ctx.servers.save(s, api_key=api_key)
+            if reset:
+                self._clear_server_cache(s.server_id)
+        finally:
+            self._servers_changed()  # 止めた同期スレッドは、失敗しても必ず動かし直す
         return self._server_dict(s)
+
+    def _clear_server_cache(self, server_id: int) -> None:
+        """サーバーから取得したデータを、データベース・画像キャッシュ・メモリから消す。"""
+        with self.ctx.db.tx() as c:
+            for table in SERVER_CACHE_TABLES:
+                c.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
+        shutil.rmtree(attachment_cache_dir(server_id), ignore_errors=True)
+        with self._members_lock:
+            for key in [k for k in self._members if k[0] == server_id]:
+                del self._members[key]
+        if self.open_issue is not None and self.open_issue[0] == server_id:
+            # 同期を動かし直したときに、前のユーザーで開いていたチケットを取りに行かない
+            self.setOpenIssue(None, None)
+        # 送信前の添付(LocalServer)と、開いている会話(画面)にも捨てさせる
+        self.ctx.bus.publish("serverCacheCleared", serverId=server_id)
 
     @rpc
     def deleteServer(self, serverId: int) -> None:  # noqa: N802,N803
@@ -539,9 +572,13 @@ class RemiApi:
 
     # --- 同期・ウィンドウ ----------------------------------------------------------------
     @rpc
-    def syncNow(self) -> None:  # noqa: N802
-        if self.sync is not None:
-            self.sync.sync_now()
+    def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> None:  # noqa: N802,N803
+        """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。"""
+        if self.sync is None:
+            return
+        self.sync.sync_now()
+        if serverId and issueId:
+            self.setOpenIssue(serverId, issueId)  # 開き直すと、同期スレッドがコメントごと取り直す
 
     @rpc
     def setActive(self, active: bool) -> None:  # noqa: N802

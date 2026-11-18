@@ -150,6 +150,10 @@ def test_check_issue_only_refetches_when_updated(setup, fake):
     fake.add_issue(1, 2, "担当", updated_on=ts(60))
     sync.sync_changes()
     sync.fetch_journals(1)
+    # 取得の直後は、同じ秒に入った更新を見逃さないよう一度だけ取り直す
+    n = len(fake.requests)
+    assert sync.check_issue(1).empty
+    assert len(fake.requests) == n + 2
     n = len(fake.requests)
     assert sync.check_issue(1).empty
     assert len(fake.requests) == n + 1
@@ -179,3 +183,16 @@ def test_attachments_are_stored(setup, fake):
     sync.fetch_journals(1)
     [a] = issues.attachments(sid, 1)
     assert a.filename == "shot.png" and a.content_url.endswith("/77/shot.png")
+
+
+def test_check_issue_catches_update_in_same_second(setup, fake):
+    """updated_on は秒単位: 取得と同じ秒に入ったコメントも、開いているチケットなら拾う。"""
+    sync, issues, sid = setup
+    stamp = ts(0)
+    fake.add_issue(1, 2, "担当", updated_on=stamp)
+    sync.sync_changes()
+    sync.fetch_journals(1)
+    fake.add_journal(1, 7, "同じ秒のコメント", created_on=stamp)
+    assert fake.issues[1]["updated_on"] == stamp
+    r = sync.check_issue(1)
+    assert [c.notes for c in r.new_comments] == ["同じ秒のコメント"]

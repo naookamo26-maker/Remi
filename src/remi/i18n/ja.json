@@ -106,7 +106,7 @@
   "list.label": "チケット一覧",
   "list.noMatches": "条件に合うチケットはありません。",
   "list.search": "チケットを検索",
-  "list.searchPlaceholder": "番号・件名で絞り込み",
+  "list.searchPlaceholder": "番号・件名で絞り込み(Ctrl+F)",
   "list.showClosed": "クローズ済みも表示",
   "list.unreadFirst": "未読を上に",
   "list.watching": "ウォッチ",
@@ -214,7 +214,7 @@
   "tree.settings": "設定",
   "tree.statusError": "接続できません",
   "tree.statusOk": "接続中",
-  "tree.syncNow": "今すぐ同期",
+  "tree.syncNow": "今すぐ同期(F5)",
   "tree.syncStarted": "同期しています…",
   "tree.unreadCount": {
     "other": "未読 {count}件"

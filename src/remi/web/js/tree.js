@@ -1,6 +1,6 @@
 // 左ペイン: サーバー / プロジェクトのツリー(設計書 §3.2、モック「メインウィンドウ」左)
 import { call } from "./api.js";
-import { clear, h, toast } from "./dom.js";
+import { clear, countText, h } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
@@ -23,7 +23,7 @@ export class Tree {
         h("div", { class: "row" },
           h("button", { type: "button", class: "btn", onClick: () => app.openSettings() }, icon("gear"), t("tree.settings")),
           h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"), "aria-label": t("tree.syncNow"),
-            onClick: () => { call("syncNow"); toast(t("tree.syncStarted")); } }, icon("sync")))));
+            onClick: () => app.syncNow() }, icon("sync")))));
   }
 
   get collapsed() {
@@ -58,9 +58,10 @@ export class Tree {
         opts.icon ? icon(opts.icon) : null,
         h("span", { class: "name" }, label),
         opts.dot ? h("span", { class: `dot ${opts.dot}`, title: opts.dotLabel, "aria-label": opts.dotLabel }) : null,
-        opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, opts.unread > 999 ? "999+" : opts.unread)
+        opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
           : (opts.count ? h("span", { class: "count" }, opts.count) : null));
-      const li = h("li", { role: "treeitem", "aria-selected": String(key === sel && !opts.header), dataset: { key: opts.header ? "" : key },
+      const li = h("li", { role: "treeitem", "aria-selected": String(key === sel && !opts.header),
+        dataset: { key: opts.header ? "" : key, token: hasKids ? token : "" },
         "aria-expanded": hasKids ? String(!isCollapsed) : null }, row);
       if (hasKids && !isCollapsed) li.append(h("ul", { role: "group" }, opts.children));
       return li;
@@ -103,18 +104,25 @@ export class Tree {
     const set = this.collapsed;
     if (set.has(token)) set.delete(token);
     else set.add(token);
-    this.app.saveSetting("tree_collapsed", [...set]);
+    // 保存の完了を待たずに表示へ反映する(render は app.settings を見るので先に書き換える)
+    this.app.settings = { ...this.app.settings, tree_collapsed: [...set] };
     this.render();
+    this.app.saveSetting("tree_collapsed", [...set]);
   }
 
+  // ↑↓: 選択を移動(サーバーの見出し行は「すべて」と同じ選択なので飛ばす)、←→: 折りたたみ・展開
   onKey(e) {
-    const rows = [...this.el.querySelectorAll("[role=treeitem]")];
-    const keys = rows.map((li) => li.dataset.key);
-    const idx = keys.indexOf(selectionKey(this.app.selection));
+    const rows = [...this.el.querySelectorAll("[role=treeitem]")].filter((li) => li.dataset.key);
+    const idx = rows.findIndex((li) => li.dataset.key === selectionKey(this.app.selection));
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const next = rows[Math.max(0, Math.min(rows.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)))];
       next?.querySelector(".node")?.click();
+    } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && idx >= 0) {
+      const token = rows[idx].dataset.token;
+      if (!token) return;
+      e.preventDefault();
+      if (this.collapsed.has(token) === (e.key === "ArrowRight")) this.toggle(token);
     }
   }
 

@@ -107,7 +107,7 @@
   "list.label": "Issues",
   "list.noMatches": "No issues match your search.",
   "list.search": "Search issues",
-  "list.searchPlaceholder": "Filter by number or subject",
+  "list.searchPlaceholder": "Filter by number or subject (Ctrl+F)",
   "list.showClosed": "Show closed",
   "list.unreadFirst": "Unread first",
   "list.watching": "Watching",
@@ -218,7 +218,7 @@
   "tree.settings": "Settings",
   "tree.statusError": "Cannot connect",
   "tree.statusOk": "Connected",
-  "tree.syncNow": "Sync now",
+  "tree.syncNow": "Sync now (F5)",
   "tree.syncStarted": "Syncing…",
   "tree.unreadCount": {
     "one": "{count} unread",

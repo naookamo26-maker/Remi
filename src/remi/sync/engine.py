@@ -207,6 +207,7 @@ class ServerSync:
             return result  # 一覧の同期で保存していないチケット(関係がない・削除された)の履歴は保存しない
         data = self.client.issue(issue_id, include="journals,attachments")
         first_fetch = not existing.journals_synced_on
+        before = self._snapshot(issue_id)
         self.issues.upsert_issue(self.server_id, data, existing.relation_flags,
                                  self._is_monitored(data, existing.relation_flags, self._closed_ids()))
         new_ids = self.issues.upsert_journals(self.server_id, issue_id, data.get("journals") or [])
@@ -220,7 +221,8 @@ class ServerSync:
         if first_fetch:
             self.issues.apply_read_baseline(self.server_id, issue_id)
         self._unconfirmed[issue_id] = data.get("updated_on")
-        if new_ids:
+        # 新しいコメントだけでなく、コメントの編集・削除や添付の追加・削除も、画面を更新させる
+        if new_ids or self._snapshot(issue_id) != before:
             result.changed_issue_ids.add(issue_id)
         if notify and new_ids:
             me = self.server.my_user_id
@@ -231,6 +233,11 @@ class ServerSync:
                         issue_id, j.journal_id, j.user_name or "", j.notes, data.get("subject", ""),
                         int(data["project"]["id"])))
         return result
+
+    def _snapshot(self, issue_id: int) -> tuple[list[tuple[int, str, bool]], list[int]]:
+        """画面に表示する履歴の中身(コメントの本文・プライベート、添付)。変わったかの判定に使う。"""
+        return ([(j.journal_id, j.notes, j.private_notes) for j in self.issues.journals(self.server_id, issue_id)],
+                [a.attachment_id for a in self.issues.attachments(self.server_id, issue_id)])
 
     def check_issue(self, issue_id: int) -> SyncResult:
         """開いているチケットの軽い確認: updated_on が変わっていたら取得し直す(設計書 §4.5)。"""

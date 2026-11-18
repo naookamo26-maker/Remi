@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -54,6 +55,7 @@ class FakeRedmine:
         self.rest_enabled = True
         self.fail_next: int | None = None  # 次のリクエストを指定ステータスで失敗させる
         self.fail_next_put: int | None = None  # 次の更新(PUT)だけを失敗させる
+        self.delay = 0.0  # 応答を遅らせる秒数(通信中に同期を止めるテスト用)
         self._next_journal = 1000
         self._next_upload = 0
         self.uploads: dict[str, tuple[str, bytes]] = {}
@@ -283,6 +285,8 @@ class FakeRedmine:
         return True
 
     def handle(self, method: str, path: str, query: dict[str, str], headers, body: bytes):
+        if self.delay:
+            time.sleep(self.delay)
         with self._lock:
             self.requests.append((method, path + ("?" + "&".join(f"{k}={v}" for k, v in sorted(query.items())) if query else "")))
             if self.fail_next is not None:

@@ -196,3 +196,27 @@ def test_check_issue_catches_update_in_same_second(setup, fake):
     assert fake.issues[1]["updated_on"] == stamp
     r = sync.check_issue(1)
     assert [c.notes for c in r.new_comments] == ["同じ秒のコメント"]
+
+
+def test_edited_or_deleted_comment_and_removed_attachment_update_screen(setup, fake):
+    """新しいコメントがなくても、コメントの編集・削除や添付の削除があれば画面を更新させる。"""
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "担当", updated_on=ts(60))
+    fake.add_journal(1, 7, "最初の本文")
+    fake.add_journal(1, 7, "消されるコメント")
+    fake.add_attachment(1, 77, "shot.png", b"png")
+    sync.sync_changes()
+    sync.fetch_journals(1)
+    assert sync.fetch_journals(1).changed_issue_ids == set()  # 何も変わっていない
+
+    fake.journals[1][0]["notes"] = "編集した本文"
+    r = sync.fetch_journals(1)
+    assert r.changed_issue_ids == {1} and r.new_comments == []
+    assert issues.journals(sid, 1)[0].notes == "編集した本文"
+
+    del fake.journals[1][1]
+    assert sync.fetch_journals(1).changed_issue_ids == {1}
+
+    del fake.attachments[77]
+    assert sync.fetch_journals(1).changed_issue_ids == {1}
+    assert issues.attachments(sid, 1) == []

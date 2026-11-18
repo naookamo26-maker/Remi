@@ -22,6 +22,8 @@ class ErrorCode(Enum):
     SERVER_ERROR = "server_error"  # 5xx
     INVALID_RESPONSE = "invalid_response"  # JSONでない応答など
     TOO_LARGE = "too_large"  # 添付ファイルが上限を超えた
+    OTHER_HOST = "other_host"  # 登録したRedmine以外へAPIキーを送ろうとした(リダイレクトなど)
+    CANCELLED = "cancelled"  # 同期を止めたので、送らなかった・結果を捨てた
 
 
 class RedmineError(Exception):

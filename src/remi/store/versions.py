@@ -22,6 +22,8 @@ class Version:
     description: str | None
     issues_synced: bool
     read_event_id: int
+    issues_signature: str | None = None  # 前回取り直したときのチケットの一覧の署名(件数と最新の更新日時)
+    issues_full_at: str | None = None  # 前回チケットの一覧を全件取り直した時刻(UTC)
 
     @property
     def closed(self) -> bool:
@@ -42,7 +44,8 @@ class VersionEvent:
 
 def _version(r) -> Version:
     return Version(r["server_id"], r["version_id"], r["project_id"], r["name"], r["status"], r["due_date"],
-                   r["description"], bool(r["issues_synced"]), r["read_event_id"])
+                   r["description"], bool(r["issues_synced"]), r["read_event_id"],
+                   r["issues_signature"], r["issues_full_at"])
 
 
 class VersionStore:
@@ -93,6 +96,17 @@ class VersionStore:
                           [(server_id, version_id, iid, int(closed)) for iid, closed in members.items()])
             c.execute("UPDATE versions SET issues_synced = 1 WHERE server_id = ? AND version_id = ?",
                       (server_id, version_id))
+
+    def set_issues_signature(self, server_id: int, version_id: int, signature: str | None,
+                             full_at: str | None = None) -> None:
+        """チケットの一覧の署名を記録する。full_at を渡したときは、全件を取り直した時刻も記録する。"""
+        with self.db.tx() as c:
+            if full_at is None:
+                c.execute("UPDATE versions SET issues_signature = ? WHERE server_id = ? AND version_id = ?",
+                          (signature, server_id, version_id))
+            else:
+                c.execute("UPDATE versions SET issues_signature = ?, issues_full_at = ? "
+                          "WHERE server_id = ? AND version_id = ?", (signature, full_at, server_id, version_id))
 
     def progress(self, server_id: int) -> dict[int, tuple[int, int]]:
         """version_id → (完了したチケットの数, 全体の数)。"""

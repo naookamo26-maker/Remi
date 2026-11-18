@@ -133,3 +133,17 @@ def test_does_not_notify_unrelated_version_issues(db):
     ctx.issues.upsert_issue_data(sid, {"id": 7, "project": {"id": 1}, "subject": "関係ない"})
     ctx.bus.publish("newComments", serverId=sid, comments=[comment(7)])
     assert backend.shown == []
+
+
+def test_fallback_log_does_not_contain_comment_text(caplog):
+    """トースト通知が使えないときのログに、件名・コメントの本文を残さない(ログは平文で保存される)。"""
+    import logging
+
+    from remi.system.notifier import Notification, ToastBackend
+
+    backend = ToastBackend()
+    backend._toaster = None
+    with caplog.at_level(logging.INFO, logger="remi.system.notifier"):
+        backend.show(Notification("#10 機密の件名", "田中: 機密のコメント", 1, 10), lambda: None)
+    assert "#10" in caplog.text or "10" in caplog.text
+    assert "機密" not in caplog.text

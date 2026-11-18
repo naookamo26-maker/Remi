@@ -100,6 +100,7 @@
   "errors.not_found": "The item was not found. It may have been deleted.",
   "errors.other_host": "Stopped to protect the API access key because the server redirected to a different server. Register the Redmine again with the address it redirects to (the address shown when you open it in a browser).",
   "errors.proxy_error": "Could not connect through the proxy. Check the proxy settings.",
+  "errors.rate_limited": "Too many requests to the server. Please wait a while and try again.",
   "errors.rest_disabled": "The REST API may be disabled on this Redmine. Ask the administrator to enable it in Administration > Settings > API.",
   "errors.server_error": "An error occurred on the server.",
   "errors.ssl_error": "The server certificate could not be verified. If your company uses its own certificate authority, check that it is installed in Windows.",

@@ -381,7 +381,7 @@ class RemiApi:
             raise RpcError("invalid_setting", key)
         self.ctx.projects.set_setting(serverId, projectId, key, value)
         if key == "watch_versions" and self.sync is not None:
-            self.sync.sync_now()  # バージョンをすぐ取得する(やめたときは、ツリーから消す)
+            self.sync.sync_now(manual=False)  # バージョンをすぐ取得する(やめたときは、ツリーから消す)
         if key == "watch_authored" and self.sync is not None:
             # 作成したチケットを取り直すため、初回同期からやり直す
             self.ctx.servers.update_fields(serverId, initial_sync_done=False)
@@ -959,6 +959,12 @@ class RemiApi:
         self.active = bool(active)
         if self.sync is not None:
             self.sync.set_active(bool(active))
+
+    @rpc
+    def setVisible(self, visible: bool) -> None:  # noqa: N802
+        """画面が見えているか(トレイに格納・最小化していないか)。見えていない間は、開いているチケットの確認を止める。"""
+        if self.sync is not None:
+            self.sync.set_visible(bool(visible))
 
     @rpc
     def openExternal(self, url: str) -> None:  # noqa: N802

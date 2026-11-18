@@ -2,6 +2,8 @@
 
 - WALモードで使い、接続はスレッドごとに持つ
 - 書き込みは短いトランザクションにまとめる(`with db.tx() as c:`)
+- 終了したスレッドの接続は閉じる(ローカルHTTPサーバーは接続ごとにスレッドを作るので、
+  閉じないと常駐している間に接続が増え続ける)
 """
 
 from __future__ import annotations
@@ -31,14 +33,18 @@ class Database:
     def __init__(self, path: Path | str) -> None:
         self.path = str(path)
         self._local = threading.local()
-        self._all: list[sqlite3.Connection] = []
+        # (作ったスレッド, 接続)。スレッドが終了したら閉じる
+        self._all: list[tuple[threading.Thread, sqlite3.Connection]] = []
         self._lock = threading.Lock()
 
     # --- 接続 -------------------------------------------------------------
     def conn(self) -> sqlite3.Connection:
         c = getattr(self._local, "conn", None)
         if c is None:
-            c = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+            self._close_dead()
+            # 作ったスレッドが終了した後に、別のスレッドから閉じるため check_same_thread=False にする。
+            # 使うのは作ったスレッドだけ(threading.local)なので、同時には使われない
+            c = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA foreign_keys = ON")
             c.execute("PRAGMA busy_timeout = 5000")
@@ -47,8 +53,24 @@ class Database:
                 c.execute("PRAGMA synchronous = NORMAL")
             self._local.conn = c
             with self._lock:
-                self._all.append(c)
+                self._all.append((threading.current_thread(), c))
         return c
+
+    def _close_dead(self) -> None:
+        """終了したスレッドの接続を閉じる。"""
+        with self._lock:
+            dead = [c for t, c in self._all if not t.is_alive()]
+            self._all = [(t, c) for t, c in self._all if t.is_alive()]
+        for c in dead:
+            try:
+                c.close()
+            except sqlite3.Error:
+                pass
+
+    @property
+    def open_connections(self) -> int:
+        with self._lock:
+            return len(self._all)
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
@@ -71,7 +93,7 @@ class Database:
 
     def close_all(self) -> None:
         with self._lock:
-            for c in self._all:
+            for _, c in self._all:
                 try:
                     c.close()
                 except sqlite3.Error:

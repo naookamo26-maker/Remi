@@ -40,7 +40,12 @@ class App {
     addEventListener("keydown", (e) => this.onGlobalKey(e));
     addEventListener("focus", () => this.onActive(true));
     addEventListener("blur", () => this.onActive(false));
-    document.addEventListener("visibilitychange", () => this.onActive(document.visibilityState === "visible" && document.hasFocus()));
+    document.addEventListener("visibilitychange", () => {
+      // 見えていない(トレイに格納・最小化)間は、開いているチケットの確認を止めてもらう(サーバーの負荷を抑える)
+      call("setVisible", { visible: document.visibilityState === "visible" }).catch(() => {});
+      this.onActive(document.visibilityState === "visible" && document.hasFocus());
+    });
+    if (document.visibilityState !== "visible") call("setVisible", { visible: false }).catch(() => {});
     subscribe((e) => this.onEvent(e));
   }
 

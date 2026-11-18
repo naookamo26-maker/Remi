@@ -88,3 +88,62 @@ def test_child_project_can_opt_out(setup, fake, db):
     projects.set_setting(sid, 2, "watch_versions", False)
     sync.sync_versions()
     assert {v.version_id for v in versions.list(sid)} == {10}
+
+
+def test_open_version_issues_are_refetched_only_when_signature_changes(setup, fake, db):
+    """未完了のバージョンのチケットの一覧は、件数と最新の更新日時(署名)が変わったときだけ取り直す
+    (多数の利用者がウォッチしても、サーバーを叩きすぎない)。"""
+    sync, versions, sid = setup
+    fake.add_version(10, 2, "v1.0")
+    fake.add_issue(100, 2, "a", assigned_to=7, version=10, updated_on="2026-01-01T00:00:00Z")
+    fake.add_issue(101, 2, "b", assigned_to=7, version=10, updated_on="2026-01-02T00:00:00Z")
+    ProjectStore(db).set_setting(sid, 2, "watch_versions", True)
+
+    def full_fetches():
+        return sum(1 for m, p in fake.requests if "fixed_version_id=10" in p and "limit=100" in p)
+
+    def signature_checks():
+        return sum(1 for m, p in fake.requests if "fixed_version_id=10" in p and "limit=1&" in p)
+
+    sync.sync_versions()
+    assert full_fetches() == 1
+    assert versions.get(sid, 10).issues_signature == "2|2026-01-02T00:00:00Z"
+    # 変わっていなければ、署名を確かめるだけ(1件だけの軽い問い合わせ)
+    assert sync.sync_versions() == set()
+    assert sync.sync_versions() == set()
+    assert full_fetches() == 1 and signature_checks() == 2
+    # チケットが外れた: 取り直して変化を記録する
+    fake.set_version(100, None)
+    assert sync.sync_versions() == {10}
+    assert full_fetches() == 2
+    assert ("removed", 100) in kinds(versions, sid, 10)
+
+
+def test_version_issues_are_refetched_when_recently_updated(setup, fake, db):
+    """最新の更新が取得の直前・直後なら、同じ秒の変更(件数の変わらない追加と除外)を見逃さないよう取り直す。"""
+    sync, versions, sid = setup
+    fake.add_version(10, 2, "v1.0")
+    fake.add_issue(100, 2, "a", assigned_to=7, version=10)  # 更新日時は今
+    ProjectStore(db).set_setting(sid, 2, "watch_versions", True)
+    sync.sync_versions()
+    fake.add_issue(103, 2, "追加", assigned_to=7)
+    fake.set_version(103, 10)
+    fake.set_version(100, None)  # 件数は同じ
+    assert sync.sync_versions() == {10}
+    assert sorted(kinds(versions, sid, 10)) == sorted([("added", 103), ("removed", 100)])
+
+
+def test_version_issues_are_fully_refetched_periodically(setup, fake, db, monkeypatch):
+    from datetime import timedelta
+
+    from remi.sync import engine
+
+    sync, versions, sid = setup
+    fake.add_version(10, 2, "v1.0")
+    fake.add_issue(100, 2, "a", assigned_to=7, version=10, updated_on="2026-01-01T00:00:00Z")
+    ProjectStore(db).set_setting(sid, 2, "watch_versions", True)
+    sync.sync_versions()
+    monkeypatch.setattr(engine, "VERSION_FULL_REFRESH", timedelta(0))
+    n = sum(1 for m, p in fake.requests if "fixed_version_id=10" in p and "limit=100" in p)
+    sync.sync_versions()
+    assert sum(1 for m, p in fake.requests if "fixed_version_id=10" in p and "limit=100" in p) == n + 1

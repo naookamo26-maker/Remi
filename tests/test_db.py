@@ -129,3 +129,59 @@ def test_migrate_v2_keeps_defaults(tmp_path):
         assert ProjectStore(d).own_visible_relations(1) == {}
     finally:
         d.close_all()
+
+
+def test_connections_of_finished_threads_are_closed(db):
+    """スレッドごとの接続は、スレッドが終了したら閉じる(常駐している間に増え続けない)。"""
+    db.conn()
+    for _ in range(20):
+        t = threading.Thread(target=lambda: db.query("SELECT 1"))
+        t.start()
+        t.join()
+    db.conn()  # 新しい接続を作るときに、終了したスレッドのものを閉じる
+    t = threading.Thread(target=lambda: db.query("SELECT 1"))
+    t.start()
+    t.join()
+    assert db.open_connections <= 2  # メインスレッドと、最後に終了したスレッドの分
+
+
+def test_connection_of_finished_thread_is_really_closed(db):
+    got = []
+    t = threading.Thread(target=lambda: got.append(db.conn()))
+    t.start()
+    t.join()
+    threading.Thread(target=lambda: db.query("SELECT 1")).start()  # 別のスレッドが接続を作ると閉じられる
+    import time
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            got[0].execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            return  # 閉じられた
+        time.sleep(0.01)
+    raise AssertionError("connection of a finished thread was not closed")
+
+
+def test_migrate_v4_drops_one_minute_poll_interval(tmp_path):
+    """ポーリング間隔の「1分」は廃止したので、3分にする。ほかの間隔はそのまま。"""
+    from remi.store.migrations import MIGRATIONS
+    from remi.store.servers import POLL_INTERVALS, ServerStore
+
+    p = tmp_path / "v3.db"
+    c = sqlite3.connect(p)
+    for m in MIGRATIONS[:3]:
+        c.executescript(m)
+    c.execute("PRAGMA user_version = 3")
+    c.execute("INSERT INTO servers(server_id, name, url, poll_interval) VALUES(1, 'S', 'http://s', 60)")
+    c.execute("INSERT INTO servers(server_id, name, url, poll_interval) VALUES(2, 'T', 'http://t', 300)")
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        servers = ServerStore(d)
+        assert servers.get(1).poll_interval == 180
+        assert servers.get(2).poll_interval == 300
+        assert 60 not in POLL_INTERVALS
+    finally:
+        d.close_all()

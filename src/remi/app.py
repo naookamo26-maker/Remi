@@ -45,6 +45,8 @@ class WebviewWindow:
             f"{APP_NAME} v{__version__}", url, width=1280, height=800, min_size=(900, 560), hidden=self.start_hidden,
             background_color="#1E1F22" if self._dark() else "#FFFFFF", text_select=True,
         )
+        if self.start_hidden:
+            self.sync.set_visible(False)
         self.window.events.closing += self._on_closing
         self.window.events.shown += lambda: self.apply_theme(self.ctx.settings.get("theme"))
         gui = "edgechromium" if sys.platform == "win32" else None
@@ -82,10 +84,12 @@ class WebviewWindow:
         if self.window is not None:
             self.window.show()
             self.window.restore()
+            self.sync.set_visible(True)
 
     def hide(self) -> None:
         if self.window is not None:
             self.window.hide()
+            self.sync.set_visible(False)  # トレイに格納している間は、開いているチケットを確かめない
 
     def quit(self) -> None:
         self._quitting = True
@@ -191,14 +195,26 @@ def run(argv: list[str]) -> int:
     setup_logging()
     _set_app_user_model_id()
 
+    # DBを開くなどの準備より先に待ち受ける(同時に起動したとき、両方が起動したままにならないよう、間を短くする)。
+    # ウィンドウを作るまでに届いた前面表示の依頼は、覚えておいて起動時に表示する
+    show_requested = threading.Event()
+    show_target: list = []
+
+    def on_show() -> None:
+        if show_target:
+            show_target[0]()
+        else:
+            show_requested.set()
+
     single = SingleInstance()
-    if single.notify_existing():
+    if not single.acquire(on_show):
         log.info("another instance is running; asked it to show itself")
         return 0
 
     try:
         db = open_database(db_path())
     except SchemaTooNewError:
+        single.close()
         lang = resolve_language("system")
         windows.message_box(APP_NAME, t("app.schemaTooNew", lang))
         return 1
@@ -208,7 +224,9 @@ def run(argv: list[str]) -> int:
     api = RemiApi(ctx, sync, window, autostart=windows.set_autostart)
     server = LocalServer(api, port=args.port)
     server.start()
-    single.listen(window.show)
+    show_target.append(window.show)
+    if show_requested.is_set() and isinstance(window, WebviewWindow):
+        window.start_hidden = False  # 起動中に、もう一度起動された(前面表示の依頼が来た)
 
     def open_issue(server_id: int, issue_id: int) -> None:
         window.show()
@@ -221,10 +239,10 @@ def run(argv: list[str]) -> int:
                     on_settings=lambda: (window.show(), ctx.bus.publish("openSettings")))
         window.minimize_to_tray = tray.start()
         # トレイがない環境で非表示のまま起動すると操作できなくなるので、その場合は表示する
-        window.start_hidden = args.background and window.minimize_to_tray
+        window.start_hidden = args.background and window.minimize_to_tray and not show_requested.is_set()
         if ctx.settings.get("autostart"):
             windows.set_autostart(True)  # exeの場所が変わっても登録を最新にする
-    sync.restart()
+    sync.restart(startup=True)  # 最初の同期をずらす(朝に一斉に起動しても、サーバーへの問い合わせが集中しない)
     try:
         window.run(server.start_url)
     except Exception:

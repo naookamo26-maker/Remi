@@ -12,6 +12,8 @@ import logging
 import threading
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urljoin, urlsplit, urlparse
@@ -163,6 +165,9 @@ class RedmineClient:
                 raise RedmineError(ErrorCode.CONNECTION_FAILED, detail=str(e)) from e
             except requests.exceptions.InvalidURL as e:
                 raise RedmineError(ErrorCode.INVALID_URL, detail=str(e)) from e
+            except requests.exceptions.RequestException as e:
+                # 応答の受信中に切れた(ChunkedEncodingError)など。一時的な通信の失敗として扱い、再試行させる
+                raise RedmineError(ErrorCode.CONNECTION_FAILED, detail=str(e)) from e
             finally:
                 self._last_request = time.monotonic()
         if self.cancelled and method in ("GET", "HEAD"):
@@ -222,6 +227,17 @@ class RedmineClient:
     def versions(self, project_id: int) -> list[dict[str, Any]]:
         """プロジェクトのバージョン(ほかのプロジェクトから共有されたものを含む)。ページングはない。"""
         return self.get_json(f"/projects/{project_id}/versions.json").get("versions", [])
+
+    def issues_signature(self, **filters: Any) -> str:
+        """条件に合うチケットの「件数と最新の更新日時」。一覧が変わったかを1回の軽い問い合わせで判定する。
+
+        チケットの追加・状態の変更は、そのチケットの updated_on を進める。外れた・削除された・見えなくなったものは
+        件数を減らす(同時に追加があれば、追加したチケットの updated_on が進む)。
+        """
+        data = self.get_json("/issues.json", {**filters, "limit": 1, "sort": "updated_on:desc"})
+        items = data.get("issues") or []
+        latest = items[0].get("updated_on") if items else ""
+        return f"{int(data.get('total_count', len(items)))}|{latest or ''}"
 
     def issue_count(self, **filters: Any) -> int:
         data = self.get_json("/issues.json", {**filters, "limit": 1})
@@ -317,18 +333,45 @@ class RedmineClient:
         written = 0
         try:
             with open(tmp, "wb") as f:
-                for chunk in resp.iter_content(64 * 1024):
-                    if self.cancelled:
-                        raise RedmineError(ErrorCode.CANCELLED)
-                    written += len(chunk)
-                    if written > max_bytes:
-                        raise RedmineError(ErrorCode.TOO_LARGE, resp.status_code)
-                    f.write(chunk)
+                try:
+                    for chunk in resp.iter_content(64 * 1024):
+                        if self.cancelled:
+                            raise RedmineError(ErrorCode.CANCELLED)
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise RedmineError(ErrorCode.TOO_LARGE, resp.status_code)
+                        f.write(chunk)
+                except requests.exceptions.RequestException as e:
+                    # 受信の途中で切れた・タイムアウトした。一時的な失敗として再試行させる
+                    raise RedmineError(ErrorCode.CONNECTION_FAILED, resp.status_code, str(e)) from e
             tmp.replace(dest)
         finally:
             resp.close()
             tmp.unlink(missing_ok=True)
         return written
+
+
+RETRY_AFTER_MAX = 3600.0  # Retry-After に従って待つ上限(秒)
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Retry-After ヘッダー(秒数、またはHTTPの日時)を、待つ秒数にする。読めなければ None。"""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if when is None:
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        seconds = (when - datetime.now(UTC)).total_seconds()
+    return min(max(seconds, 0.0), RETRY_AFTER_MAX)
 
 
 def _error_for_status(resp: requests.Response) -> RedmineError:
@@ -348,6 +391,9 @@ def _error_for_status(resp: requests.Response) -> RedmineError:
         return RedmineError(ErrorCode.NOT_FOUND, status, detail)
     if status == 422:
         return RedmineError(ErrorCode.UNPROCESSABLE, status, detail)
+    retry_after = parse_retry_after(resp.headers.get("Retry-After"))
+    if status == 429:
+        return RedmineError(ErrorCode.RATE_LIMITED, status, detail, retry_after=retry_after)
     if status >= 500:
-        return RedmineError(ErrorCode.SERVER_ERROR, status, detail)
+        return RedmineError(ErrorCode.SERVER_ERROR, status, detail, retry_after=retry_after)
     return RedmineError(ErrorCode.INVALID_RESPONSE, status, detail)

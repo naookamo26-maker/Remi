@@ -86,6 +86,21 @@ class SingleInstance:
         self._thread.start()
         return True
 
+    def acquire(self, on_show: Callable[[], None]) -> bool:
+        """このプロセスが起動を続けてよいか。既に起動しているRemiがあれば前面表示を依頼して False を返す。
+
+        同時に起動したときは、両方が「既存なし」と判断しても、待ち受けられるのは1つだけ(Windowsの名前付きパイプ)。
+        待ち受けに失敗したら、先に待ち受けた方へ依頼して終了する。
+        """
+        if self.notify_existing():
+            return False
+        if self.listen(on_show):
+            return True
+        if self.notify_existing():
+            return False
+        log.warning("could not listen for other instances; continuing without it")
+        return True
+
     def close(self) -> None:
         listener, self._listener = self._listener, None
         if listener is not None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -17,13 +18,22 @@ log = logging.getLogger(__name__)
 SNOOZE_SECONDS = 3600
 
 
-# アイコンの形(100x100 の座標。web/icon.svg と同じ)
-BUBBLE_PATH = "M26 6H74C86 6 94 14 94 26V64C94 76 86 84 74 84H36L16 96L20 82C11 79 6 72 6 63V26C6 14 14 6 26 6Z"
-R_PATH = ("M27 17H56C70 17 79 26.5 79 39C79 48.5 73.5 55.5 65 58.5L81 83H62L48.5 60.5H44V83H27Z "
+# アイコンの形(100x100 の座標。web/icon.svg と同じ数値を使うこと)
+# 角の丸い四角のグラデーションに、白い R と e を重ねる。e の下端は R の下端にそろえ、
+# e の周りは R を円形に切り抜いてすき間を空ける。R の縦線が太く左が重く見えるので、全体を少し右へ寄せている
+BG_BOX = (4, 4, 96, 96)
+BG_RADIUS = 22
+# R の外形。丸みから脚へ切り替わる角は e の切り抜きの円の内側を通るように近道させている
+# (角が円の外へわずかに出て、小さな歯が残るのを防ぐ。見える部分の形は元の R と同じ)
+R_PATH = ("M27 17H56C70 17 79 26.5 79 39C79 47.52 74.57 54.03 67.53 57.45L67.04 61.62L81 83H62L48.5 60.5H44V83H27Z "
           "M44 31V47H55C60.5 47 63 44 63 39C63 34 60.5 31 55 31Z")
-# R の配置(吹き出しの本体の中央に寄せる): translate(50 45) scale(0.92) translate(-53 -50)
-R_TRANSFORM = (0.92, 50 - 53 * 0.92, 45 - 50 * 0.92)
-GRADIENT = ((0x2B, 0x88, 0xD8), (0x0B, 0x5A, 0x9E))  # 左上 → 右下
+R_TRANSFORM = (0.9174, -8.77, 4.03)  # (倍率, x の移動, y の移動)
+E_CENTER = (72.16, 62.54)
+E_RADIUS = 13.25
+E_STROKE = 9.17
+E_END_DEG = 42      # e の書き終わり(右下)の角度。横棒の右端から上・左・下を回ってここまで描く
+E_CUT_RADIUS = 20.4  # R を切り抜く円の半径(e の外側 + すき間)
+GRADIENT = ((0x0B, 0x5A, 0x9E), (0x25, 0xB5, 0xE0))  # 左上 → 右下
 
 
 def _path_polygons(d: str, steps: int = 16) -> list[list[tuple[float, float]]]:
@@ -83,9 +93,9 @@ def _path_polygons(d: str, steps: int = 16) -> list[list[tuple[float, float]]]:
 
 
 def make_icon(unread: bool, dark_taskbar: bool, size: int = 64):
-    """アイコンの画像: 青い吹き出しの中に白いR。未読があれば右上に赤い点を付ける。
+    """アイコンの画像: 角の丸い青いグラデーションに、白い「R」と「e」。未読があれば右上に赤い点を付ける。
 
-    dark_taskbar は互換のために残している(吹き出しはどちらの背景でも見えるので、色は変えない)。
+    dark_taskbar は互換のために残している(背景の四角はどちらの背景でも見えるので、色は変えない)。
     """
     from PIL import Image, ImageDraw
 
@@ -97,9 +107,9 @@ def make_icon(unread: bool, dark_taskbar: bool, size: int = 64):
         k, dx, dy = t
         return [((px * k + dx) * f, (py * k + dy) * f) for px, py in poly]
 
-    # 吹き出しの形を切り抜いたグラデーション
+    # 角の丸い四角に切り抜いたグラデーション
     mask = Image.new("L", (big, big), 0)
-    ImageDraw.Draw(mask).polygon(pts(_path_polygons(BUBBLE_PATH)[0]), fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle([v * f for v in BG_BOX], radius=BG_RADIUS * f, fill=255)
     grad = Image.new("RGBA", (big, big))
     (r0, g0, b0), (r1, g1, b1) = GRADIENT
     gdraw = ImageDraw.Draw(grad)
@@ -110,12 +120,22 @@ def make_icon(unread: bool, dark_taskbar: bool, size: int = 64):
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     img.paste(grad, (0, 0), mask)
 
-    # R(外形を白で塗り、穴を吹き出しの色に戻す)
+    # R(外形を白で塗り、穴を背景の色に戻す)。e の周りは円形に切り抜く
     outer, hole = _path_polygons(R_PATH)
     rmask = Image.new("L", (big, big), 0)
     rd = ImageDraw.Draw(rmask)
     rd.polygon(pts(outer, R_TRANSFORM), fill=255)
     rd.polygon(pts(hole, R_TRANSFORM), fill=0)
+    (ecx, ecy), cut = E_CENTER, E_CUT_RADIUS
+    rd.ellipse(((ecx - cut) * f, (ecy - cut) * f, (ecx + cut) * f, (ecy + cut) * f), fill=0)
+    # e: 円弧(書き終わりから時計回りに右端まで = 下・左・上を回る)と横棒。線の両端は丸める
+    ex, ey, er, half = ecx * f, ecy * f, E_RADIUS * f, E_STROKE / 2 * f
+    rd.arc((ex - er - half, ey - er - half, ex + er + half, ey + er + half), E_END_DEG, 360,
+           fill=255, width=round(E_STROKE * f))
+    rd.rectangle((ex - er, ey - half, ex + er, ey + half), fill=255)
+    end = math.radians(E_END_DEG)
+    for px, py in ((ex - er, ey), (ex + er * math.cos(end), ey + er * math.sin(end))):
+        rd.ellipse((px - half, py - half, px + half, py + half), fill=255)
     img.paste(Image.new("RGBA", (big, big), (255, 255, 255, 255)), (0, 0), rmask)
 
     if unread:

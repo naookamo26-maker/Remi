@@ -21,6 +21,7 @@ from remi.system import windows
 from remi.system.notifier import Notifier
 from remi.system.single_instance import SingleInstance
 from remi.system.tray import Tray
+from remi.system.webview2 import enable_browser_features
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +114,8 @@ class WebviewWindow:
                 self.redmine_window = None
 
             w.events.closed += closed
+            # パスワードの保存・自動入力、右クリックメニューなど、標準的なブラウザと同じ機能を使えるようにする
+            enable_browser_features(w)
             self.redmine_window = w
             return True
         except Exception:  # noqa: BLE001 - 開けなければ既定のブラウザで開く

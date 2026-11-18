@@ -240,7 +240,7 @@
   "tree.unreadOnly": "Unread only",
   "tree.visibleRelations": "Issues to show",
   "tree.visibleRelationsAtLeastOne": "Choose at least one",
-  "tree.visibleRelationsHint": "Applies to the counts and unread numbers in the tree, the list and the tray (not to notifications)",
+  "tree.visibleRelationsHint": "Applies to the counts and unread numbers in the tree, the list, the tray and notifications",
   "welcome.addServer": "Add a Redmine server",
   "welcome.body": "Register your Redmine server to start following your issues.",
   "welcome.title": "Welcome to Remi"

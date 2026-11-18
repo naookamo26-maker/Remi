@@ -44,6 +44,19 @@ def shown_relations(visible: list[str] | None, relation_filter: str | None) -> l
     return [r for r in vis if r in want] or vis
 
 
+def matches_relations(flags: int, relations: list[str] | None) -> bool:
+    """relation_flags が、relations のどれかの関係を持つか(relation_condition と同じ判定をPythonで行う)。"""
+    if relations is None or set(RELATIONS) <= set(relations):
+        return True
+    has = {
+        "assigned": bool(flags & REL_ASSIGNED) and not flags & REL_GROUP,
+        "group": bool(flags & REL_GROUP),
+        "watching": bool(flags & REL_WATCHING),
+        "authored": bool(flags & REL_AUTHORED),
+    }
+    return any(has[r] for r in relations if r in has)
+
+
 def relation_condition(include: list[str] | tuple[str, ...] | set[str] | None) -> str:
     """表示する関係(include)のどれかを持つチケットに絞るSQLの条件。None やすべての関係なら絞らない。"""
     if include is None or set(RELATIONS) <= set(include):

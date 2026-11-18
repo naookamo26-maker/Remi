@@ -49,6 +49,11 @@ export function debounce(fn, ms) {
   return wrapped;
 }
 
+// 未読数のバッジの文字(大きな数は 999+ にまとめる)
+export function countText(n) {
+  return n > 999 ? "999+" : String(n);
+}
+
 let toastTimer = null;
 export function toast(message) {
   document.querySelector(".toast")?.remove();

@@ -34,6 +34,7 @@ class App {
     this.applyTheme();
     this.applyMineSide();
     darkQuery.addEventListener("change", () => this.applyTheme());
+    addEventListener("keydown", (e) => this.onGlobalKey(e));
     addEventListener("focus", () => this.onActive(true));
     addEventListener("blur", () => this.onActive(false));
     document.addEventListener("visibilitychange", () => this.onActive(document.visibilityState === "visible" && document.hasFocus()));
@@ -102,6 +103,25 @@ class App {
       setTimeout(() => location.reload(), 300);
     }
     return this.settings;
+  }
+
+  // --- キー操作 ---------------------------------------------------------------------
+  onGlobalKey(e) {
+    const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey;
+    if (e.key === "F5" || (ctrl && e.key.toLowerCase() === "r")) {
+      // 画面の再読み込み(送信前の添付などを失う)はせず、Redmineから読み込み直す。Shift・Ctrl付きも同じ
+      e.preventDefault();
+      if (!e.repeat) this.syncNow();
+    } else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "f" && !document.querySelector(".backdrop")) {
+      e.preventDefault();
+      this.list.focusSearch();
+    }
+  }
+
+  // 今すぐ同期する。開いているチケットは、更新日時が同じでもコメントごと取り直す
+  syncNow() {
+    call("syncNow", this.current ?? {}).catch(() => {});
+    toast(t("tree.syncStarted"));
   }
 
   // --- 選択 -------------------------------------------------------------------------

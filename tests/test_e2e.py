@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import time
 
 import pytest
@@ -403,4 +404,62 @@ def test_switching_user_closes_open_conversation(page, remi, fake):
     assert remi.ctx.issues.journals(1, 10) == []
     playwright_api.expect(page.locator(".issue", has_text="CSVが文字化けする")).to_have_count(0, timeout=10000)
     playwright_api.expect(page.locator(".issue", has_text="メールの宛先")).to_be_visible(timeout=20000)
+    assert not page.errors, page.errors
+
+
+def test_f5_refetches_open_issue_without_reloading(page, remi, fake):
+    """F5・Ctrl+R は画面を再読み込みせず、開いているチケットのコメントをRedmineから取り直す。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_have_text("CSVが文字化けする")
+    time.sleep(2)  # 開いた直後の取り直しが終わるのを待つ
+    page.evaluate("window.__notReloaded = true")
+    # 同じ秒に入った(更新日時が変わらない)コメントは、通常の確認では見つからない
+    stamp = remi.ctx.issues.updated_on(1, 10)
+    fake.add_journal(10, 8, "見逃したコメント", created_on=stamp)
+    page.keyboard.press("F5")
+    playwright_api.expect(conv.locator(".bubble", has_text="見逃したコメント")).to_be_visible(timeout=8000)
+    page.keyboard.press("Control+r")
+    page.keyboard.press("Control+Shift+R")
+    time.sleep(0.5)
+    assert page.evaluate("window.__notReloaded") is True
+    assert not page.errors, page.errors
+
+
+def test_list_keys_search_shortcut_and_lightbox(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    # Ctrl+F で検索欄へ。Esc で絞り込みを解除
+    page.locator(".tree").click()
+    page.keyboard.press("Control+f")
+    search = page.get_by_role("searchbox", name="チケットを検索")
+    playwright_api.expect(search).to_be_focused()
+    search.press_sequentially("メール")
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    search.press("Escape")
+    playwright_api.expect(search).to_have_value("")
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    # Home / End で先頭・末尾のチケットを開く
+    search.press("ArrowDown")
+    page.keyboard.press("End")
+    playwright_api.expect(page.locator(".issue").last).to_have_class(re.compile("selected"))
+    page.keyboard.press("Home")
+    playwright_api.expect(page.locator(".issue").first).to_have_class(re.compile("selected"))
+
+    # 画像の拡大表示: 閉じるボタンにフォーカスがあり、Tabで外へ出ず、閉じると元の場所へ戻る
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    img = page.locator(".pane-conv .bubble img")
+    img.click()
+    box = page.get_by_role("dialog", name="画面")
+    close = box.get_by_role("button", name="閉じる")
+    playwright_api.expect(close).to_be_focused()
+    page.keyboard.press("Tab")
+    playwright_api.expect(close).to_be_focused()
+    page.keyboard.press("Enter")
+    playwright_api.expect(box).to_have_count(0)
     assert not page.errors, page.errors

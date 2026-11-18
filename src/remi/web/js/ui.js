@@ -88,11 +88,28 @@ export function confirmDialog(title, message, okLabel, { danger = false } = {}) 
   });
 }
 
+// 画像の拡大表示。どこをクリックしても、Esc・Enter・閉じるボタンでも閉じる。閉じたら元の場所へフォーカスを戻す
 export function lightbox(src, alt) {
-  const close = () => { box.remove(); removeEventListener("keydown", onKey, true); };
-  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
-  const box = h("div", { class: "lightbox", role: "dialog", "aria-label": alt || t("conv.image"), onClick: close },
-    h("img", { src, alt: alt || "" }));
+  const previous = document.activeElement;
+  const close = () => {
+    box.remove();
+    removeEventListener("keydown", onKey, true);
+    previous?.focus?.();
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    } else if (e.key === "Tab") {
+      e.preventDefault(); // 操作できるのは閉じるボタンだけなので、フォーカスを外へ出さない
+      closeButton.focus();
+    }
+  };
+  const closeButton = h("button", { type: "button", class: "btn icon-only close", "aria-label": t("common.close"),
+    title: t("common.close") }, icon("close"));
+  const box = h("div", { class: "lightbox", role: "dialog", "aria-modal": "true", "aria-label": alt || t("conv.image"),
+    onClick: close }, h("img", { src, alt: alt || "" }), closeButton);
   document.body.append(box);
   addEventListener("keydown", onKey, true);
+  closeButton.focus();
 }

@@ -1,6 +1,6 @@
 // 中央ペイン: チケット一覧(設計書 §5.1)
 import { call } from "./api.js";
-import { clear, debounce, h } from "./dom.js";
+import { clear, countText, debounce, h } from "./dom.js";
 import { formatShort, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
@@ -14,8 +14,21 @@ export class IssueList {
     this.search = "";
     this.title = h("h2", {});
     this.crumb = h("span", { class: "crumb" });
+    const onSearch = debounce(() => { this.search = this.searchInput.value; this.refresh(); }, 200);
     this.searchInput = h("input", { type: "search", placeholder: t("list.searchPlaceholder"), "aria-label": t("list.search"),
-      onInput: debounce(() => { this.search = this.searchInput.value; this.refresh(); }, 200) });
+      onInput: onSearch,
+      onKeydown: (e) => {
+        // Esc: 絞り込みを解除する。↓: 一覧へ移る
+        if (e.key === "Escape" && this.searchInput.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.searchInput.value = "";
+          onSearch.flush();
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          this.el.focus();
+        }
+      } });
     this.unreadFirst = h("input", { type: "checkbox", onChange: () => app.saveSetting("unread_first", this.unreadFirst.checked).then(() => this.refresh()) });
     this.showClosed = h("input", { type: "checkbox", onChange: () => app.saveSetting("show_closed", this.showClosed.checked).then(() => this.refresh()) });
     // 関係での絞り込み(すべて / 担当 / ウォッチ / 作成)
@@ -82,7 +95,7 @@ export class IssueList {
           showServer ? h("span", {}, it.serverName) : null,
           h("span", { class: "spacer" }),
           h("span", {}, formatShort(it.updatedOn)),
-          it.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: it.unread }) }, it.unread) : null),
+          it.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: it.unread }) }, countText(it.unread)) : null),
         h("div", { class: "subject" }, it.subject),
         h("div", { class: "line3" },
           it.relations.map((r) => h("span", { class: "tag" }, t(RELATION_LABELS[r]))),
@@ -101,13 +114,20 @@ export class IssueList {
     }
   }
 
+  focusSearch() {
+    this.searchInput.focus();
+    this.searchInput.select();
+  }
+
+  // ↑↓: 前後のチケット、Home/End: 先頭・末尾のチケットを開く
   onKey(e) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
+    const last = this.issues.length - 1;
     const cur = this.app.current;
-    let idx = this.issues.findIndex((i) => cur && i.serverId === cur.serverId && i.issueId === cur.issueId);
-    idx = Math.max(0, Math.min(this.issues.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)));
-    const it = this.issues[idx];
+    const idx = this.issues.findIndex((i) => cur && i.serverId === cur.serverId && i.issueId === cur.issueId);
+    const next = { ArrowDown: idx + 1, ArrowUp: idx - 1, Home: 0, End: last }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const it = this.issues[Math.max(0, Math.min(last, next))];
     if (it) this.app.openIssue(it.serverId, it.issueId);
   }
 

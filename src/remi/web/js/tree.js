@@ -1,6 +1,6 @@
 // 左ペイン: サーバー / プロジェクトのツリー(設計書 §3.2、モック「メインウィンドウ」左)
 import { call } from "./api.js";
-import { clear, h, toast } from "./dom.js";
+import { clear, countText, h } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
@@ -23,7 +23,7 @@ export class Tree {
         h("div", { class: "row" },
           h("button", { type: "button", class: "btn", onClick: () => app.openSettings() }, icon("gear"), t("tree.settings")),
           h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"), "aria-label": t("tree.syncNow"),
-            onClick: () => { call("syncNow"); toast(t("tree.syncStarted")); } }, icon("sync")))));
+            onClick: () => app.syncNow() }, icon("sync")))));
   }
 
   get collapsed() {
@@ -58,7 +58,7 @@ export class Tree {
         opts.icon ? icon(opts.icon) : null,
         h("span", { class: "name" }, label),
         opts.dot ? h("span", { class: `dot ${opts.dot}`, title: opts.dotLabel, "aria-label": opts.dotLabel }) : null,
-        opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, opts.unread > 999 ? "999+" : opts.unread)
+        opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
           : (opts.count ? h("span", { class: "count" }, opts.count) : null));
       const li = h("li", { role: "treeitem", "aria-selected": String(key === sel && !opts.header),
         dataset: { key: opts.header ? "" : key, token: hasKids ? token : "" },

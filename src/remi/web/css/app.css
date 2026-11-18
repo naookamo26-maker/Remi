@@ -225,6 +225,8 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .menu .check { width: 14px; text-align: center; }
 .lightbox { position: fixed; inset: 0; z-index: 70; background: rgb(0 0 0 / .8); display: grid; place-items: center; cursor: zoom-out; }
 .lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 6px; background: #fff; }
+.lightbox .close { position: fixed; top: 16px; right: 16px; background: rgb(0 0 0 / .55); border-color: rgb(255 255 255 / .4); color: #fff; }
+.lightbox .close:hover { background: rgb(0 0 0 / .75); }
 .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 80; padding: 8px 14px; border-radius: 8px;
   background: var(--text); color: var(--window); font-size: 12px; box-shadow: 0 6px 18px rgb(0 0 0 / .25); }
 

@@ -2,6 +2,8 @@
 
 画面から呼べるのは @rpc を付けたメソッドだけ。引数と戻り値はJSONで表せる値にする。
 エラーは RpcError(コード) で返し、文言は画面側で翻訳する。
+主な戻り値の形は src/remi/web/js/types.js に書いてある。項目を変えたら types.js も直すこと
+(tests/test_types_doc.py で一致を確認する)。
 """
 
 from __future__ import annotations
@@ -570,9 +572,13 @@ class RemiApi:
 
     # --- 同期・ウィンドウ ----------------------------------------------------------------
     @rpc
-    def syncNow(self) -> None:  # noqa: N802
-        if self.sync is not None:
-            self.sync.sync_now()
+    def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> None:  # noqa: N802,N803
+        """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。"""
+        if self.sync is None:
+            return
+        self.sync.sync_now()
+        if serverId and issueId:
+            self.setOpenIssue(serverId, issueId)  # 開き直すと、同期スレッドがコメントごと取り直す
 
     @rpc
     def setActive(self, active: bool) -> None:  # noqa: N802

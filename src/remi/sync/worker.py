@@ -67,6 +67,9 @@ class ServerWorker(threading.Thread):
         self.bus = bus
         self.sched = Schedule()
         self.open_issue: int | None = None
+        # 開いた直後の1回目は、更新日時が同じでもコメントごと取り直す。updated_on は秒単位なので、
+        # 同じ秒に入った更新を見逃していても、開けば(F5で開き直しても)必ず最新になるようにする
+        self.open_issue_full = False
         self.active = True
         self.sync: ServerSync | None = None
         self._commands: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue()
@@ -123,10 +126,10 @@ class ServerWorker(threading.Thread):
         elif cmd == "open":
             (issue_id,) = args
             self.open_issue = issue_id
+            self.open_issue_full = issue_id is not None
             self.sched.open_issue = 0
-            if issue_id is not None and self.sync is not None \
-                    and not self.sync.issues.journals_synced(self.server_id, issue_id):
-                self._enqueue(issue_id, front=True)
+            if issue_id in self.sched.queue:
+                self.sched.queue.remove(issue_id)  # すぐ下の tick で取得する
         elif cmd == "active":
             (self.active,) = args
         elif cmd == "attachment":
@@ -244,7 +247,11 @@ class ServerWorker(threading.Thread):
             self.sched.changes = now + self._interval(server.poll_interval)
             did_network = True
         if self.open_issue is not None and now >= self.sched.open_issue:
-            self._emit(sync.check_issue(self.open_issue))
+            if self.open_issue_full:
+                self._emit(sync.fetch_journals(self.open_issue))
+                self.open_issue_full = False  # 失敗したら(例外)、次の確認でもコメントごと取り直す
+            else:
+                self._emit(sync.check_issue(self.open_issue))
             self.sched.open_issue = now + self._interval(OPEN_ISSUE_INTERVAL)
             did_network = True
         if now >= self.sched.reconcile:

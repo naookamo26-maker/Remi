@@ -8,6 +8,7 @@ import { icon } from "./icons.js";
 import { IssueHeader } from "./issue-header.js";
 import { pendingMessage, renderTimeline } from "./timeline.js";
 import { lightbox } from "./ui.js";
+import { renderVersion } from "./version-view.js";
 
 /** @typedef {import("./types.js").ConversationData} ConversationData */
 /** @typedef {import("./types.js").EditOptions} EditOptions */
@@ -49,12 +50,39 @@ export class Conversation {
 
   showEmpty() {
     this.data = null;
+    this.version = null;
+    this._versionToken = null; // 読み込み中のバージョンの表示は描かない
     this.composer = null;
     clear(this.root).append(h("div", { class: "welcome" }, h("p", { class: "muted" }, t("conv.selectIssue"))));
   }
 
+  /**
+   * バージョンの概要と変化の記録を表示する。markRead なら、変化を見たことにする
+   * @param {number} serverId
+   * @param {number} versionId
+   */
+  async showVersion(serverId, versionId, { markRead = true } = {}) {
+    const token = Symbol();
+    this._versionToken = token;
+    this.data = null; // 閉じたチケットの内容は使わない(読み込み中にチケットを開いたら、load が token を消す)
+    this.composer = null;
+    let d;
+    try {
+      d = await call("getVersion", { serverId, versionId, markRead });
+    } catch (e) {
+      if (this._versionToken === token) this.showEmpty();
+      if (e.code !== "not_found") throw e;
+      return;
+    }
+    // 読み込みの間に、チケットを開いた・別の項目を選んだときは描かない
+    if (this._versionToken !== token) return;
+    this.version = { serverId, versionId };
+    clear(this.root).append(renderVersion(d, this.app));
+  }
+
   showWelcome() {
     this.data = null;
+    this.version = null;
     this.composer = null;
     clear(this.root).append(h("div", { class: "welcome" },
       h("h2", {}, t("welcome.title")),
@@ -66,6 +94,8 @@ export class Conversation {
   // 開く(open=true)と既読にする。届いた更新で描き直すときは markRead を app が判断する
   async load(serverId, issueId, { markRead = true, keepScroll = false, resetLimit = false } = {}) {
     if (resetLimit) this.limit = PAGE;
+    this._versionToken = null; // 読み込み中のバージョンの表示は描かない
+    this.version = null;
     let data;
     try {
       data = await call("getConversation", { serverId, issueId, limit: this.limit, markRead });

@@ -52,6 +52,7 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dot.ok { background: var(--success); }
 .dot.error { background: var(--danger); }
+.dot.changed { background: var(--accent); }
 
 /* ---- レイアウト ---- */
 #app { height: 100%; }
@@ -89,6 +90,14 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .node .twisty { width: 14px; flex: none; color: var(--text-muted); font-size: 10px; text-align: center; }
 .node.server { font-weight: 700; margin-top: 8px; }
 .node.inaccessible .name, .node.inactive .name { color: var(--text-muted); }
+/* バージョン: 変化があるものは太字と点で示す。終了したものは控えめに */
+.node.version .name { font-size: 12px; }
+.node.version.changed .name { font-weight: 700; }
+.node.version.closed .name { color: var(--text-muted); }
+.node.version-group .name { font-size: 12px; color: var(--text-muted); }
+.node.roadmap .name { font-size: 12px; color: var(--text-muted); }
+.node.roadmap svg.icon { width: 14px; height: 14px; color: var(--text-muted); }
+.node.roadmap.changed .name { color: var(--text); font-weight: 700; }
 .node-error { margin: 2px 8px 4px 34px; padding: 6px 8px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-fg); font-size: 11px; }
 .tree-footer { padding: 6px 10px; border-top: 1px solid var(--border); }
 .tree-footer:has(.sync-status:empty) { display: none; }
@@ -288,3 +297,16 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .chip.busy { opacity: .7; }
 .chip.error { background: color-mix(in srgb, var(--danger) 14%, var(--window)); }
 .composer.dragging { outline: 2px dashed var(--accent); outline-offset: -4px; }
+
+/* ---- バージョン(ロードマップ) ---- */
+.version-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.version-view h1 svg.icon { width: 17px; height: 17px; vertical-align: -2px; color: var(--accent); }
+.progress { display: inline-flex; align-items: center; gap: 8px; }
+.progress .bar { width: 120px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.progress .bar > span { display: block; height: 100%; background: var(--success); }
+.version-event { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 2px; }
+.version-event .time { color: var(--text-muted); font-size: 11px; margin-right: 6px; }
+.version-event .issue-ref { font-weight: 600; }
+.version-event .subject { color: var(--text); }
+.version-event.added .issue-ref { color: var(--success); }
+.version-event.removed .issue-ref { color: var(--danger); }

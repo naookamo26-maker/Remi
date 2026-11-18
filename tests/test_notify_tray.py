@@ -125,3 +125,11 @@ def test_tray_icon_and_menu(db):
     assert "通知を再開" in [label for label, _ in tray.menu_items()]
     dict(tray.menu_items())["終了"]()
     assert calls == ["quit"]
+
+
+def test_does_not_notify_unrelated_version_issues(db):
+    """バージョンで見ているだけの(自分と関係ない)チケットのコメントは通知しない。"""
+    ctx, sid, n, backend, api, opened = setup(db)
+    ctx.issues.upsert_issue_data(sid, {"id": 7, "project": {"id": 1}, "subject": "関係ない"})
+    ctx.bus.publish("newComments", serverId=sid, comments=[comment(7)])
+    assert backend.shown == []

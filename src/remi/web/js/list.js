@@ -58,6 +58,7 @@ export class IssueList {
     if (sel.serverId) params.serverId = sel.serverId;
     if (sel.projectId) params.projectId = sel.projectId;
     if (sel.kind === "unread") params.unreadOnly = true;
+    if (sel.kind === "version") params.versionId = sel.versionId;
     params.relation = this.relationFilter();
     const token = Symbol();
     this._token = token;
@@ -79,8 +80,8 @@ export class IssueList {
       b.setAttribute("aria-pressed", String(b.dataset.value === rel));
       b.hidden = !shown.includes(b.dataset.value);
     }
-    // 絞り込める関係が1つだけなら「すべて」と同じなので、ボタンごと隠す
-    this.relationGroup.hidden = shown.length <= 2;
+    // 絞り込める関係が1つだけなら「すべて」と同じなので、ボタンごと隠す。バージョンでは関係で絞り込まない
+    this.relationGroup.hidden = shown.length <= 2 || this.app.selection.kind === "version";
     const scroll = this.el.scrollTop;
     clear(this.el);
     if (!this.issues.length) {

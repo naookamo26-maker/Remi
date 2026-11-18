@@ -153,6 +153,46 @@ UPDATE servers SET visible_relations = (SELECT value FROM settings WHERE key = '
 DELETE FROM settings WHERE key IN ('show_all_projects', 'visible_relations')
 """
 
-MIGRATIONS: list[str] = [V1, V2]
+# ロードマップ(バージョン)の監視。プロジェクトごとに「未完了のバージョンをすべてウォッチ」(親から継承)し、
+# バージョンに含まれるチケットの一覧と、その変化(追加・外れた・完了など)を記録する
+V3 = """
+ALTER TABLE project_settings ADD COLUMN watch_versions INTEGER;
+CREATE TABLE versions (
+    server_id      INTEGER NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
+    version_id     INTEGER NOT NULL,
+    project_id     INTEGER NOT NULL,
+    name           TEXT    NOT NULL,
+    status         TEXT    NOT NULL DEFAULT 'open',
+    due_date       TEXT,
+    description    TEXT,
+    -- チケットの一覧を取得したか。最初の取得では変化を記録しない(そのときの状態を基準にする)
+    issues_synced  INTEGER NOT NULL DEFAULT 0,
+    -- ここまでの変化を見た(バージョンを選んで表示した)
+    read_event_id  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (server_id, version_id)
+);
+CREATE TABLE version_issues (
+    server_id  INTEGER NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL,
+    issue_id   INTEGER NOT NULL,
+    closed     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (server_id, version_id, issue_id)
+);
+CREATE TABLE version_events (
+    event_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id  INTEGER NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
+    version_id INTEGER NOT NULL,
+    -- created / added / removed / closed / reopened / due_date / status / name
+    kind       TEXT    NOT NULL,
+    issue_id   INTEGER,
+    subject    TEXT,
+    old_value  TEXT,
+    new_value  TEXT,
+    created_at TEXT    NOT NULL
+);
+CREATE INDEX idx_version_events ON version_events (server_id, version_id, event_id)
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3]
 
 SCHEMA_VERSION = len(MIGRATIONS)

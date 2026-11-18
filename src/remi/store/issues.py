@@ -251,6 +251,16 @@ class IssueStore:
                 ),
             )
 
+    def upsert_issue_data(self, server_id: int, data: dict[str, Any]) -> None:
+        """自分との関係(relation_flags・監視対象か)を変えずに、チケットの内容だけを保存する。
+        まだ保存していなければ、関係のないチケット(監視対象外)として保存する(バージョンのチケットに使う)。
+        """
+        row = self.get(server_id, int(data["id"]))
+        if row is None:
+            self.upsert_issue(server_id, data, 0, monitored=False)
+        else:
+            self.upsert_issue(server_id, data, row.relation_flags, row.monitored)
+
     def get(self, server_id: int, issue_id: int) -> IssueRow | None:
         r = self.db.query_one("SELECT * FROM issues WHERE server_id = ? AND issue_id = ?", (server_id, issue_id))
         return _issue(r) if r else None
@@ -288,8 +298,11 @@ class IssueStore:
     def purge_stale(self, days: int = 90) -> int:
         """監視対象外で、長く開かれていないチケットのキャッシュを削除する。"""
         rows = self.db.query(
-            "SELECT server_id, issue_id FROM issues WHERE monitored = 0 AND "
-            "COALESCE(last_opened_at, updated_on, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)",
+            "SELECT server_id, issue_id FROM issues i WHERE monitored = 0 AND "
+            "COALESCE(last_opened_at, updated_on, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) "
+            # ウォッチしているバージョンに含まれるチケットは残す(バージョンの一覧に出す)
+            "AND NOT EXISTS (SELECT 1 FROM version_issues v WHERE v.server_id = i.server_id "
+            "AND v.issue_id = i.issue_id)",
             (f"-{int(days)} days",),
         )
         by_server: dict[int, list[int]] = {}
@@ -302,10 +315,16 @@ class IssueStore:
     # --- 一覧・未読 -------------------------------------------------------------
     def list_issues(self, server_ids: list[int] | None = None, project_ids: set[int] | None = None,
                     *, include_unmonitored: bool = False, unread_only: bool = False,
-                    search: str = "", relations: list[str] | RelationScope | None = None) -> list[IssueRow]:
+                    search: str = "", relations: list[str] | RelationScope | None = None,
+                    version_id: int | None = None) -> list[IssueRow]:
+        """version_id を渡すと、そのバージョンに含まれるチケット(自分と関係ないものを含む)を返す。"""
         where = [_scope_sql(relations)]
         params: list[Any] = []
-        if not include_unmonitored:
+        if version_id is not None:
+            where.append("EXISTS (SELECT 1 FROM version_issues v WHERE v.server_id = i.server_id "
+                         "AND v.issue_id = i.issue_id AND v.version_id = ?)")
+            params.append(int(version_id))
+        elif not include_unmonitored:
             where.append("i.monitored = 1")
         if server_ids is not None:
             if not server_ids:

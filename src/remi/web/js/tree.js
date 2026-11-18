@@ -9,7 +9,7 @@ import { contextMenu } from "./ui.js";
 export const RELATIONS = ["assigned", "group", "watching", "authored"];
 
 export function selectionKey(sel) {
-  return `${sel.kind}:${sel.serverId ?? ""}:${sel.projectId ?? ""}`;
+  return `${sel.kind}:${sel.serverId ?? ""}:${sel.projectId ?? ""}:${sel.versionId ?? ""}`;
 }
 
 export class Tree {
@@ -39,6 +39,7 @@ export class Tree {
 
   async refresh() {
     this.data = await call("getTree");
+    this.app.checkSelection();
     this.render();
   }
 
@@ -52,13 +53,15 @@ export class Tree {
       const key = selectionKey(sel_);
       const hasKids = opts.children && opts.children.length > 0;
       const token = opts.token;
-      const isCollapsed = token && collapsed.has(token);
+      // 既定で畳んでおく項目(終了したバージョン)は、開いたときだけ token を覚える
+      const isCollapsed = token && (opts.collapsedByDefault ? !collapsed.has(token) : collapsed.has(token));
       const row = h("div", {
         class: ["node", opts.cls, key === sel && !opts.header ? "selected" : ""].filter(Boolean).join(" "),
         style: { paddingLeft: `${8 + (opts.depth || 0) * 16}px` },
         title: opts.title || null,
-        onClick: () => this.app.select(sel_),
-        onContextmenu: (e) => { e.preventDefault(); this.menu(e, sel_); },
+        // 見出しだけの行(ロードマップ・終了したバージョン)は、押すと開閉する
+        onClick: () => (opts.toggleOnly ? this.toggle(token) : this.app.select(sel_)),
+        onContextmenu: (e) => { e.preventDefault(); if (!opts.toggleOnly) this.menu(e, sel_); },
       },
         h("span", { class: "twisty", onClick: hasKids ? (e) => { e.stopPropagation(); this.toggle(token); } : null },
           hasKids ? (isCollapsed ? "▶" : "▼") : ""),
@@ -66,6 +69,7 @@ export class Tree {
         h("span", { class: "name" }, label),
         opts.extra || null,
         opts.dot ? h("span", { class: `dot ${opts.dot}`, title: opts.dotLabel, "aria-label": opts.dotLabel }) : null,
+        opts.progress ? h("span", { class: "count" }, opts.progress) : null,
         opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
           : (opts.count ? h("span", { class: "count" }, opts.count) : null));
       const li = h("li", { role: "treeitem", "aria-selected": String(key === sel && !opts.header),
@@ -79,12 +83,37 @@ export class Tree {
       this.el.append(node(t("tree.allServers"), { kind: "all" }, { unread: data.unread, icon: "menu", cls: "all" }));
     }
     for (const s of data.servers) {
+      // バージョン: 変化があれば印を付け、完了数/全体を出す。終了したものは、畳んだ「終了したバージョン」の下に出す
+      const version = (p, v, depth) => node(v.name, { kind: "version", serverId: s.serverId, versionId: v.versionId }, {
+        depth, icon: "flag", cls: ["version", v.changed ? "changed" : "", v.closed ? "closed" : ""].join(" "),
+        title: v.dueDate ? t("tree.versionDue", { date: v.dueDate }) : null,
+        dot: v.changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
+        progress: `${v.done}/${v.total}`,
+      });
+      // プロジェクトの下に「ロードマップ」を置き、その中にバージョンを並べる
+      const roadmap = (p, depth) => {
+        if (!p.versions.length) return [];
+        const kids = p.versions.filter((v) => !v.closed).map((v) => version(p, v, depth + 1));
+        const closed = p.versions.filter((v) => v.closed);
+        if (closed.length) {
+          kids.push(node(t("tree.closedVersions", { count: closed.length }), { kind: "closedVersions", serverId: s.serverId,
+            projectId: p.projectId }, { depth: depth + 1, header: true, toggleOnly: true, collapsedByDefault: true,
+            cls: "version-group", token: `vc:${s.serverId}:${p.projectId}`,
+            children: closed.map((v) => version(p, v, depth + 2)) }));
+        }
+        // 畳んでいても気づけるよう、中のバージョンに変化があればロードマップにも印を付ける
+        const changed = p.versions.some((v) => v.changed);
+        return [node(t("tree.roadmap"), { kind: "roadmap", serverId: s.serverId, projectId: p.projectId }, {
+          depth, header: true, toggleOnly: true, icon: "flag", cls: `roadmap${changed ? " changed" : ""}`,
+          token: `rm:${s.serverId}:${p.projectId}`, dot: changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
+          children: kids })];
+      };
       const project = (p, depth) => node(p.name, { kind: "project", serverId: s.serverId, projectId: p.projectId }, {
         depth, unread: p.unread, count: p.unread ? 0 : p.count, token: `p:${s.serverId}:${p.projectId}`,
         cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : ""].join(" "),
         title: !p.accessible ? t("tree.noAccess") : null,
         extra: this.relationsButton(s, p, depth),
-        children: p.children.map((c) => project(c, depth + 1)),
+        children: [...roadmap(p, depth + 1), ...p.children.map((c) => project(c, depth + 1))],
       });
       const kids = [
         node(t("tree.all"), { kind: "server", serverId: s.serverId }, { depth: 1, count: s.count }),
@@ -226,6 +255,15 @@ export class Tree {
   }
 
   async menu(e, sel) {
+    if (sel.kind === "version") {
+      const server = this.data.servers.find((x) => x.serverId === sel.serverId);
+      const url = `${server?.url}/versions/${sel.versionId}`;
+      contextMenu(e.clientX, e.clientY, [
+        { label: t("menu.openRedmine"), onClick: () => this.app.openRedmine(url) },
+        { label: t("menu.openInBrowser"), onClick: () => this.app.openRedmine(url, { external: true }) },
+      ]);
+      return;
+    }
     const items = [{ label: t("menu.markAllRead"), onClick: () => call("markAllRead", { serverId: sel.serverId ?? null, projectId: sel.projectId ?? null }) }];
     const server = this.data.servers.find((s) => s.serverId === sel.serverId);
     if (sel.kind === "project") {
@@ -245,6 +283,7 @@ export class Tree {
       const depth = server?.projects.some((p) => p.projectId === sel.projectId) ? 1 : 2;
       items.push({ sep: true }, seg("notify", t("menu.notifications")),
         seg("watch_authored", t("menu.watchAuthored"), t("menu.appliesToSubprojects")),
+        seg("watch_versions", t("menu.watchVersions"), t("menu.appliesToSubprojects")),
         { sep: true },
         { label: t("menu.visibleRelations"),
           onClick: () => this.relationsMenu(e.clientX, e.clientY, sel.serverId, sel.projectId, depth === 1) });

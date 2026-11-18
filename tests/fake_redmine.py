@@ -42,6 +42,7 @@ class FakeRedmine:
         self.trackers = [{"id": 1, "name": "バグ"}, {"id": 2, "name": "機能"}]
         self.priorities = [{"id": 2, "name": "通常"}, {"id": 3, "name": "高め"}]
         self.issues: dict[int, dict] = {}
+        self.versions: dict[int, dict] = {}
         self.journals: dict[int, list[dict]] = {}
         self.attachments: dict[int, dict] = {}  # id -> {..., "content": bytes}
         self.watchers: dict[int, set[int]] = {}
@@ -71,9 +72,33 @@ class FakeRedmine:
             p["parent"] = {"id": parent, "name": pname}
         self.projects.append(p)
 
+    def add_version(self, vid: int, project_id: int, name: str, *, status: str = "open",
+                    due_date: str | None = None) -> dict:
+        with self._lock:
+            proj = next((p for p in self.projects if p["id"] == project_id), {"id": project_id, "name": "?"})
+            v = {"id": vid, "project": {"id": project_id, "name": proj["name"]}, "name": name, "status": status,
+                 "due_date": due_date, "description": "", "sharing": "none",
+                 "created_on": now(), "updated_on": now()}
+            self.versions[vid] = v
+            return v
+
+    def update_version(self, vid: int, **changes) -> None:
+        with self._lock:
+            self.versions[vid].update(changes, updated_on=now())
+
+    def set_version(self, iid: int, vid: int | None) -> None:
+        """チケットの対象バージョンを変える(更新日時も進める)。"""
+        with self._lock:
+            issue = self.issues[iid]
+            if vid is None:
+                issue.pop("fixed_version", None)
+            else:
+                issue["fixed_version"] = {"id": vid, "name": self.versions[vid]["name"]}
+            issue["updated_on"] = now()
+
     def add_issue(self, iid: int, project_id: int, subject: str, *, assigned_to: int | None = ME,
                   author: int = 7, watchers: set[int] | None = None, status_id: int = 1,
-                  description: str = "", updated_on: str | None = None) -> dict:
+                  description: str = "", updated_on: str | None = None, version: int | None = None) -> dict:
         with self._lock:
             ts = updated_on or now()
             proj = next((p for p in self.projects if p["id"] == project_id), {"id": project_id, "name": "?"})
@@ -92,6 +117,8 @@ class FakeRedmine:
             }
             if assigned_to is not None:
                 issue["assigned_to"] = self._user_ref(assigned_to)
+            if version is not None:
+                issue["fixed_version"] = {"id": version, "name": self.versions[version]["name"]}
             self.issues[iid] = issue
             self.journals[iid] = []
             self.watchers[iid] = set(watchers or set())
@@ -206,6 +233,8 @@ class FakeRedmine:
             return False
         if "issue_id" in q and str(issue["id"]) not in q["issue_id"].split(","):
             return False
+        if "fixed_version_id" in q and str((issue.get("fixed_version") or {}).get("id")) != q["fixed_version_id"]:
+            return False
         upd = q.get("updated_on")
         if upd:
             m = re.match(r"^>=(.+)$", upd)
@@ -246,6 +275,13 @@ class FakeRedmine:
                 return 200, {"role": {"id": rid, "name": f"role{rid}", "permissions": self.roles[rid]}}
             if path == "/projects.json":
                 return 200, self._page(self.projects, query, "projects")
+            m = re.match(r"^/projects/(\d+)/versions\.json$", path)
+            if m:
+                pid = int(m.group(1))
+                if not any(p["id"] == pid for p in self.projects):
+                    return 404, {}
+                items = [v for v in self.versions.values() if v["project"]["id"] == pid or v["sharing"] == "system"]
+                return 200, {"versions": items, "total_count": len(items)}
             if path == "/issue_statuses.json":
                 return 200, {"issue_statuses": self.statuses}
             if path == "/trackers.json":

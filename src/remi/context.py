@@ -11,6 +11,7 @@ from remi.store.masters import MasterStore
 from remi.store.projects import ProjectStore
 from remi.store.servers import ServerStore
 from remi.store.settings import Settings
+from remi.store.versions import VersionStore
 
 
 @dataclass
@@ -22,6 +23,7 @@ class AppContext:
     projects: ProjectStore = field(init=False)
     masters: MasterStore = field(init=False)
     issues: IssueStore = field(init=False)
+    versions: VersionStore = field(init=False)
 
     def __post_init__(self) -> None:
         self.settings = Settings(self.db)
@@ -29,6 +31,7 @@ class AppContext:
         self.projects = ProjectStore(self.db)
         self.masters = MasterStore(self.db)
         self.issues = IssueStore(self.db)
+        self.versions = VersionStore(self.db)
 
     def relation_scope(self, relation_filter: str | None = None) -> RelationScope:
         """一覧に出すチケット(プロジェクトごとの「表示するチケット」と、一覧の絞り込みボタン)。

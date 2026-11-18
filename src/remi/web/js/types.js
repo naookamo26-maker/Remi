@@ -37,7 +37,50 @@
  * @property {number} count                子プロジェクトを含む
  * @property {Relation[]} relations        表示するチケット(親プロジェクト・サーバーの既定からの継承を解決済み)
  * @property {boolean} relationsOwn        表示するチケットを、このプロジェクト自身で設定しているか
+ * @property {TreeVersion[]} versions      ウォッチしているバージョン(期日順)
  * @property {TreeProject[]} children
+ */
+
+/**
+ * ツリーに出すバージョン(ロードマップの監視)。
+ * @typedef {object} TreeVersion
+ * @property {number} versionId
+ * @property {string} name
+ * @property {"open"|"locked"|"closed"} status
+ * @property {boolean} closed              終了したバージョン(ツリーでは畳んだ「終了したバージョン」の下に出す)
+ * @property {string|null} dueDate         期日(YYYY-MM-DD)
+ * @property {number} done                 完了したチケットの数
+ * @property {number} total                チケットの数
+ * @property {boolean} changed             まだ見ていない変化があるか
+ */
+
+/**
+ * getVersion の戻り値。
+ * @typedef {object} VersionData
+ * @property {number} serverId
+ * @property {number} versionId
+ * @property {string} name
+ * @property {"open"|"locked"|"closed"} status
+ * @property {string|null} dueDate
+ * @property {string} description
+ * @property {number} projectId
+ * @property {string[]} breadcrumb         プロジェクトの階層
+ * @property {number} done
+ * @property {number} total
+ * @property {string} url                  Redmineのバージョンのページ
+ * @property {VersionEvent[]} events       古い順
+ */
+
+/**
+ * @typedef {object} VersionEvent
+ * @property {number} eventId
+ * @property {"created"|"added"|"removed"|"closed"|"reopened"|"due_date"|"status"|"name"} kind
+ * @property {number|null} issueId
+ * @property {string|null} subject
+ * @property {string|null} oldValue
+ * @property {string|null} newValue
+ * @property {string} createdAt            ISO 8601
+ * @property {boolean} unread              まだ見ていない変化か
  */
 
 /**

@@ -509,3 +509,56 @@ def test_switching_user_clears_previous_users_data(app, fake):
     assert app.ctx.issues.journals_synced(sid, 11)
     assert app.ctx.servers.get(sid).initial_sync_done
     assert not any(e["type"] == "serverCacheCleared" for e in events)
+
+
+def test_versions_api_list_tree_and_read(app, fake):
+    """バージョンのチケットは、バージョンを選んだときだけ一覧に出す(件数・未読数には入れない)。"""
+    from remi.sync.engine import ServerSync
+
+    fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_version(5, 2, "v1.0")
+    fake.add_version(6, 2, "v0.9", status="closed")
+    fake.add_issue(10, 1, "自分のチケット")
+    fake.add_issue(20, 2, "関係ない", assigned_to=7, version=5)
+    fake.add_issue(21, 2, "関係ない(完了)", assigned_to=7, status_id=5, version=5)
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 1)
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="watch_versions", value=True)
+    assert app.rpc("getProjectSettings", serverId=sid, projectId=2)["watch_versions"]["effective"] is True
+    child = lambda: app.rpc("getTree")["servers"][0]["projects"][0]["children"][0]  # noqa: E731
+    # 同期スレッドの取得が終わるのを待つ(このあと同じ処理をテストからも呼ぶので、重ならないように)
+    assert wait_until(lambda: all((x := app.ctx.versions.get(sid, vid)) and x.issues_synced for vid in (5, 6)))
+    time.sleep(0.3)
+    v = {x["versionId"]: x for x in child()["versions"]}
+    assert v[5]["closed"] is False and v[5]["done"] == 1 and v[5]["total"] == 2 and v[5]["changed"] is False
+    assert v[6]["closed"] is True
+    tree = app.rpc("getTree")["servers"][0]
+    assert tree["count"] == 1  # バージョンのチケットは件数に入れない
+    assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [10]
+    assert [i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"]] == [20]
+    app.rpc("setSetting", key="show_closed", value=True)
+    assert sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"]) == [20, 21]
+    assert app.rpc_error("listIssues", serverId=sid, versionId=999)["code"] == "not_found"
+
+    # 変化があれば印が付き、表示したら消える
+    fake.add_issue(22, 2, "追加", assigned_to=7)
+    fake.set_version(22, 5)
+    engine = ServerSync(app.ctx.db, sid, app.sync.client(sid))
+    engine.sync_versions()
+    assert {x["versionId"]: x for x in child()["versions"]}[5]["changed"] is True
+    d = app.rpc("getVersion", serverId=sid, versionId=5, markRead=False)
+    assert [(e["kind"], e["issueId"], e["unread"]) for e in d["events"]] == [("added", 22, True)]
+    assert d["breadcrumb"] == ["A", "A-子"] and d["total"] == 3
+    app.rpc("getVersion", serverId=sid, versionId=5)
+    assert {x["versionId"]: x for x in child()["versions"]}[5]["changed"] is False
+    assert app.rpc("getVersion", serverId=sid, versionId=5)["events"][0]["unread"] is False
+    # 関係ないチケットのコメントは、未読として数えない
+    assert all(i["unread"] == 0 for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"])
+    # ウォッチをやめるとツリーから消える(自分のチケットのない子プロジェクトも出なくなる)
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="watch_versions", value=None)
+
+    def any_versions(nodes):
+        return any(p["versions"] or any_versions(p["children"]) for p in nodes)
+    assert wait_until(lambda: not any_versions(app.rpc("getTree")["servers"][0]["projects"]))
+    assert app.rpc("getTree")["servers"][0]["projects"][0]["children"] == []

@@ -58,7 +58,8 @@ MEMBERS_TTL = 600
 PERMISSIONS_TTL = 600
 # サーバーから取得したデータ(認証ユーザーの権限で見えるもの)と、その利用者の状態を持つテーブル。
 # 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
-SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters")
+SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters",
+                       "versions", "version_issues", "version_events")
 # 初期化の前に同期スレッドを止めるときの待ち時間。通信中でも読み取りのタイムアウト(30秒)で終わる
 SYNC_STOP_TIMEOUT = 40.0
 
@@ -331,6 +332,8 @@ class RemiApi:
         if key not in SETTING_KEYS or value not in (None, True, False):
             raise RpcError("invalid_setting", key)
         self.ctx.projects.set_setting(serverId, projectId, key, value)
+        if key == "watch_versions" and self.sync is not None:
+            self.sync.sync_now()  # バージョンをすぐ取得する(やめたときは、ツリーから消す)
         if key == "watch_authored" and self.sync is not None:
             # 作成したチケットを取り直すため、初回同期からやり直す
             self.ctx.servers.update_fields(serverId, initial_sync_done=False)
@@ -357,7 +360,11 @@ class RemiApi:
     # --- 一覧 ---------------------------------------------------------------------
     @rpc
     def listIssues(self, serverId: int | None = None, projectId: int | None = None,  # noqa: N802,N803
-                   unreadOnly: bool = False, search: str = "", relation: str = "all") -> dict[str, Any]:  # noqa: N803
+                   unreadOnly: bool = False, search: str = "", relation: str = "all",  # noqa: N803
+                   versionId: int | None = None) -> dict[str, Any]:  # noqa: N803
+        """一覧。versionId を渡すと、そのバージョンのチケットをすべて出す(表示するチケット・絞り込みは使わない)。"""
+        if versionId is not None:
+            return self._list_version_issues(serverId, versionId, search)
         server_ids = [serverId] if serverId else [s.server_id for s in self.ctx.servers.list(enabled_only=True)]
         project_ids = None
         if serverId and projectId:
@@ -370,6 +377,16 @@ class RemiApi:
         scope = self.ctx.relation_scope(relation)
         rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
                                            unread_only=unreadOnly, search=search, relations=scope)
+        return self._issue_summaries(rows)
+
+    def _list_version_issues(self, server_id: int | None, version_id: int, search: str) -> dict[str, Any]:
+        if server_id is None or self.ctx.versions.get(server_id, version_id) is None:
+            raise RpcError("not_found")
+        rows = self.ctx.issues.list_issues([server_id], search=search, version_id=version_id)
+        return self._issue_summaries(rows, version=True)
+
+    def _issue_summaries(self, rows, version: bool = False) -> dict[str, Any]:
+        show_closed = bool(self.ctx.settings.get("show_closed"))
         names: dict[int, dict[str, Any]] = {}
         out = []
         for r in rows:
@@ -381,19 +398,51 @@ class RemiApi:
                     "server": (self.ctx.servers.get(r.server_id) or Server(name="", url="")).name,
                 }
             closed = r.status_id in n["closed"]
-            if not r.monitored and not closed:
+            if version:
+                if closed and not show_closed:
+                    continue
+            elif not r.monitored and not closed:
                 continue  # 「クローズ済みも表示」でも、関係が外れた未完了チケットは出さない
             out.append({
                 "serverId": r.server_id, "serverName": n["server"], "issueId": r.issue_id,
                 "projectId": r.project_id, "subject": r.subject,
                 "status": n["status"].get(r.status_id, ""), "closed": closed,
-                "assignee": r.assigned_to_name, "updatedOn": r.updated_on, "unread": r.unread,
+                # 自分と関係ないチケット(バージョンで見ているもの)のコメントは未読として数えない
+                "assignee": r.assigned_to_name, "updatedOn": r.updated_on,
+                "unread": r.unread if r.relation_flags else 0,
                 "relations": _flags(r.relation_flags), "monitored": r.monitored,
                 "lastNoteUser": r.last_note_user, "lastNote": (r.last_note or "")[:120].replace("\n", " "),
             })
         if self.ctx.settings.get("unread_first"):
             out.sort(key=lambda x: 0 if x["unread"] else 1)  # 安定ソートなので更新順は保たれる
         return {"issues": out, "total": len(out)}
+
+    # --- ロードマップ(バージョン) ---------------------------------------------------
+    @rpc
+    def getVersion(self, serverId: int, versionId: int, markRead: bool = True) -> dict[str, Any]:  # noqa: N802,N803
+        """バージョンの概要と変化の記録。markRead なら、変化を見たことにする(ツリーの印を消す)。"""
+        server = self.ctx.servers.get(serverId)
+        v = self.ctx.versions.get(serverId, versionId)
+        if server is None or v is None:
+            raise RpcError("not_found")
+        read_before = v.read_event_id
+        done, total = self.ctx.versions.progress(serverId).get(versionId, (0, 0))
+        crumbs = [p.name for p in (self.ctx.projects.get(serverId, pid) for pid in
+                  reversed([v.project_id, *self.ctx.projects.ancestors(serverId, v.project_id)])) if p]
+        events = [{
+            "eventId": e.event_id, "kind": e.kind, "issueId": e.issue_id, "subject": e.subject,
+            "oldValue": e.old_value, "newValue": e.new_value, "createdAt": e.created_at,
+            "unread": e.event_id > read_before,
+        } for e in self.ctx.versions.events(serverId, versionId)]
+        if markRead and any(e["unread"] for e in events):
+            self.ctx.versions.mark_read(serverId, versionId)
+            self.ctx.bus.publish("versionsChanged", serverId=serverId, versionIds=[versionId], source="read")
+        return {
+            "serverId": serverId, "versionId": versionId, "name": v.name, "status": v.status,
+            "dueDate": v.due_date, "description": v.description or "", "projectId": v.project_id,
+            "breadcrumb": crumbs, "done": done, "total": total,
+            "url": f"{server.url}/versions/{versionId}", "events": events,
+        }
 
     # --- 会話 ---------------------------------------------------------------------
     def _render_ctx(self, server: Server, issue_id: int) -> RenderContext:

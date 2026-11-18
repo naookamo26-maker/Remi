@@ -67,6 +67,26 @@ def seed(fake) -> None:
     fake.add_attachment(1301, 502, "batch.log", b"2026-11-17 10:00:00 start\n", "text/plain")
     for i in range(12):
         fake.add_issue(1400 + i, 4, f"ポータルの改善要望 {i + 1}", assigned_to=None, watchers={ME}, updated_on=ts(6000 + i * 60))
+    # ロードマップ(バージョン)。自分と関係ないチケットも含む
+    fake.add_version(31, 2, "v1.1", status="closed", due_date="2026-10-31")
+    fake.add_version(32, 2, "v1.2", due_date="2026-12-15")
+    fake.add_version(33, 3, "在庫 2026年冬")
+    fake.add_issue(1500, 2, "v1.1 リリース作業", assigned_to=8, status_id=5, version=31, updated_on=ts(30000))
+    for iid in (1234, 1229):
+        fake.set_version(iid, 32)
+    fake.add_issue(1501, 2, "受注画面のレスポンス改善", assigned_to=8, version=32, updated_on=ts(500))
+    fake.add_issue(1502, 2, "得意先マスタの一括更新", assigned_to=7, status_id=5, version=32, updated_on=ts(900))
+    fake.add_issue(1503, 2, "受注番号の採番ルール変更", assigned_to=7, version=32, updated_on=ts(700))
+    fake.add_issue(1504, 3, "棚卸しCSVの取り込み", assigned_to=8, version=33, updated_on=ts(800))
+
+
+def change_versions(fake) -> None:
+    """バージョンの変化の見本: 追加・外れた・完了・期日の変更。"""
+    fake.add_issue(1505, 2, "受注一覧に納期の列を追加", assigned_to=8, updated_on=ts(1))
+    fake.set_version(1505, 32)
+    fake.set_version(1503, None)
+    fake.set_status(1501, 5)
+    fake.update_version(32, due_date="2026-12-22")
 
 
 def main() -> None:
@@ -75,6 +95,7 @@ def main() -> None:
     p.add_argument("--lang", default="ja")
     p.add_argument("--theme", default="system")
     p.add_argument("--unread", action="store_true", help="2件のコメントを未読にしておく")
+    p.add_argument("--versions", action="store_true", help="基幹システムのバージョンをウォッチし、変化を記録しておく")
     args = p.parse_args()
 
     tmp = tempfile.mkdtemp(prefix="remi-demo-")
@@ -87,11 +108,13 @@ def main() -> None:
 
     from fake_redmine import API_KEY, FakeRedmine
 
+    from remi.api.client import RedmineClient
     from remi.context import AppContext
     from remi.server.api import RemiApi
     from remi.server.http import LocalServer
     from remi.store.db import open_database
     from remi.store.servers import Server
+    from remi.sync.engine import ServerSync
     from remi.sync.worker import SyncManager
 
     fake = FakeRedmine()
@@ -117,6 +140,14 @@ def main() -> None:
         end = time.monotonic() + 30
         while time.monotonic() < end and not (ctx.issues.unread_count(1, 1229) and ctx.issues.unread_count(1, 1301)):
             time.sleep(0.2)
+    if args.versions:
+        ctx.projects.set_setting(1, 1, "watch_versions", True)
+        engine = ServerSync(db, 1, RedmineClient(fake.base_url, API_KEY, min_interval=0))
+        engine.sync_versions()
+        change_versions(fake)
+        engine.sync_versions()
+        engine.client.close()
+        ctx.bus.publish("versionsChanged", serverId=1, versionIds=[])
     print(server.start_url, flush=True)
     try:
         while True:

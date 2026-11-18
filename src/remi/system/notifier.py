@@ -93,6 +93,8 @@ class Notifier:
         # 一覧に出さないチケット(表示するチケット・絞り込みの選択から外れたもの)は通知しない。
         # ツリー・一覧・トレイの未読数と同じ判定にする
         row = self.ctx.issues.get(server_id, comment["issue_id"])
+        if row is not None and not row.relation_flags:
+            return False  # 自分と関係ない(バージョンで見ている)チケット
         if row is not None and not self.ctx.relation_scope().matches(server_id, row.project_id, row.relation_flags):
             return False
         # 表示中(ウィンドウがアクティブで開いている)のチケットは通知しない

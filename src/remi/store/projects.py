@@ -12,9 +12,9 @@ PROJECT_STATUS_ACTIVE = 1
 PROJECT_STATUS_CLOSED = 5
 PROJECT_STATUS_ARCHIVED = 9
 
-SETTING_KEYS = ("notify", "watch_authored")
+SETTING_KEYS = ("notify", "watch_authored", "watch_versions")
 # ルートでの既定値(None = サーバー設定に従う)
-ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_authored": False}
+ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_authored": False, "watch_versions": False}
 
 
 @dataclass(frozen=True)

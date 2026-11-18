@@ -150,6 +150,10 @@ class RedmineClient:
     def issues(self, **filters: Any) -> list[dict[str, Any]]:
         return list(self.paged("/issues.json", "issues", filters))
 
+    def versions(self, project_id: int) -> list[dict[str, Any]]:
+        """プロジェクトのバージョン(ほかのプロジェクトから共有されたものを含む)。ページングはない。"""
+        return self.get_json(f"/projects/{project_id}/versions.json").get("versions", [])
+
     def issue_count(self, **filters: Any) -> int:
         data = self.get_json("/issues.json", {**filters, "limit": 1})
         return int(data.get("total_count", 0))

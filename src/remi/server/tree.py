@@ -40,7 +40,18 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
         # 表示するプロジェクトは、表示の選択で隠したチケットも含めて決める(選択を変えるたびに
         # ツリーの形が変わらないように)
         monitored = set(ctx.issues.count_by_project(sid))
-        visible = visible_projects(projects, monitored, s.show_all_projects)
+        # ウォッチしているバージョンは、それを持つプロジェクトの下に出す(チケットがなくてもプロジェクトを出す)
+        versions: dict[int, list[dict[str, Any]]] = {}
+        progress = ctx.versions.progress(sid)
+        version_unread = ctx.versions.unread_counts(sid)
+        for v in ctx.versions.list(sid):
+            done, total = progress.get(v.version_id, (0, 0))
+            versions.setdefault(v.project_id, []).append({
+                "versionId": v.version_id, "name": v.name, "status": v.status, "closed": v.closed,
+                "dueDate": v.due_date, "done": done, "total": total,
+                "changed": version_unread.get(v.version_id, 0) > 0,
+            })
+        visible = visible_projects(projects, monitored | (set(versions) & set(by_id)), s.show_all_projects)
         children: dict[int | None, list[Project]] = {}
         for pid in visible:
             p = by_id[pid]
@@ -59,6 +70,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 # 表示するチケット(継承を解決済み)と、このプロジェクト自身で設定しているか
                 "relations": [r for r in RELATIONS if r in relations.get(p.project_id, server_relations)],
                 "relationsOwn": p.project_id in own,
+                "versions": versions.get(p.project_id, []),
                 "children": kids,
             }
 

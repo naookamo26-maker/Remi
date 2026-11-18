@@ -565,3 +565,50 @@ def test_selecting_tree_item_closes_conversation_and_keeps_draft(page, remi, fak
     page.locator(".issue", has_text="CSVが文字化けする").click()
     playwright_api.expect(conv.get_by_role("textbox", name="コメント")).to_have_value("書きかけ", timeout=15000)
     assert not page.errors, page.errors
+
+
+def test_roadmap_versions(page, remi, fake):
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_version(6, 2, "v0.9", status="closed")
+    fake.add_issue(20, 2, "関係ないチケット", assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    # プロジェクトの右クリックメニューで「未完了のバージョンをウォッチ」をオンにする
+    page.locator(".tree .node", has_text="基幹システム").click(button="right")
+    page.get_by_role("group", name="未完了のバージョンをウォッチ").get_by_role("button", name="オン").click()
+    roadmap = page.locator(".tree .node.roadmap").first
+    playwright_api.expect(roadmap).to_be_visible(timeout=20000)
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible()
+    # 終了したバージョンは畳んでおく
+    playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_have_count(0)
+    page.locator(".tree .node.version-group").click()
+    playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_be_visible()
+    # バージョンを選ぶと、関係ないチケットも一覧に出て、右に概要が出る(ほかの一覧の件数は変わらない)
+    version.click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(page.locator(".issue")).to_contain_text("関係ないチケット")
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    playwright_api.expect(conv).to_contain_text("まだ変化はありません")
+    # 変化が届くと、表示中のバージョンの記録に出る
+    fake.add_issue(21, 2, "追加されたチケット", assigned_to=7)
+    fake.set_version(21, 5)
+    remi.sync.sync_now()
+    playwright_api.expect(conv.locator(".version-event.added")).to_contain_text("#21", timeout=20000)
+    # チケットを開いてから、同じバージョンをもう一度押すと、変化の記録に戻る
+    page.locator(".issue", has_text="関係ないチケット").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("関係ないチケット", timeout=15000)
+    version.click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    # 別の項目を選ぶと閉じる。ロードマップを畳んでも、変化があれば印が出る
+    page.locator(".tree .node", has_text="すべて").first.click()
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    roadmap.click()
+    playwright_api.expect(version).to_have_count(0)
+    fake.set_version(20, None)
+    remi.sync.sync_now()
+    playwright_api.expect(roadmap.locator(".dot.changed")).to_be_visible(timeout=20000)
+    assert not page.errors, page.errors

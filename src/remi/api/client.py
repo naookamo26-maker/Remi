@@ -196,6 +196,10 @@ class RedmineClient:
         data = self.issue(issue_id, include="allowed_statuses")
         return data.get("allowed_statuses")
 
+    def role(self, role_id: int) -> dict[str, Any]:
+        """ロールと、その権限(permissions)。管理者でなくてもAPIからは読める。"""
+        return self.get_json(f"/roles/{role_id}.json")["role"]
+
     def memberships(self, project_id: int) -> list[dict[str, Any]]:
         return list(self.paged(f"/projects/{project_id}/memberships.json", "memberships"))
 

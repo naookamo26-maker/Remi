@@ -15,6 +15,55 @@ REL_WATCHING = 2
 REL_AUTHORED = 4
 REL_GROUP = 8  # グループ経由の担当
 
+# 表示するチケットの選択(設計書 §5.1)に使う関係の名前。担当は「自分」と「グループ経由」を分けて選べる
+RELATIONS = ("assigned", "group", "watching", "authored")
+_RELATION_SQL = {
+    "assigned": f"(i.relation_flags & {REL_ASSIGNED} AND NOT i.relation_flags & {REL_GROUP})",
+    "group": f"(i.relation_flags & {REL_GROUP})",
+    "watching": f"(i.relation_flags & {REL_WATCHING})",
+    "authored": f"(i.relation_flags & {REL_AUTHORED})",
+}
+
+
+# 一覧の絞り込みボタン(設定 relation_filter)が選ぶ関係。グループ経由の担当は「担当」に含める
+FILTER_RELATIONS: dict[str, tuple[str, ...] | None] = {
+    "all": None, "assigned": ("assigned", "group"), "watching": ("watching",), "authored": ("authored",),
+}
+
+
+def shown_relations(visible: list[str] | None, relation_filter: str | None) -> list[str]:
+    """一覧に出す関係: 表示するチケット(visible)を、絞り込みボタン(relation_filter)でさらに絞ったもの。
+
+    一覧・ツリーの件数と未読数・トレイの未読数で同じものを使い、数を一致させる。
+    表示しないことにした関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+    """
+    vis = [r for r in RELATIONS if visible is None or r in visible] or list(RELATIONS)
+    want = FILTER_RELATIONS.get(relation_filter or "all")
+    if want is None:
+        return vis
+    return [r for r in vis if r in want] or vis
+
+
+def matches_relations(flags: int, relations: list[str] | None) -> bool:
+    """relation_flags が、relations のどれかの関係を持つか(relation_condition と同じ判定をPythonで行う)。"""
+    if relations is None or set(RELATIONS) <= set(relations):
+        return True
+    has = {
+        "assigned": bool(flags & REL_ASSIGNED) and not flags & REL_GROUP,
+        "group": bool(flags & REL_GROUP),
+        "watching": bool(flags & REL_WATCHING),
+        "authored": bool(flags & REL_AUTHORED),
+    }
+    return any(has[r] for r in relations if r in has)
+
+
+def relation_condition(include: list[str] | tuple[str, ...] | set[str] | None) -> str:
+    """表示する関係(include)のどれかを持つチケットに絞るSQLの条件。None やすべての関係なら絞らない。"""
+    if include is None or set(RELATIONS) <= set(include):
+        return "1=1"
+    parts = [_RELATION_SQL[r] for r in RELATIONS if r in include]
+    return f"({' OR '.join(parts)})" if parts else "0=1"
+
 
 def utcnow() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -195,8 +244,8 @@ class IssueStore:
     # --- 一覧・未読 -------------------------------------------------------------
     def list_issues(self, server_ids: list[int] | None = None, project_ids: set[int] | None = None,
                     *, include_unmonitored: bool = False, unread_only: bool = False,
-                    search: str = "") -> list[IssueRow]:
-        where = ["1=1"]
+                    search: str = "", relations: list[str] | None = None) -> list[IssueRow]:
+        where = [relation_condition(relations)]
         params: list[Any] = []
         if not include_unmonitored:
             where.append("i.monitored = 1")
@@ -233,19 +282,22 @@ class IssueStore:
             rows = [r for r in rows if r.unread > 0]
         return rows
 
-    def unread_by_project(self, server_id: int) -> dict[int, int]:
+    def unread_by_project(self, server_id: int, relations: list[str] | None = None) -> dict[int, int]:
+        """プロジェクトごとの未読数。relations を渡すと、その関係のチケットだけを数える。"""
         sql = f"""
             SELECT i.project_id, SUM({_UNREAD_SQL}) FROM issues i
             JOIN servers s ON s.server_id = i.server_id
             LEFT JOIN read_state rs ON rs.server_id = i.server_id AND rs.issue_id = i.issue_id
-            WHERE i.server_id = ? AND i.monitored = 1
+            WHERE i.server_id = ? AND i.monitored = 1 AND {relation_condition(relations)}
             GROUP BY i.project_id
         """
         return {r[0]: int(r[1] or 0) for r in self.db.query(sql, (server_id,))}
 
-    def count_by_project(self, server_id: int) -> dict[int, int]:
+    def count_by_project(self, server_id: int, relations: list[str] | None = None) -> dict[int, int]:
+        """プロジェクトごとの件数。relations を渡すと、その関係のチケットだけを数える。"""
         return {r[0]: r[1] for r in self.db.query(
-            "SELECT project_id, COUNT(*) FROM issues WHERE server_id = ? AND monitored = 1 GROUP BY project_id",
+            f"SELECT i.project_id, COUNT(*) FROM issues i WHERE i.server_id = ? AND i.monitored = 1 "
+            f"AND {relation_condition(relations)} GROUP BY i.project_id",
             (server_id,))}
 
     def unread_count(self, server_id: int, issue_id: int) -> int:

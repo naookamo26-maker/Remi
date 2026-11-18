@@ -3,6 +3,7 @@ import { call } from "./api.js";
 import { clear, countText, debounce, h } from "./dom.js";
 import { formatShort, t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { visibleRelations } from "./tree.js";
 import { contextMenu } from "./ui.js";
 
 const RELATION_LABELS = { assigned: "list.assigned", group: "list.group", watching: "list.watching", authored: "list.authored" };
@@ -34,15 +35,17 @@ export class IssueList {
     // 関係での絞り込み(すべて / 担当 / ウォッチ / 作成)
     this.relationButtons = ["all", "assigned", "watching", "authored"].map((value) =>
       h("button", { type: "button", dataset: { value }, "aria-pressed": "false",
-        onClick: () => app.saveSetting("relation_filter", value).then(() => this.refresh()) },
+        // ツリーの件数・未読数も絞り込みに合わせるので、ツリーも読み直す
+        onClick: () => app.saveSetting("relation_filter", value).then(() => Promise.all([this.refresh(), app.tree.refresh()])) },
         t(`list.filter.${value}`)));
+    this.relationGroup = h("div", { class: "segmented", role: "group", "aria-label": t("list.filter.label") }, this.relationButtons);
     this.el = h("ul", { class: "issue-list", role: "listbox", "aria-label": t("list.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.root = h("section", { class: "pane pane-list", "aria-label": t("list.label") },
       h("div", { class: "list-header" },
         h("div", { class: "list-title" }, this.title, this.crumb),
         h("label", { class: "search" }, icon("search"), this.searchInput),
-        h("div", { class: "segmented", role: "group", "aria-label": t("list.filter.label") }, this.relationButtons),
+        this.relationGroup,
         h("div", { class: "toggles" },
           h("label", {}, this.unreadFirst, t("list.unreadFirst")),
           h("label", {}, this.showClosed, t("list.showClosed")))),
@@ -55,7 +58,7 @@ export class IssueList {
     if (sel.serverId) params.serverId = sel.serverId;
     if (sel.projectId) params.projectId = sel.projectId;
     if (sel.kind === "unread") params.unreadOnly = true;
-    params.relation = this.app.settings.relation_filter || "all";
+    params.relation = this.relationFilter();
     const token = Symbol();
     this._token = token;
     const res = await call("listIssues", params);
@@ -70,8 +73,14 @@ export class IssueList {
     this.crumb.textContent = [crumb, t("list.count", { count: this.issues.length })].filter(Boolean).join(" · ");
     this.unreadFirst.checked = !!this.app.settings.unread_first;
     this.showClosed.checked = !!this.app.settings.show_closed;
-    const rel = this.app.settings.relation_filter || "all";
-    for (const b of this.relationButtons) b.setAttribute("aria-pressed", String(b.dataset.value === rel));
+    const rel = this.relationFilter();
+    const shown = this.shownFilters();
+    for (const b of this.relationButtons) {
+      b.setAttribute("aria-pressed", String(b.dataset.value === rel));
+      b.hidden = !shown.includes(b.dataset.value);
+    }
+    // 絞り込める関係が1つだけなら「すべて」と同じなので、ボタンごと隠す
+    this.relationGroup.hidden = shown.length <= 2;
     const scroll = this.el.scrollTop;
     clear(this.el);
     if (!this.issues.length) {
@@ -102,6 +111,20 @@ export class IssueList {
           preview ? h("span", { class: "preview" }, preview) : null)));
     }
     this.el.scrollTop = scroll;
+  }
+
+  /** 絞り込みのボタンのうち、表示するチケット(ツリーの上で選ぶ)に含まれる関係のもの */
+  shownFilters() {
+    const vis = visibleRelations(this.app.settings);
+    const has = { all: true, assigned: vis.includes("assigned") || vis.includes("group"),
+      watching: vis.includes("watching"), authored: vis.includes("authored") };
+    return Object.keys(has).filter((k) => has[k]);
+  }
+
+  /** 今の絞り込み。表示しないことにした関係で絞り込んでいたら「すべて」に戻す */
+  relationFilter() {
+    const rel = this.app.settings.relation_filter || "all";
+    return this.shownFilters().includes(rel) ? rel : "all";
   }
 
   markSelected() {

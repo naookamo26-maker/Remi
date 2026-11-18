@@ -17,6 +17,7 @@ from typing import Any
 from remi import APP_NAME
 from remi.context import AppContext
 from remi.i18n import resolve_language, t
+from remi.store.issues import matches_relations, shown_relations
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,12 @@ class Notifier:
         project = self.ctx.projects.effective_setting(server_id, comment["project_id"], "notify")
         enabled = server.notify_enabled if project is None else project
         if not enabled:
+            return False
+        # 一覧に出さないチケット(表示するチケット・絞り込みの選択から外れたもの)は通知しない。
+        # ツリー・一覧・トレイの未読数と同じ判定にする
+        relations = shown_relations(self.ctx.settings.get("visible_relations"), self.ctx.settings.get("relation_filter"))
+        row = self.ctx.issues.get(server_id, comment["issue_id"])
+        if row is not None and not matches_relations(row.relation_flags, relations):
             return False
         # 表示中(ウィンドウがアクティブで開いている)のチケットは通知しない
         open_ = getattr(self.api, "open_issue", None)

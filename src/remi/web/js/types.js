@@ -125,6 +125,18 @@
  * @property {{id: number, name: string}[]} priorities
  * @property {number|null} me
  * @property {{status_id: number|null, assigned_to_id: number|null, priority_id: number|null}} current
+ * @property {WritePermissions} permissions  書き込めるか(できない操作の入力欄は無効にする)
+ */
+
+/**
+ * このチケットに書き込めるか(getEditOptions の permissions)。権限が分からないときはすべて true。
+ * @typedef {object} WritePermissions
+ * @property {boolean} editFields          ステータス・担当者・優先度を変えられる
+ * @property {boolean} changeStatus        ステータスを変えられる(ワークフロー上の遷移先がない場合は false)
+ * @property {boolean} comment             コメントを書ける
+ * @property {boolean} privateNotes        プライベートコメントにできる
+ * @property {boolean} attach              ファイルを添付できる
+ * @property {"project_closed"|"no_permission"|null} reason  何も書き込めない理由
  */
 
 /** @typedef {"status_id"|"assigned_to_id"|"priority_id"} FieldKey ヘッダで変更できる項目 */

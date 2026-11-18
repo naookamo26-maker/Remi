@@ -10,7 +10,9 @@ export function closeMenu() {
   openMenu = null;
 }
 
-// items: {label, onClick, disabled} | {sep:true} | {label, hint:true} | {segmented: {label, options:[{label, value}], value, onChange}, hint}
+// items: {label, onClick, disabled, checked, keepOpen} | {sep:true} | {label, hint:true}
+//      | {segmented: {label, options:[{label, value}], value, onChange}, hint}
+// keepOpen: 押してもメニューを閉じない(チェックを続けて切り替えるとき)。onClick が返した真偽値(Promise可)をチェックの状態にする
 export function contextMenu(x, y, items) {
   closeMenu();
   const menu = h("div", { class: "menu", role: "menu" });
@@ -28,9 +30,23 @@ export function contextMenu(x, y, items) {
       if (it.hint) menu.append(h("div", { class: "hint" }, it.hint));
     } else if (it.hint) menu.append(h("div", { class: "hint" }, it.label));
     else {
-      menu.append(h("button", { type: "button", role: "menuitem", disabled: it.disabled,
-        onClick: () => { closeMenu(); it.onClick(); } },
-        it.checked !== undefined ? h("span", { class: "check" }, it.checked ? icon("check") : "") : null, it.label));
+      const checkable = it.checked !== undefined;
+      const check = checkable ? h("span", { class: "check" }, it.checked ? icon("check") : "") : null;
+      const button = h("button", { type: "button", role: checkable ? "menuitemcheckbox" : "menuitem", disabled: it.disabled,
+        "aria-checked": checkable ? String(!!it.checked) : null,
+        onClick: async () => {
+          if (!it.keepOpen) {
+            closeMenu();
+            it.onClick();
+            return;
+          }
+          const on = await it.onClick();
+          if (typeof on === "boolean" && check) {
+            check.replaceChildren(...(on ? [icon("check")] : []));
+            button.setAttribute("aria-checked", String(on));
+          }
+        } }, check, it.label);
+      menu.append(button);
     }
   }
   document.body.append(menu);

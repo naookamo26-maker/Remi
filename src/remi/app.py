@@ -41,7 +41,7 @@ class WebviewWindow:
         import webview
 
         self.window = webview.create_window(
-            APP_NAME, url, width=1280, height=800, min_size=(900, 560), hidden=self.start_hidden,
+            f"{APP_NAME} {__version__}", url, width=1280, height=800, min_size=(900, 560), hidden=self.start_hidden,
             background_color="#1E1F22" if self._dark() else "#FFFFFF", text_select=True,
         )
         self.window.events.closing += self._on_closing

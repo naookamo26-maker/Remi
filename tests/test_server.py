@@ -217,6 +217,95 @@ def test_relation_filter(app, fake):
     assert app.rpc("setSetting", key="relation_filter", value="watching")["relation_filter"] == "watching"
 
 
+def test_visible_relations_filter_list_and_tree(app, fake):
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(11, 1, "ウォッチ", assigned_to=7, watchers={ME})
+    fake.add_issue(13, 1, "グループ", assigned_to=100)
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 3)
+    fake.add_journal(11, 7, "未読のコメント")
+    app.rpc("syncNow")
+    assert wait_until(lambda: app.rpc("getTree")["unread"] == 1)
+    ids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues")["issues"])  # noqa: E731
+    assert ids() == [10, 11, 13]
+
+    # ウォッチ中を表示しない: 一覧からも、ツリーの件数・未読数からも外れる(プロジェクトは残す)
+    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "authored"])
+    assert ids() == [10, 13]
+    tree = app.rpc("getTree")
+    [server] = tree["servers"]
+    assert server["count"] == 2 and server["unread"] == 0 and tree["unread"] == 0
+    assert server["projects"][0]["count"] == 2
+    # 絞り込みボタンで絞ると、ツリーの件数・未読数とトレイの未読数も一覧と一致する
+    from remi.system.tray import Tray
+
+    tray = Tray(app.ctx, on_open=lambda: None, on_settings=lambda: None, on_sync=lambda: None, on_quit=lambda: None)
+    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "watching", "authored"])
+    app.rpc("setSetting", key="relation_filter", value="watching")
+    assert sorted(i["issueId"] for i in app.rpc("listIssues", relation="watching")["issues"]) == [11]
+    server = app.rpc("getTree")["servers"][0]
+    assert server["count"] == 1 and server["unread"] == 1 and tray.unread_total() == 1
+    app.rpc("setSetting", key="relation_filter", value="assigned")
+    server = app.rpc("getTree")["servers"][0]
+    assert server["count"] == 2 and server["unread"] == 0 and tray.unread_total() == 0
+    # 表示しないことにした関係で絞り込んでいたら「すべて」として扱う(画面ではボタンが隠れる)
+    app.rpc("setSetting", key="visible_relations", value=["watching"])
+    assert app.rpc("getTree")["servers"][0]["count"] == 1 and tray.unread_total() == 1
+    app.rpc("setSetting", key="relation_filter", value="all")
+    # 自分の担当だけ: グループ経由の担当は外れる
+    app.rpc("setSetting", key="visible_relations", value=["assigned"])
+    assert ids() == [10]
+    assert app.rpc("getTree")["servers"][0]["count"] == 1
+    # 何も選ばない・知らない関係は受け付けない
+    for bad in ([], ["x"], ["assigned", "assigned"], "assigned"):
+        assert app.rpc_error("setSetting", key="visible_relations", value=bad)["code"] == "invalid_setting"
+
+
+def test_write_permissions(app, fake):
+    fake.add_project(1, "A")
+    fake.add_project(2, "終了したプロジェクト", status=5)
+    fake.add_project(3, "メンバーでない")
+    fake.members[1] = [ME, 7]
+    fake.add_issue(10, 1, "x")
+    fake.add_issue(20, 2, "y")
+    fake.add_issue(30, 3, "z", assigned_to=7, watchers={ME})
+    fake.my_roles = {1: [3]}
+    fake.roles = {3: ["view_issues", "add_issue_notes"]}
+    sid = _register(app, fake)
+    assert wait_until(lambda: all(app.ctx.issues.get(sid, i) for i in (10, 20, 30)))
+    perms = lambda iid: app.rpc("getEditOptions", serverId=sid, issueId=iid)["permissions"]  # noqa: E731
+
+    # コメントだけできるロール
+    assert perms(10) == {"editFields": False, "changeStatus": False, "comment": True, "privateNotes": False,
+                         "attach": True, "reason": None}
+    # 終了したプロジェクトには書き込めない
+    assert perms(20) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
+                         "attach": False, "reason": "project_closed"}
+    # メンバーでない(権限が分からない)ときは制限しない
+    assert perms(30)["editFields"] and perms(30)["comment"]
+
+    # 権限はしばらく覚えておくので、変えたら覚えた分を捨てる
+    fake.roles = {3: ["view_issues"], 4: ["edit_issues", "add_issue_notes", "set_notes_private"]}
+    fake.my_roles = {1: [3]}
+    app.api._role_perms.clear()
+    assert perms(10) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
+                         "attach": False, "reason": "no_permission"}
+    fake.my_roles = {1: [3, 4]}
+    app.api._my_roles.clear()
+    assert perms(10)["reason"] is None
+    assert perms(10)["editFields"] and perms(10)["changeStatus"] and perms(10)["privateNotes"]
+    # ワークフロー上の遷移先がなければ、ステータスだけ変えられない
+    fake.allowed_status_ids = []
+    assert not perms(10)["changeStatus"] and perms(10)["editFields"]
+    fake.allowed_status_ids = None
+    # 管理者は何でもできる
+    fake.my_roles = {}
+    fake.admin = True
+    app.api._my_roles.clear()
+    assert perms(10)["editFields"] and perms(30)["comment"]
+
+
 def test_edit_upload_and_watch(app, fake):
     fake.add_project(1, "A")
     fake.members[1] = [ME, 7]

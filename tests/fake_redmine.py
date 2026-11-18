@@ -55,6 +55,12 @@ class FakeRedmine:
         self.max_upload = 5 * 1024 * 1024
         self.members: dict[int, list[int]] = {}  # project_id -> user_id
         self.allowed_statuses_supported = True
+        # 書き込めるかの判定に使う: 自分のメンバーシップ(project_id → ロールID)とロールの権限。
+        # my_roles が None なら /users/current.json に memberships を返さない(権限が分からない)
+        self.my_roles: dict[int, list[int]] | None = None
+        self.roles: dict[int, list[str]] = {}
+        self.admin = False
+        self.allowed_status_ids: list[int] | None = None  # None ならすべてのステータスに遷移できる
         self._lock = threading.RLock()
 
     # --- テスト用のデータ操作 ------------------------------------------------
@@ -226,7 +232,18 @@ class FakeRedmine:
             if path == "/users/current.json":
                 u = dict(self.users[self.me])
                 u["groups"] = self.groups if self.me == ME else []
+                u["admin"] = self.admin
+                if self.my_roles is not None and "memberships" in query.get("include", ""):
+                    u["memberships"] = [{"id": i, "project": {"id": pid, "name": ""},
+                                         "roles": [{"id": r, "name": f"role{r}"} for r in rids]}
+                                        for i, (pid, rids) in enumerate(self.my_roles.items(), 1)]
                 return 200, {"user": u}
+            m = re.match(r"^/roles/(\d+)\.json$", path)
+            if m:
+                rid = int(m.group(1))
+                if rid not in self.roles:
+                    return 404, {}
+                return 200, {"role": {"id": rid, "name": f"role{rid}", "permissions": self.roles[rid]}}
             if path == "/projects.json":
                 return 200, self._page(self.projects, query, "projects")
             if path == "/issue_statuses.json":
@@ -261,7 +278,8 @@ class FakeRedmine:
                     issue["watchers"] = [self._user_ref(u) for u in self.watchers[iid]]
                 if "allowed_statuses" in inc and self.allowed_statuses_supported:
                     issue["allowed_statuses"] = [{"id": x["id"], "name": x["name"], "is_closed": x["is_closed"]}
-                                                 for x in self.statuses]
+                                                 for x in self.statuses
+                                                 if self.allowed_status_ids is None or x["id"] in self.allowed_status_ids]
                 return 200, {"issue": issue}
             if path == "/uploads.json" and method == "POST":
                 if len(body) > self.max_upload:

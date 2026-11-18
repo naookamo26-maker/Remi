@@ -31,6 +31,11 @@ export class Conversation {
     this.changes = {};
     /** @type {EditOptions|null} ヘッダの選択肢(Redmineに問い合わせて別に読み込む) */
     this.editOptions = null;
+    /**
+     * @type {import("./types.js").WritePermissions|null} 書き込めるか(null: まだ分からない)。
+     * 選択肢を読み直す間も、同じチケットのあいだは前の値を使う(入力欄が一瞬有効になるのを避ける)
+     */
+    this.permissions = null;
     this.header = new IssueHeader(this);
     /** @type {Composer|null} */
     this.composer = null;
@@ -74,6 +79,7 @@ export class Conversation {
     if (!sameIssue) {
       this.changes = {};
       this.editOptions = null;
+      this.permissions = null;
     }
     const prev = this.timeline;
     const atBottom = this.isNearBottom();
@@ -103,7 +109,9 @@ export class Conversation {
       const d = this.data;
       if (!d || d.serverId !== serverId || d.issueId !== issueId) return;
       this.editOptions = opts;
+      this.permissions = opts.permissions;
       this.header.fill();
+      this.composer?.update();
     } catch (e) {
       this.header.showError(e.code);
     }

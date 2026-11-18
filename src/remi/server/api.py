@@ -26,8 +26,8 @@ from remi.paths import attachment_cache_dir
 from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
 from remi.server.tree import build_tree
-from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING
-from remi.store.projects import SETTING_KEYS
+from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS, shown_relations
+from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
 from remi.store.servers import POLL_INTERVALS, Server
 
 log = logging.getLogger(__name__)
@@ -49,12 +49,16 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "tree_collapsed": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
     "redmine_open_in": lambda v: v in ("app", "browser"),
     "relation_filter": lambda v: v in RELATION_FILTERS,
+    "visible_relations": lambda v: (isinstance(v, list) and len(v) > 0 and len(set(v)) == len(v)
+                                    and all(x in RELATIONS for x in v)),
 }
 # 一覧の絞り込み(設計書 §5.1)
 RELATION_FILTERS = {"all": 0, "assigned": REL_ASSIGNED, "watching": REL_WATCHING, "authored": REL_AUTHORED}
 # 画面から変更できる項目(設計書 §6.2)
 EDITABLE = ("status_id", "assigned_to_id", "priority_id")
 MEMBERS_TTL = 600
+# 自分のロールと、ロールの権限を覚えておく時間(書き込みできるかの判定に使う)
+PERMISSIONS_TTL = 600
 # サーバーから取得したデータ(認証ユーザーの権限で見えるもの)と、その利用者の状態を持つテーブル。
 # 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
 SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters")
@@ -123,6 +127,10 @@ class RemiApi:
         self.open_issue: tuple[int, int] | None = None
         self.active = True
         self._members: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
+        # server_id → (取得した時刻, 管理者か, project_id → ロールID)
+        self._my_roles: dict[int, tuple[float, bool, dict[int, set[int]]]] = {}
+        # (server_id, role_id) → (取得した時刻, 権限)
+        self._role_perms: dict[tuple[int, int], tuple[float, set[str]]] = {}
         self._members_lock = threading.Lock()
 
     def methods(self) -> dict[str, Callable]:
@@ -265,6 +273,9 @@ class RemiApi:
         with self._members_lock:
             for key in [k for k in self._members if k[0] == server_id]:
                 del self._members[key]
+            for key in [k for k in self._role_perms if k[0] == server_id]:
+                del self._role_perms[key]
+            self._my_roles.pop(server_id, None)
         if self.open_issue is not None and self.open_issue[0] == server_id:
             # 同期を動かし直したときに、前のユーザーで開いていたチケットを取りに行かない
             self.setOpenIssue(None, None)
@@ -322,16 +333,15 @@ class RemiApi:
         if serverId and projectId:
             project_ids = {projectId} | self.ctx.projects.descendants(serverId, projectId)
         show_closed = bool(self.ctx.settings.get("show_closed"))
-        rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
-                                           unread_only=unreadOnly, search=search)
         if relation not in RELATION_FILTERS:
             raise RpcError("invalid_input", "relation")
-        want = RELATION_FILTERS[relation]
+        # 表示するチケットと絞り込みボタンの選択。ツリーの件数・未読数とトレイの未読数も同じもので数える
+        relations = shown_relations(self.ctx.settings.get("visible_relations"), relation)
+        rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
+                                           unread_only=unreadOnly, search=search, relations=relations)
         names: dict[int, dict[str, Any]] = {}
         out = []
         for r in rows:
-            if want and not r.relation_flags & want:
-                continue
             n = names.get(r.server_id)
             if n is None:
                 n = names[r.server_id] = {
@@ -531,9 +541,87 @@ class RemiApi:
             self._members[key] = (time.monotonic(), members)
         return members
 
+    def _my_project_roles(self, server_id: int) -> tuple[bool, dict[int, set[int]]]:
+        """自分が管理者か と、プロジェクトごとの自分のロール(グループ経由を含む)。"""
+        with self._members_lock:
+            cached = self._my_roles.get(server_id)
+            if cached and time.monotonic() - cached[0] < PERMISSIONS_TTL:
+                return cached[1], cached[2]
+        u = self._client(server_id).current_user()
+        roles: dict[int, set[int]] = {}
+        for m in u.get("memberships") or []:
+            pid = (m.get("project") or {}).get("id")
+            if pid is not None:
+                roles.setdefault(int(pid), set()).update(int(r["id"]) for r in m.get("roles") or [] if "id" in r)
+        admin = bool(u.get("admin"))
+        with self._members_lock:
+            self._my_roles[server_id] = (time.monotonic(), admin, roles)
+        return admin, roles
+
+    def _permissions_of(self, server_id: int, role_id: int) -> set[str]:
+        key = (server_id, role_id)
+        with self._members_lock:
+            cached = self._role_perms.get(key)
+            if cached and time.monotonic() - cached[0] < PERMISSIONS_TTL:
+                return cached[1]
+        perms = {str(p) for p in self._client(server_id).role(role_id).get("permissions") or []}
+        with self._members_lock:
+            self._role_perms[key] = (time.monotonic(), perms)
+        return perms
+
+    def _project_permissions(self, server_id: int, project_id: int) -> set[str] | None:
+        """このプロジェクトでの自分の権限。管理者なら {"admin"}。分からなければ None。
+
+        分からないのは、メンバーでないプロジェクト(公開プロジェクトの非メンバー、親プロジェクトからの
+        メンバーの継承)、古いRedmine、問い合わせに失敗したとき。そのときは書き込みを制限しない
+        (できなければ送信時にRedmineが拒否する)。
+        """
+        try:
+            admin, roles = self._my_project_roles(server_id)
+            if admin:
+                return {"admin"}
+            role_ids = roles.get(project_id)
+            if not role_ids:
+                return None
+            perms: set[str] = set()
+            for rid in role_ids:
+                perms |= self._permissions_of(server_id, rid)
+            return perms
+        except (RedmineError, RpcError, KeyError, TypeError, ValueError) as e:
+            log.info("permissions unavailable for server %s project %s: %s", server_id, project_id, e)
+            return None
+
+    def _write_permissions(self, server: Server, row, allowed: list[dict[str, Any]] | None) -> dict[str, Any]:
+        """このチケットに書き込めるか(設計書 §6.2)。画面は、できない操作の入力欄を無効にする。
+
+        Redmineの判定(Issue#attributes_editable? / notes_addable?)に合わせる:
+        項目(ステータス・担当者・優先度)の変更は edit_issues(自分が作成したチケットなら edit_own_issues)、
+        コメントは add_issue_notes、プライベートコメントは set_notes_private が要る。
+        終了したプロジェクトのチケットには書き込めない。
+        """
+        project = self.ctx.projects.get(server.server_id, row.project_id)
+        if project is not None and project.status != PROJECT_STATUS_ACTIVE:
+            return {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
+                    "attach": False, "reason": "project_closed"}
+        perms = self._project_permissions(server.server_id, row.project_id)
+        if perms is None or "admin" in perms:
+            edit = comment = private = True
+        else:
+            own = row.author_id is not None and row.author_id == server.my_user_id
+            edit = "edit_issues" in perms or ("edit_own_issues" in perms and own)
+            comment = "add_issue_notes" in perms
+            private = "set_notes_private" in perms
+        # ワークフロー上、今のステータスから移れる先がなければ、ステータスは変えられない(Redmine 5.0 以降)
+        transitions = allowed is None or any(int(x["id"]) != row.status_id for x in allowed)
+        return {
+            "editFields": edit, "changeStatus": edit and transitions, "comment": comment,
+            "privateNotes": comment and private, "attach": edit or comment,
+            "reason": None if (edit or comment) else "no_permission",
+        }
+
     @rpc
     def getEditOptions(self, serverId: int, issueId: int) -> dict[str, Any]:  # noqa: N802,N803
-        """ヘッダで変更できる項目の選択肢。ステータスはワークフロー上遷移できるものだけにする。"""
+        """ヘッダで変更できる項目の選択肢と、書き込めるか。ステータスはワークフロー上遷移できるものだけにする。"""
         row = self.ctx.issues.get(serverId, issueId)
         server = self.ctx.servers.get(serverId)
         if row is None or server is None:
@@ -543,6 +631,7 @@ class RemiApi:
             members = self._members_of(serverId, row.project_id)
         except RedmineError as e:
             raise RpcError(e.code.value, e.detail) from e
+        permissions = self._write_permissions(server, row, allowed)
         closed = self.ctx.masters.closed_status_ids(serverId)
         status_names = self.ctx.masters.names(serverId, "status")
         if allowed is None:  # Redmine 5.0 より前: すべてのステータスを出し、だめならサーバーが拒否する
@@ -562,6 +651,7 @@ class RemiApi:
             "assignees": members, "priorities": priorities, "me": server.my_user_id,
             "current": {"status_id": row.status_id, "assigned_to_id": row.assigned_to_id,
                         "priority_id": row.priority_id},
+            "permissions": permissions,
         }
 
     @rpc

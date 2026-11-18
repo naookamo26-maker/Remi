@@ -11,6 +11,7 @@ const PATHS = {
   close: '<path d="M18 6 6 18M6 6l12 12"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  filter: '<path d="M3 5h18l-7 8v6l-4-2v-4z"/>',
 };
 
 export function icon(name, label = null) {

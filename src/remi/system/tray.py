@@ -11,6 +11,7 @@ from typing import Any
 from remi import APP_NAME
 from remi.context import AppContext
 from remi.i18n import resolve_language, t
+from remi.store.issues import shown_relations
 from remi.system import windows
 
 log = logging.getLogger(__name__)
@@ -166,7 +167,9 @@ class Tray:
         return resolve_language(self.ctx.settings.get("language"))
 
     def unread_total(self) -> int:
-        return sum(sum(self.ctx.issues.unread_by_project(s.server_id).values())
+        # ツリー・一覧と同じく、一覧に出すチケット(表示するチケットと絞り込みの選択)の未読だけを数える
+        relations = shown_relations(self.ctx.settings.get("visible_relations"), self.ctx.settings.get("relation_filter"))
+        return sum(sum(self.ctx.issues.unread_by_project(s.server_id, relations).values())
                    for s in self.ctx.servers.list(enabled_only=True))
 
     def status_text(self) -> str:

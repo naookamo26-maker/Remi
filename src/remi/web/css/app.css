@@ -57,15 +57,23 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 #app { height: 100%; }
 .layout { display: flex; height: 100%; overflow: hidden; }
 .pane { display: flex; flex-direction: column; min-width: 0; height: 100%; }
-/* 幅が足りないときは、ツリーと一覧が最小幅まで縮み、会話ペインの幅を確保する */
-.pane-tree { background: var(--surface); flex: 0 1 auto; min-width: 180px; }
+/* ツリーと一覧の幅は、利用者が仕切りで変えたとき(とウィンドウが狭すぎるとき)以外は変わらない。
+   会話ペインは残りの幅を使う。基準の幅を 0 にして、表示中のチケットの内容(長い行・表など)で
+   ほかのペインの幅が押し縮められないようにする。
+   ウィンドウが狭いときは一覧だけが最小幅まで縮み、ツリーの幅は保つ */
+.pane-tree { background: var(--surface); flex: 0 0 auto; min-width: 180px; }
 .pane-list { flex: 0 1 auto; min-width: 240px; background: var(--window); }
-.pane-conv { flex: 1 1 auto; min-width: 360px; background: var(--surface-alt); }
+.pane-conv { flex: 1 1 0; min-width: 360px; background: var(--surface-alt); }
 .splitter { flex: none; width: 5px; margin: 0 -2px; z-index: 2; cursor: col-resize; position: relative; }
 .splitter::after { content: ""; position: absolute; inset: 0 2px; background: var(--border); }
 .splitter:hover::after, .splitter.dragging::after { background: var(--accent); }
 
 /* ---- ツリー ---- */
+.tree-header { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--border); }
+.tree-header .brand { font-weight: 700; font-size: 14px; }
+.tree-header .version { color: var(--text-muted); font-size: 11px; }
+.tree-header .spacer { flex: 1; }
+.tree-header .btn.icon-only { width: 28px; min-height: 28px; }
 .tree { flex: 1 1 auto; overflow: auto; padding: 8px 6px; }
 .tree ul { list-style: none; margin: 0; padding: 0; }
 .node { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 8px; border-radius: 6px; cursor: pointer;
@@ -117,6 +125,10 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .unread-sep { color: var(--accent); font-weight: 700; }
 .unread-sep::before, .unread-sep::after { background: var(--accent); }
 .system { text-align: center; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+/* 1回の更新でまとめて行われた変更: 誰が・いつ を1回だけ出し、変更を1行ずつ並べる */
+.change-group { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.change-group .change-who { font-weight: 600; }
+.change-group .change-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .system .att-thumb { display: block; margin: 6px auto 0; max-width: 240px; max-height: 160px; border-radius: 6px; border: 1px solid var(--border); }
 .msg { display: flex; gap: 10px; align-items: flex-start; max-width: min(760px, 92%); }
 .msg.mine { align-self: flex-end; flex-direction: row-reverse; }
@@ -211,7 +223,7 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .server-list li:last-child { border-bottom: 0; }
 .server-list .info { flex: 1; min-width: 0; }
 .server-list .url { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.menu { position: fixed; z-index: 60; min-width: 220px; padding: 6px; border-radius: 8px; background: var(--window);
+.menu { position: fixed; z-index: 60; min-width: 220px; max-width: 320px; padding: 6px; border-radius: 8px; background: var(--window);
   border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .2); display: flex; flex-direction: column; }
 .menu button { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 10px; border: 0; background: transparent;
   text-align: left; border-radius: 4px; cursor: pointer; color: var(--text); }
@@ -247,6 +259,11 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
   background: var(--window); color: var(--text); font-size: 12px; }
 .fields select.changed { border-color: var(--accent); background: var(--selection); }
 .fields .static b { color: var(--text); font-weight: 500; }
+.fields select:disabled { opacity: .7; cursor: default; }
+.fields .read-only-note { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 4px;
+  background: var(--warning-bg); color: var(--warning-fg); }
+.composer textarea:disabled { background: var(--surface); color: var(--text-muted); cursor: not-allowed; }
+.composer .actions label.disabled { color: var(--text-muted); cursor: default; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: 12px;
   background: var(--selection); font-size: 12px; max-width: 100%; }

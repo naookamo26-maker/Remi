@@ -23,6 +23,14 @@ def now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+class WithHeaders:
+    """応答の本文に、ヘッダーを添える(テスト用)。"""
+
+    def __init__(self, payload, headers: dict[str, str]) -> None:
+        self.payload = payload
+        self.headers = headers
+
+
 class FakeRedmine:
     def __init__(self) -> None:
         self.users = {
@@ -55,6 +63,7 @@ class FakeRedmine:
         self.rest_enabled = True
         self.fail_next: int | None = None  # 次のリクエストを指定ステータスで失敗させる
         self.fail_next_put: int | None = None  # 次の更新(PUT)だけを失敗させる
+        self.fail_headers: dict[str, str] | None = None  # fail_next の応答に付けるヘッダー(Retry-After など)
         self.delay = 0.0  # 応答を遅らせる秒数(通信中に同期を止めるテスト用)
         self._next_journal = 1000
         self._next_upload = 0
@@ -291,7 +300,8 @@ class FakeRedmine:
             self.requests.append((method, path + ("?" + "&".join(f"{k}={v}" for k, v in sorted(query.items())) if query else "")))
             if self.fail_next is not None:
                 code, self.fail_next = self.fail_next, None
-                return code, {"errors": ["forced"]}
+                headers_, self.fail_headers = self.fail_headers, None
+                return code, WithHeaders({"errors": ["forced"]}, headers_ or {})
             if self.fail_next_put is not None and method == "PUT":
                 code, self.fail_next_put = self.fail_next_put, None
                 return code, {"errors": ["forced"]}
@@ -454,6 +464,9 @@ class FakeRedmine:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length) if length else b""
                 code, payload = fake.handle(method, u.path, q, self.headers, body)
+                extra: dict[str, str] = {}
+                if isinstance(payload, WithHeaders):
+                    payload, extra = payload.payload, payload.headers
                 if isinstance(payload, tuple):
                     content, ctype = payload
                     self.send_response(code)
@@ -464,6 +477,8 @@ class FakeRedmine:
                     return
                 data = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode()
                 self.send_response(code)
+                for k, v in extra.items():
+                    self.send_header(k, v)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()

@@ -724,3 +724,27 @@ def test_switching_user_clears_custom_field_definitions(app, fake):
     app.api._custom_fields[sid] = (time.monotonic(), [{"id": 1, "name": "管理者だけが見る項目"}])
     _save(app, fake, "key-b", sid)
     assert sid not in app.api._custom_fields
+
+
+def test_new_http_connections_do_not_accumulate_db_connections(app, db):
+    """ローカルHTTPサーバーは接続ごとにスレッドを作る。終了したスレッドのDB接続は閉じる(長期稼働でのリーク対策)。"""
+    for _ in range(30):
+        with requests.Session() as s:  # 毎回新しいTCP接続 = 新しいスレッド
+            s.trust_env = False
+            s.cookies.update(app.http.cookies)
+            assert s.post(f"{app.server.origin}/api/listServers", json={}).status_code == 200
+    time.sleep(0.2)  # 最後のハンドラースレッドが終わるのを待つ
+    db.conn()
+    with requests.Session() as s:
+        s.trust_env = False
+        s.cookies.update(app.http.cookies)
+        s.post(f"{app.server.origin}/api/listServers", json={})
+    assert db.open_connections < 10
+
+
+def test_save_server_rejects_one_minute_poll_interval(app, fake):
+    probe = app.rpc("testConnection", url=fake.base_url, apiKey=API_KEY)
+    err = app.rpc_error("saveServer", data={
+        "name": "S", "url": fake.base_url, "apiKey": API_KEY, "textFormat": "common_mark",
+        "pollInterval": 60, "userId": probe["userId"], "login": probe["login"], "userName": probe["name"]})
+    assert err["code"] == "invalid_input"

@@ -46,7 +46,8 @@ class ToastBackend:
 
     def show(self, n: Notification, on_click: Callable[[], None]) -> None:
         if self._toaster is None:
-            log.info("notification: %s / %s", n.title, n.body)
+            # 本文・件名はログに残さない(ログは平文で保存され、問い合わせのときに渡すこともある)
+            log.info("notification: server %s issue #%s", n.server_id, n.issue_id)
             return
         from windows_toasts import Toast
 

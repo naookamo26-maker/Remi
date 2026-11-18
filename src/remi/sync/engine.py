@@ -27,6 +27,12 @@ log = logging.getLogger(__name__)
 
 CURSOR_OVERLAP = timedelta(minutes=2)
 DELETE_CHECK_BATCH = 50
+# バージョンのチケットの一覧は、署名(件数と最新の更新日時)が変わったときだけ取り直す。
+# 念のため、署名が変わらなくてもこの間隔で全件を取り直す
+VERSION_FULL_REFRESH = timedelta(hours=6)
+# updated_on は秒単位なので、取得と同じ秒に入った変更(追加と除外が同時で件数も同じ)は署名に表れないことがある。
+# 最新の更新が、前回の全件の取得からこの時間内(サーバーとPCの時計のずれを含む)なら、署名を信用せず取り直す
+VERSION_SIGNATURE_SETTLE = timedelta(minutes=5)
 
 
 def parse_ts(value: str | None) -> datetime | None:
@@ -40,6 +46,10 @@ def parse_ts(value: str | None) -> datetime | None:
 
 def format_ts(dt: datetime) -> str:
     return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class ServerDeletedError(LookupError):
+    """同期中のサーバーが削除された。(KeyError など、ほかの LookupError と区別するための専用の例外)"""
 
 
 @dataclass
@@ -91,7 +101,7 @@ class ServerSync:
     def server(self) -> Server:
         s = self.servers.get(self.server_id)
         if s is None:
-            raise LookupError(f"server {self.server_id} was deleted")
+            raise ServerDeletedError(f"server {self.server_id} was deleted")
         return s
 
     # --- メタデータ -------------------------------------------------------------
@@ -367,8 +377,7 @@ class ServerSync:
                         if before != after:
                             self.versions.add_event(sid, vid, kind, now, old_value=before, new_value=after)
                             changed.add(vid)
-                # 終了したバージョンのチケットは、最初と、終了した(状態が変わった)ときだけ取り直す
-                if not new.closed or not new.issues_synced or (old is not None and old.status != new.status):
+                if self._version_issues_due(new, old):
                     if self._sync_version_issues(new, closed_ids, now):
                         changed.add(vid)
         # ウォッチをやめた・削除されたバージョンは消す。取得できなかったプロジェクトのものは残す
@@ -378,6 +387,28 @@ class ServerSync:
             changed |= gone
         settings.set(self._seen_key(), sorted(fetched | (seen_projects & watched)))
         return changed
+
+    def _version_issues_due(self, version: Version, old: Version | None) -> bool:
+        """バージョンのチケットの一覧を取り直すか。
+
+        - 最初と、バージョンの状態が変わった(終了・再開)ときは取り直す
+        - 終了したバージョンは、それ以外では取り直さない
+        - 未完了のバージョンは、署名(件数と最新の更新日時)を1回の軽い問い合わせで確かめ、変わっていたときと、
+          前回の全件の取得から VERSION_FULL_REFRESH 経ったときだけ取り直す(多数の利用者でサーバーを叩きすぎない)
+        """
+        if not version.issues_synced or (old is not None and old.status != version.status):
+            return True
+        if version.closed:
+            return False
+        full_at = parse_ts(version.issues_full_at)
+        if full_at is None or version.issues_signature is None \
+                or datetime.now(UTC) - full_at >= VERSION_FULL_REFRESH:
+            return True
+        latest = parse_ts(version.issues_signature.partition("|")[2])
+        if latest is not None and latest >= full_at - VERSION_SIGNATURE_SETTLE:
+            return True  # 取得の直前・直後に変更があった: 同じ秒の変更を見逃さないよう、もう一度全件を取る
+        signature = self.client.issues_signature(fixed_version_id=version.version_id, status_id="*")
+        return signature != version.issues_signature
 
     def _sync_version_issues(self, version: Version, closed_ids: set[int], now: str) -> bool:
         """バージョンに含まれるチケットの一覧を取り直し、変化を記録する。一覧か状態が変わったら True。"""
@@ -412,6 +443,9 @@ class ServerSync:
                     events.append((items[iid].get("updated_on") or now, kind, iid, items[iid].get("subject")))
             for created_at, kind, iid, subject in sorted(events):
                 self.versions.add_event(sid, vid, kind, created_at, issue_id=iid, subject=subject)
+        # 取得した一覧から署名を作る(issues_signature と同じ形式)。取得中に変わっていれば、次の確認で取り直す
+        latest = max((it.get("updated_on") or "" for it in items.values()), default="")
+        self.versions.set_issues_signature(sid, vid, f"{len(items)}|{latest}", full_at=now)
         if after == before and version.issues_synced:
             return False
         self.versions.set_members(sid, vid, after)

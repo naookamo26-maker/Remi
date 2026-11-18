@@ -193,6 +193,15 @@ CREATE TABLE version_events (
 CREATE INDEX idx_version_events ON version_events (server_id, version_id, event_id)
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3]
+# サーバーの負荷を抑える(多数の利用者が同じRedmineを使う場合)。
+# - バージョンのチケットの一覧は、件数と最新の更新日時(署名)が変わったときだけ取り直す
+# - ポーリング間隔の「1分」を廃止し、3分にそろえる
+V4 = """
+ALTER TABLE versions ADD COLUMN issues_signature TEXT;
+ALTER TABLE versions ADD COLUMN issues_full_at TEXT;
+UPDATE servers SET poll_interval = 180 WHERE poll_interval < 180
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4]
 
 SCHEMA_VERSION = len(MIGRATIONS)

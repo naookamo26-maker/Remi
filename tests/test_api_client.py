@@ -272,3 +272,76 @@ def test_cancelled_client_sends_nothing(fake, client):
         client.issue_statuses()
     assert e.value.code == ErrorCode.CANCELLED and not e.value.retryable
     assert len(fake.requests) == n
+
+
+# --- 一時的な通信の失敗・流量制限(多数の利用者でサーバーを叩きすぎない) --------------------------------
+def test_unexpected_requests_errors_are_retryable_connection_failures(client, monkeypatch):
+    """応答の受信中に切れた(ChunkedEncodingError)なども、再試行する通信の失敗として扱う。"""
+    import requests
+
+    def broken(*args, **kwargs):
+        raise requests.exceptions.ChunkedEncodingError("connection broken")
+
+    monkeypatch.setattr(client.session, "request", broken)
+    with pytest.raises(RedmineError) as e:
+        client.issue_statuses()
+    assert e.value.code == ErrorCode.CONNECTION_FAILED and e.value.retryable
+
+
+def test_download_interrupted_midway_is_retryable(fake, client, tmp_path, monkeypatch):
+    import requests
+
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "x")
+    fake.add_attachment(10, 5, "a.png", b"x" * 1000)
+
+    def interrupted(self, chunk_size=1, decode_unicode=False):
+        yield b"x" * 10
+        raise requests.exceptions.ConnectionError("read timed out")
+
+    monkeypatch.setattr(requests.Response, "iter_content", interrupted)
+    with pytest.raises(RedmineError) as e:
+        client.download(f"{fake.base_url}/attachments/download/5/a.png", tmp_path / "a.png", 2000)
+    assert e.value.code == ErrorCode.CONNECTION_FAILED and e.value.retryable
+    assert not (tmp_path / "a.png").exists()
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_rate_limited_with_retry_after(fake, client):
+    fake.fail_next = 429
+    fake.fail_headers = {"Retry-After": "120"}
+    with pytest.raises(RedmineError) as e:
+        client.issue_statuses()
+    assert e.value.code == ErrorCode.RATE_LIMITED and e.value.retryable
+    assert e.value.retry_after == 120
+
+
+def test_server_error_with_retry_after_date(fake, client):
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
+
+    fake.fail_next = 503
+    fake.fail_headers = {"Retry-After": format_datetime(datetime.now(UTC) + timedelta(seconds=300), usegmt=True)}
+    with pytest.raises(RedmineError) as e:
+        client.issue_statuses()
+    assert e.value.code == ErrorCode.SERVER_ERROR
+    assert 290 <= e.value.retry_after <= 300
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, None), ("", None), ("abc", None), ("0", 0.0), ("-5", 0.0), ("86400", 3600.0),
+    ("Wed, 21 Oct 2015 07:28:00 GMT", 0.0),  # 過去の日時: すぐ再試行してよい
+])
+def test_parse_retry_after(value, expected):
+    from remi.api.client import parse_retry_after
+
+    assert parse_retry_after(value) == expected
+
+
+def test_issues_signature(fake, client):
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "a", updated_on="2026-01-01T00:00:00Z")
+    fake.add_issue(11, 1, "b", updated_on="2026-01-02T00:00:00Z")
+    assert client.issues_signature(project_id=1, status_id="*") == "2|2026-01-02T00:00:00Z"
+    assert client.issues_signature(project_id=99, status_id="*") == "0|"
+    assert fake.requests[-1][1].count("limit=1") == 1  # 1件だけ取得する軽い問い合わせ

@@ -10,7 +10,7 @@ from remi.paths import attachment_cache_dir
 from remi.store import secrets
 from remi.store.db import Database
 
-POLL_INTERVALS = (60, 180, 300)  # 秒(設定画面の選択肢)
+POLL_INTERVALS = (180, 300)  # 秒(設定画面の選択肢)。多数の利用者でサーバーを叩きすぎないよう、1分は設けない
 
 
 @dataclass

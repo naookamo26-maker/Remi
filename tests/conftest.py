@@ -11,6 +11,15 @@ def _data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("REMI_DATA_DIR", str(tmp_path / "data"))
 
 
+@pytest.fixture(autouse=True)
+def _fast_sync(monkeypatch):
+    """テストでは、サーバーの負荷を抑えるための待ち時間をなくす(その挙動は個別のテストで確かめる)。"""
+    from remi.sync import worker
+
+    monkeypatch.setattr(worker, "JOURNAL_QUEUE_INTERVAL", 0.0)
+    monkeypatch.setattr(worker, "SYNC_NOW_MIN_INTERVAL", 0.0)
+
+
 @pytest.fixture
 def db(tmp_path):
     from remi.store.db import open_database

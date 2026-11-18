@@ -24,14 +24,18 @@ class ErrorCode(Enum):
     TOO_LARGE = "too_large"  # 添付ファイルが上限を超えた
     OTHER_HOST = "other_host"  # 登録したRedmine以外へAPIキーを送ろうとした(リダイレクトなど)
     CANCELLED = "cancelled"  # 同期を止めたので、送らなかった・結果を捨てた
+    RATE_LIMITED = "rate_limited"  # 429: 問い合わせが多すぎる(サーバー側の流量制限)
 
 
 class RedmineError(Exception):
-    def __init__(self, code: ErrorCode, status: int | None = None, detail: str = "") -> None:
+    def __init__(self, code: ErrorCode, status: int | None = None, detail: str = "",
+                 retry_after: float | None = None) -> None:
         super().__init__(f"{code.value} (status={status}) {detail}".strip())
         self.code = code
         self.status = status
         self.detail = detail
+        # サーバーが Retry-After で指定した待ち時間(秒)。指定がなければ None
+        self.retry_after = retry_after
 
     @property
     def retryable(self) -> bool:
@@ -40,4 +44,5 @@ class RedmineError(Exception):
             ErrorCode.CONNECTION_FAILED,
             ErrorCode.PROXY_ERROR,
             ErrorCode.SERVER_ERROR,
+            ErrorCode.RATE_LIMITED,
         )

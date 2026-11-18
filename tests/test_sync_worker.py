@@ -163,3 +163,191 @@ def test_stop_all_discards_response_of_request_in_flight(db, fake):
     finally:
         fake.delay = 0
         mgr.stop_all()
+
+
+# --- 想定外のエラー・サーバーの負荷を抑える仕組み ---------------------------------------------------
+def _count(fake, pred):
+    return sum(1 for m, p in list(fake.requests) if pred(m, p))
+
+
+def _assigned_queries(fake):
+    return _count(fake, lambda m, p: p.startswith("/issues.json") and "assigned_to_id=me" in p)
+
+
+def _start(db, fake, issues=(1,), bus=None, **kw):
+    fake.add_project(1, "A")
+    for iid in issues:
+        fake.add_issue(iid, 1, f"担当{iid}")
+    sid = ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
+    mgr = SyncManager(db, bus or EventBus())
+    mgr.restart(**kw)
+    return sid, mgr
+
+
+def test_unexpected_error_in_command_does_not_stop_worker(db, fake, monkeypatch):
+    """画面からの依頼(取り直しなど)で想定外のエラーが起きても、同期スレッドは止まらない。"""
+    sid, mgr = _start(db, fake)
+    try:
+        store = IssueStore(db)
+        assert wait_until(lambda: store.journals_synced(sid, 1))
+        w = mgr._worker(sid)
+        original = w.sync.fetch_journals
+        calls = []
+
+        def flaky(issue_id, notify=True):
+            calls.append(issue_id)
+            if len(calls) == 1:
+                raise KeyError("project")  # 想定外の応答など
+            return original(issue_id, notify=notify)
+
+        monkeypatch.setattr(w.sync, "fetch_journals", flaky)
+        mgr.refetch_issue(sid, 1)
+        mgr.refetch_issue(sid, 1)
+        assert wait_until(lambda: len(calls) >= 2)
+        assert w.is_alive()
+    finally:
+        mgr.stop_all()
+
+
+def test_open_issue_is_not_checked_while_hidden(db, fake, monkeypatch):
+    """トレイに格納・最小化している間は、開いているチケットを確かめない。表示したら、すぐ確かめる。"""
+    from remi.sync import worker
+
+    monkeypatch.setattr(worker, "OPEN_ISSUE_INTERVAL", 0.3)
+    sid, mgr = _start(db, fake)
+    try:
+        assert wait_until(lambda: IssueStore(db).journals_synced(sid, 1))
+        mgr.set_open_issue(sid, 1)
+
+        def checks():
+            return _count(fake, lambda m, p: p == "/issues/1.json")
+
+        assert wait_until(lambda: checks() >= 2)
+        mgr.set_visible(False)
+        time.sleep(0.5)  # 通信中だった確認が終わるのを待つ
+        n = checks()
+        time.sleep(1.5)
+        assert checks() == n
+        mgr.set_visible(True)
+        assert wait_until(lambda: checks() > n, timeout=3)
+    finally:
+        mgr.stop_all()
+
+
+def test_manual_sync_now_is_throttled(db, fake, monkeypatch):
+    """「今すぐ同期」は最短間隔より短い連打をサーバーへ送らない。内部からの同期(manual=False)は対象外。"""
+    from remi.sync import worker
+
+    monkeypatch.setattr(worker, "SYNC_NOW_MIN_INTERVAL", 60.0)
+    sid, mgr = _start(db, fake)
+    try:
+        assert wait_until(lambda: IssueStore(db).journals_synced(sid, 1))
+        assert _assigned_queries(fake) == 1
+        mgr.sync_now()
+        assert wait_until(lambda: _assigned_queries(fake) == 2)
+        for _ in range(3):
+            mgr.sync_now()
+        time.sleep(1.5)
+        assert _assigned_queries(fake) == 2
+        mgr.sync_now(manual=False)
+        assert wait_until(lambda: _assigned_queries(fake) == 3)
+    finally:
+        mgr.stop_all()
+
+
+def test_journal_queue_is_paced(db, fake, monkeypatch):
+    """コメントの遅延取得は JOURNAL_QUEUE_INTERVAL ごとに1件だけ(多数の利用者で一斉に取りに行かない)。"""
+    from remi.sync import engine, worker
+
+    monkeypatch.setattr(worker, "JOURNAL_QUEUE_INTERVAL", 0.8)
+    times = []
+    original = engine.ServerSync.fetch_journals
+
+    def recorded(self, issue_id, notify=True):
+        times.append(time.monotonic())
+        return original(self, issue_id, notify=notify)
+
+    monkeypatch.setattr(engine.ServerSync, "fetch_journals", recorded)
+    sid, mgr = _start(db, fake, issues=(1, 2, 3))
+    try:
+        store = IssueStore(db)
+        assert wait_until(lambda: all(store.journals_synced(sid, i) for i in (1, 2, 3)))
+        assert len(times) == 3
+        assert all(b - a >= 0.7 for a, b in zip(times, times[1:]))
+    finally:
+        mgr.stop_all()
+
+
+def test_metadata_is_not_refetched_on_every_start(db, fake):
+    """プロジェクト一覧・マスタは、前回の取得から時間が経つまで、起動し直しても取り直さない。
+    持っていない(キャッシュを消した)ときは、すぐ取得する。"""
+    from remi.store.settings import Settings
+
+    def statuses():
+        return _count(fake, lambda m, p: p == "/issue_statuses.json")
+
+    sid, mgr = _start(db, fake)
+    try:
+        assert wait_until(lambda: IssueStore(db).journals_synced(sid, 1))
+        assert statuses() == 1 and Settings(db).get(f"last_metadata:{sid}")
+        mgr.restart()
+        n = _assigned_queries(fake)
+        assert wait_until(lambda: _assigned_queries(fake) > n)  # 差分同期は動いている
+        assert statuses() == 1
+        with db.tx() as c:
+            c.execute("DELETE FROM masters WHERE server_id = ?", (sid,))
+        mgr.restart()
+        assert wait_until(lambda: statuses() == 2)
+    finally:
+        mgr.stop_all()
+
+
+def test_backoff_respects_retry_after(db, fake):
+    """サーバーが流量制限(429)で Retry-After を返したら、その時間は問い合わせない。"""
+    fake.fail_next = 429
+    fake.fail_headers = {"Retry-After": "3000"}
+    sid, mgr = _start(db, fake)
+    try:
+        assert wait_until(lambda: ServerStore(db).get(sid).last_error == "rate_limited")
+        w = mgr._worker(sid)
+        assert w.sched.backoff_until - time.monotonic() > 2900
+    finally:
+        mgr.stop_all()
+
+
+def test_first_sync_is_delayed_at_app_start(db, fake, monkeypatch):
+    """アプリの起動時は、最初の同期をランダムにずらす(朝の一斉起動で集中しない)。初回同期は待たせない。"""
+    from remi.sync import worker
+
+    monkeypatch.setattr(worker, "STARTUP_DELAY_MAX", 600.0)
+    monkeypatch.setattr(worker.random, "uniform", lambda a, b: b)  # いちばん遅くなる場合
+    fake.add_project(1, "A")
+    fake.add_issue(1, 1, "担当")
+    servers = ServerStore(db)
+    synced = servers.save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
+    servers.update_fields(synced, initial_sync_done=True, last_sync_cursor="2026-01-01T00:00:00Z")
+    fresh = servers.save(Server(name="T", url=fake.base_url), api_key="test-key").server_id
+    mgr = SyncManager(db, EventBus())
+    mgr.restart(startup=True)
+    try:
+        assert wait_until(lambda: servers.get(fresh).initial_sync_done)  # まだ同期していないサーバーはすぐ
+        assert mgr._worker(synced).sched.changes - time.monotonic() > 500
+        assert servers.get(synced).last_synced_at is None
+    finally:
+        mgr.stop_all()
+
+
+def test_unexpected_key_error_during_sync_is_recorded_not_fatal(db, fake, monkeypatch):
+    """同期中の KeyError(想定外の応答)を「サーバーの削除」と取り違えて、黙って止まらない。"""
+    from remi.sync import engine
+
+    def broken(self):
+        raise KeyError("project")
+
+    monkeypatch.setattr(engine.ServerSync, "sync_changes", broken)
+    sid, mgr = _start(db, fake)
+    try:
+        assert wait_until(lambda: ServerStore(db).get(sid).last_error == "invalid_response")
+        assert mgr._worker(sid).is_alive()
+    finally:
+        mgr.stop_all()

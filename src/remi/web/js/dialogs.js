@@ -31,7 +31,7 @@ export function serverDialog(app, server = null) {
     radio(`${group}-fmt`, "textile", "Textile", s.textFormat === "textile"),
     radio(`${group}-fmt`, "plain", t("server.plain"), s.textFormat === "plain"),
   ];
-  const poll = h("select", {}, [60, 180, 300].map((sec) =>
+  const poll = h("select", {}, [180, 300].map((sec) =>
     h("option", { value: sec, selected: sec === s.pollInterval }, t("server.minutes", { count: sec / 60 }))));
   const notify = h("input", { type: "checkbox", checked: s.notifyEnabled });
   const proxySystem = h("input", { type: "radio", name: `${group}-proxy`, checked: s.proxyMode !== "manual" });

@@ -219,47 +219,103 @@ def test_relation_filter(app, fake):
 
 def test_visible_relations_filter_list_and_tree(app, fake):
     fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_project(3, "B")
     fake.add_issue(10, 1, "担当")
     fake.add_issue(11, 1, "ウォッチ", assigned_to=7, watchers={ME})
     fake.add_issue(13, 1, "グループ", assigned_to=100)
+    fake.add_issue(20, 2, "子のウォッチ", assigned_to=7, watchers={ME})
+    fake.add_issue(30, 3, "Bのウォッチ", assigned_to=7, watchers={ME})
     sid = _register(app, fake)
-    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 3)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 5)
     fake.add_journal(11, 7, "未読のコメント")
     app.rpc("syncNow")
     assert wait_until(lambda: app.rpc("getTree")["unread"] == 1)
-    ids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues")["issues"])  # noqa: E731
-    assert ids() == [10, 11, 13]
+    ids = lambda **kw: sorted(i["issueId"] for i in app.rpc("listIssues", **kw)["issues"])  # noqa: E731
+    assert ids() == [10, 11, 13, 20, 30]
+    projects = lambda: {p["projectId"]: p for p in app.rpc("getTree")["servers"][0]["projects"]}  # noqa: E731
+    assert projects()[1]["relations"] == ["assigned", "group", "watching", "authored"]
+    assert projects()[1]["relationsOwn"] is False
 
-    # ウォッチ中を表示しない: 一覧からも、ツリーの件数・未読数からも外れる(プロジェクトは残す)
-    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "authored"])
-    assert ids() == [10, 13]
+    # A でウォッチ中を表示しない: A と子プロジェクトのウォッチだけのチケットが、一覧からも、ツリーの件数・
+    # 未読数からも外れる(プロジェクトは残す)。B には効かない
+    ps = app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations",
+                 value=["authored", "assigned", "group"])
+    assert ps["visible_relations"] == {"value": ["assigned", "group", "authored"],
+                                       "effective": ["assigned", "group", "authored"]}
+    child = app.rpc("getProjectSettings", serverId=sid, projectId=2)["visible_relations"]
+    assert child == {"value": None, "effective": ["assigned", "group", "authored"]}
+    assert ids() == [10, 13, 30]
+    assert ids(serverId=sid, projectId=1) == [10, 13]
     tree = app.rpc("getTree")
     [server] = tree["servers"]
-    assert server["count"] == 2 and server["unread"] == 0 and tree["unread"] == 0
-    assert server["projects"][0]["count"] == 2
+    assert server["count"] == 3 and server["unread"] == 0 and tree["unread"] == 0
+    a = projects()[1]
+    assert a["count"] == 2 and a["relationsOwn"] is True and a["relations"] == ["assigned", "group", "authored"]
+    assert a["children"][0]["relations"] == ["assigned", "group", "authored"]
+    assert a["children"][0]["relationsOwn"] is False and a["children"][0]["count"] == 0
+    assert projects()[3]["count"] == 1
+    # 子プロジェクトで上書きできる
+    app.rpc("setProjectSetting", serverId=sid, projectId=2, key="visible_relations", value=["watching"])
+    assert ids() == [10, 13, 20, 30]
+
     # 絞り込みボタンで絞ると、ツリーの件数・未読数とトレイの未読数も一覧と一致する
     from remi.system.tray import Tray
 
     tray = Tray(app.ctx, on_open=lambda: None, on_settings=lambda: None, on_sync=lambda: None, on_quit=lambda: None)
-    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "watching", "authored"])
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=None)
+    app.rpc("setProjectSetting", serverId=sid, projectId=2, key="visible_relations", value=None)
     app.rpc("setSetting", key="relation_filter", value="watching")
-    assert sorted(i["issueId"] for i in app.rpc("listIssues", relation="watching")["issues"]) == [11]
+    assert ids(relation="watching") == [11, 20, 30]
     server = app.rpc("getTree")["servers"][0]
-    assert server["count"] == 1 and server["unread"] == 1 and tray.unread_total() == 1
+    assert server["count"] == 3 and server["unread"] == 1 and tray.unread_total() == 1
     app.rpc("setSetting", key="relation_filter", value="assigned")
     server = app.rpc("getTree")["servers"][0]
     assert server["count"] == 2 and server["unread"] == 0 and tray.unread_total() == 0
-    # 表示しないことにした関係で絞り込んでいたら「すべて」として扱う(画面ではボタンが隠れる)
-    app.rpc("setSetting", key="visible_relations", value=["watching"])
-    assert app.rpc("getTree")["servers"][0]["count"] == 1 and tray.unread_total() == 1
+    # 絞り込みは、各プロジェクトの表示するチケットの中で効く(表示しない関係のチケットは出さない)
+    app.rpc("setProjectSetting", serverId=sid, projectId=3, key="visible_relations", value=["assigned"])
+    app.rpc("setSetting", key="relation_filter", value="watching")
+    assert ids(relation="watching") == [11, 20]
+    # どのプロジェクトでも表示しない関係で絞り込んでいたら「すべて」として扱う(画面ではボタンが隠れる)
+    for pid in (1, 3):
+        app.rpc("setProjectSetting", serverId=sid, projectId=pid, key="visible_relations", value=["assigned"])
+    assert app.rpc("getTree")["relationsInUse"] == ["assigned"]
+    assert app.rpc("getTree")["servers"][0]["count"] == 1 and tray.unread_total() == 0
     app.rpc("setSetting", key="relation_filter", value="all")
     # 自分の担当だけ: グループ経由の担当は外れる
-    app.rpc("setSetting", key="visible_relations", value=["assigned"])
     assert ids() == [10]
-    assert app.rpc("getTree")["servers"][0]["count"] == 1
+    # 継承に戻す
+    app.rpc("setProjectSetting", serverId=sid, projectId=3, key="visible_relations", value=None)
+    assert ids() == [10, 30]
     # 何も選ばない・知らない関係は受け付けない
-    for bad in ([], ["x"], ["assigned", "assigned"], "assigned"):
-        assert app.rpc_error("setSetting", key="visible_relations", value=bad)["code"] == "invalid_setting"
+    for bad in ([], ["x"], ["assigned", "assigned"], "assigned", True):
+        err = app.rpc_error("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=bad)
+        assert err["code"] == "invalid_setting"
+    # グローバル設定としては、もう受け付けない
+    for key in ("visible_relations", "show_all_projects"):
+        assert app.rpc_error("setSetting", key=key, value=True)["code"] == "invalid_setting"
+
+
+def test_show_all_projects_per_server(app, fake):
+    from remi.store.servers import Server
+
+    fake.add_project(1, "チケットあり")
+    fake.add_project(2, "チケットなし")
+    fake.add_issue(10, 1, "担当")
+    sid = _register(app, fake)
+    other = app.ctx.servers.save(Server(name="T", url=fake.base_url, my_user_id=ME), api_key=API_KEY).server_id
+    app.sync.restart()
+    names = lambda i: [p["name"] for p in app.rpc("getTree")["servers"][i]["projects"]]  # noqa: E731
+    assert wait_until(lambda: names(0) == ["チケットあり"] and names(1) == ["チケットあり"])
+    assert app.rpc("getTree")["servers"][0]["showAllProjects"] is False
+    app.rpc("setShowAllProjects", serverId=sid, value=True)
+    tree = app.rpc("getTree")
+    assert tree["servers"][0]["showAllProjects"] is True
+    assert names(0) == ["チケットあり", "チケットなし"]
+    assert names(1) == ["チケットあり"]  # ほかのサーバーには効かない
+    assert app.ctx.servers.get(other).show_all_projects is False
+    assert app.rpc_error("setShowAllProjects", serverId=999, value=True)["code"] == "not_found"
+    assert app.rpc_error("setShowAllProjects", serverId=sid, value="yes")["code"] == "invalid_setting"
 
 
 def test_write_permissions(app, fake):

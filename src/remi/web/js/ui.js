@@ -13,7 +13,8 @@ export function closeMenu() {
 // items: {label, onClick, disabled, checked, keepOpen} | {sep:true} | {label, hint:true}
 //      | {segmented: {label, options:[{label, value}], value, onChange}, hint}
 // keepOpen: 押してもメニューを閉じない(チェックを続けて切り替えるとき)。onClick が返した真偽値(Promise可)をチェックの状態にする
-export function contextMenu(x, y, items) {
+// focusLabel: 開いたときにフォーカスする項目の文言(開き直したときに、操作した項目へ戻すため)。省略すると先頭
+export function contextMenu(x, y, items, { focusLabel = null } = {}) {
   closeMenu();
   const menu = h("div", { class: "menu", role: "menu" });
   for (const it of items) {
@@ -54,7 +55,8 @@ export function contextMenu(x, y, items) {
   menu.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 4))}px`;
   menu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
   openMenu = menu;
-  menu.querySelector("button")?.focus();
+  const buttons = [...menu.querySelectorAll("button")];
+  (buttons.find((b) => focusLabel !== null && b.textContent === focusLabel) || buttons[0])?.focus();
 }
 
 addEventListener("mousedown", (e) => {

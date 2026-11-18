@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,17 +31,72 @@ FILTER_RELATIONS: dict[str, tuple[str, ...] | None] = {
 }
 
 
-def shown_relations(visible: list[str] | None, relation_filter: str | None) -> list[str]:
-    """一覧に出す関係: 表示するチケット(visible)を、絞り込みボタン(relation_filter)でさらに絞ったもの。
+@dataclass(frozen=True)
+class RelationScope:
+    """一覧に出すチケット: プロジェクトごとの「表示するチケット」(継承を解決済み)を、
+    一覧の絞り込みボタン(relation_filter)でさらに絞ったもの。
 
-    一覧・ツリーの件数と未読数・トレイの未読数で同じものを使い、数を一致させる。
-    表示しないことにした関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+    一覧・ツリーの件数と未読数・トレイの未読数・通知で同じものを使い、数を一致させる。
+    default は「表示するチケット」を設定していないプロジェクトの関係、projects は設定のあるプロジェクトの関係
+    ((server_id, project_id) → 関係。空なら何も出さない)。in_use は、監視中のチケットがあるプロジェクトで
+    表示している関係の和(画面で出す絞り込みボタンを決める)。
     """
-    vis = [r for r in RELATIONS if visible is None or r in visible] or list(RELATIONS)
-    want = FILTER_RELATIONS.get(relation_filter or "all")
-    if want is None:
-        return vis
-    return [r for r in vis if r in want] or vis
+
+    default: tuple[str, ...] = RELATIONS
+    projects: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
+    in_use: tuple[str, ...] = RELATIONS
+
+    @classmethod
+    def build(cls, visible: dict[int, dict[int, list[str]]], in_use: set[str],
+              relation_filter: str | None = None) -> RelationScope:
+        """visible: server_id → (project_id → 表示するチケット)。設定のないプロジェクトは含めない。
+
+        表示しないことにした関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+        """
+        used = tuple(r for r in RELATIONS if r in in_use) or RELATIONS
+        want = FILTER_RELATIONS.get(relation_filter or "all")
+        if want is not None and not set(want) & set(used):
+            want = None
+
+        def narrow(rels) -> tuple[str, ...]:
+            return tuple(r for r in RELATIONS if r in rels and (want is None or r in want))
+
+        return cls(
+            default=narrow(RELATIONS),
+            projects={(sid, pid): narrow(rels) for sid, m in visible.items() for pid, rels in m.items()},
+            in_use=used,
+        )
+
+    def relations_for(self, server_id: int, project_id: int) -> tuple[str, ...]:
+        return self.projects.get((server_id, project_id), self.default)
+
+    def matches(self, server_id: int, project_id: int, flags: int) -> bool:
+        return matches_relations(flags, list(self.relations_for(server_id, project_id)))
+
+    def sql(self) -> str:
+        """チケット(別名 i)をこの範囲に絞るSQLの条件。値はすべて整数と固定の文字列なので、そのまま埋め込む。"""
+        default = relation_condition(self.default)
+        if not self.projects:
+            return default
+
+        def member(keys) -> str:
+            by_server: dict[int, list[int]] = {}
+            for sid, pid in keys:
+                by_server.setdefault(int(sid), []).append(int(pid))
+            return "(" + " OR ".join(
+                f"(i.server_id = {sid} AND i.project_id IN ({','.join(map(str, sorted(pids)))}))"
+                for sid, pids in sorted(by_server.items())) + ")"
+
+        groups: dict[tuple[str, ...], list[tuple[int, int]]] = {}
+        for key, rels in self.projects.items():
+            groups.setdefault(rels, []).append(key)
+        parts = [f"(NOT {member(self.projects)} AND {default})"]
+        parts += [f"({member(keys)} AND {relation_condition(rels)})" for rels, keys in sorted(groups.items())]
+        return f"({' OR '.join(parts)})"
+
+
+def _scope_sql(relations: list[str] | RelationScope | None) -> str:
+    return relations.sql() if isinstance(relations, RelationScope) else relation_condition(relations)
 
 
 def matches_relations(flags: int, relations: list[str] | None) -> bool:
@@ -244,8 +299,8 @@ class IssueStore:
     # --- 一覧・未読 -------------------------------------------------------------
     def list_issues(self, server_ids: list[int] | None = None, project_ids: set[int] | None = None,
                     *, include_unmonitored: bool = False, unread_only: bool = False,
-                    search: str = "", relations: list[str] | None = None) -> list[IssueRow]:
-        where = [relation_condition(relations)]
+                    search: str = "", relations: list[str] | RelationScope | None = None) -> list[IssueRow]:
+        where = [_scope_sql(relations)]
         params: list[Any] = []
         if not include_unmonitored:
             where.append("i.monitored = 1")
@@ -282,22 +337,22 @@ class IssueStore:
             rows = [r for r in rows if r.unread > 0]
         return rows
 
-    def unread_by_project(self, server_id: int, relations: list[str] | None = None) -> dict[int, int]:
-        """プロジェクトごとの未読数。relations を渡すと、その関係のチケットだけを数える。"""
+    def unread_by_project(self, server_id: int, relations: list[str] | RelationScope | None = None) -> dict[int, int]:
+        """プロジェクトごとの未読数。relations(関係または RelationScope)を渡すと、そのチケットだけを数える。"""
         sql = f"""
             SELECT i.project_id, SUM({_UNREAD_SQL}) FROM issues i
             JOIN servers s ON s.server_id = i.server_id
             LEFT JOIN read_state rs ON rs.server_id = i.server_id AND rs.issue_id = i.issue_id
-            WHERE i.server_id = ? AND i.monitored = 1 AND {relation_condition(relations)}
+            WHERE i.server_id = ? AND i.monitored = 1 AND {_scope_sql(relations)}
             GROUP BY i.project_id
         """
         return {r[0]: int(r[1] or 0) for r in self.db.query(sql, (server_id,))}
 
-    def count_by_project(self, server_id: int, relations: list[str] | None = None) -> dict[int, int]:
-        """プロジェクトごとの件数。relations を渡すと、その関係のチケットだけを数える。"""
+    def count_by_project(self, server_id: int, relations: list[str] | RelationScope | None = None) -> dict[int, int]:
+        """プロジェクトごとの件数。relations(関係または RelationScope)を渡すと、そのチケットだけを数える。"""
         return {r[0]: r[1] for r in self.db.query(
             f"SELECT i.project_id, COUNT(*) FROM issues i WHERE i.server_id = ? AND i.monitored = 1 "
-            f"AND {relation_condition(relations)} GROUP BY i.project_id",
+            f"AND {_scope_sql(relations)} GROUP BY i.project_id",
             (server_id,))}
 
     def unread_count(self, server_id: int, issue_id: int) -> int:

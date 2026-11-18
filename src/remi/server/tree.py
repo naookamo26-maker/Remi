@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from remi.context import AppContext
-from remi.store.issues import shown_relations
+from remi.store.issues import RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, Project
 
 
@@ -24,21 +24,22 @@ def visible_projects(projects: list[Project], monitored_project_ids: set[int], s
 
 
 def build_tree(ctx: AppContext) -> dict[str, Any]:
-    show_all = bool(ctx.settings.get("show_all_projects"))
-    # 件数・未読数は、一覧に出すチケット(表示するチケットと絞り込みボタンの選択)だけを数える
-    relations = shown_relations(ctx.settings.get("visible_relations"), ctx.settings.get("relation_filter"))
+    # 件数・未読数は、一覧に出すチケット(プロジェクトごとの表示するチケットと絞り込みボタンの選択)だけを数える
+    scope = ctx.relation_scope()
     servers_out = []
     total_unread = 0
     for s in ctx.servers.list(enabled_only=True):
         sid = s.server_id
         projects = ctx.projects.list(sid)
         by_id = {p.project_id: p for p in projects}
-        unread = ctx.issues.unread_by_project(sid, relations)
-        counts = ctx.issues.count_by_project(sid, relations)
+        unread = ctx.issues.unread_by_project(sid, scope)
+        counts = ctx.issues.count_by_project(sid, scope)
+        relations = ctx.projects.visible_relations_map(sid)
+        own = ctx.projects.own_visible_relations(sid)
         # 表示するプロジェクトは、表示の選択で隠したチケットも含めて決める(選択を変えるたびに
         # ツリーの形が変わらないように)
         monitored = set(ctx.issues.count_by_project(sid))
-        visible = visible_projects(projects, monitored, show_all)
+        visible = visible_projects(projects, monitored, s.show_all_projects)
         children: dict[int | None, list[Project]] = {}
         for pid in visible:
             p = by_id[pid]
@@ -54,6 +55,9 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 "active": p.status == PROJECT_STATUS_ACTIVE,
                 "unread": unread.get(p.project_id, 0) + sum(k["unread"] for k in kids),
                 "count": counts.get(p.project_id, 0) + sum(k["count"] for k in kids),
+                # 表示するチケット(継承を解決済み)と、このプロジェクト自身で設定しているか
+                "relations": [r for r in RELATIONS if r in relations.get(p.project_id, RELATIONS)],
+                "relationsOwn": p.project_id in own,
                 "children": kids,
             }
 
@@ -69,6 +73,8 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             "lastSyncedAt": s.last_synced_at,
             "unread": s_unread,
             "count": sum(counts.values()),
+            "showAllProjects": s.show_all_projects,
             "projects": roots,
         })
-    return {"unread": total_unread, "servers": servers_out, "showAllProjects": show_all}
+    # 一覧の絞り込みボタンは、どこかのプロジェクトで表示している関係のものだけを出す
+    return {"unread": total_unread, "servers": servers_out, "relationsInUse": list(scope.in_use)}

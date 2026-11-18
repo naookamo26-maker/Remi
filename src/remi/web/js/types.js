@@ -8,7 +8,7 @@
  * @typedef {object} TreeData
  * @property {number} unread              すべてのサーバーの未読数
  * @property {TreeServer[]} servers
- * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか
+ * @property {Relation[]} relationsInUse   どこかのプロジェクトで表示している関係(一覧の絞り込みボタンを決める)
  */
 
 /**
@@ -21,6 +21,7 @@
  * @property {string|null} lastSyncedAt    ISO 8601
  * @property {number} unread
  * @property {number} count
+ * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか(サーバーごと)
  * @property {TreeProject[]} projects
  */
 
@@ -32,6 +33,8 @@
  * @property {boolean} active
  * @property {number} unread               子プロジェクトを含む
  * @property {number} count                子プロジェクトを含む
+ * @property {Relation[]} relations        表示するチケット(親からの継承を解決済み)
+ * @property {boolean} relationsOwn        表示するチケットを、このプロジェクト自身で設定しているか
  * @property {TreeProject[]} children
  */
 

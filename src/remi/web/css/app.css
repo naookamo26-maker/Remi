@@ -69,11 +69,16 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .splitter:hover::after, .splitter.dragging::after { background: var(--accent); }
 
 /* ---- ツリー ---- */
-.tree-header { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--border); }
-.tree-header .brand { font-weight: 700; font-size: 14px; }
-.tree-header .version { color: var(--text-muted); font-size: 11px; }
+/* 設定・サーバーの追加・同期のボタン。幅が足りないときは「サーバーを追加」の文言から省略する
+   (アイコンとツールチップは残す) */
+.tree-header { display: flex; align-items: center; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
 .tree-header .spacer { flex: 1; }
-.tree-header .btn.icon-only { width: 28px; min-height: 28px; }
+.tree-header .btn { min-height: 30px; padding: 0 8px; gap: 4px; min-width: 0; flex: none; }
+.tree-header .btn:nth-child(2) { flex: 0 1 auto; }
+.tree-header .btn .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-header .btn.icon-only { width: 30px; padding: 0; flex: none; }
+.pane-tree { container-type: inline-size; }
+@container (max-width: 236px) { .tree-header .btn:nth-child(2) .label { display: none; } }
 .tree { flex: 1 1 auto; overflow: auto; padding: 8px 6px; }
 .tree ul { list-style: none; margin: 0; padding: 0; }
 .node { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 8px; border-radius: 6px; cursor: pointer;
@@ -85,9 +90,18 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .node.server { font-weight: 700; margin-top: 8px; }
 .node.inaccessible .name, .node.inactive .name { color: var(--text-muted); }
 .node-error { margin: 2px 8px 4px 34px; padding: 6px 8px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-fg); font-size: 11px; }
-.tree-footer { padding: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
-.tree-footer .row { display: flex; gap: 6px; }
-.tree-footer .row .btn:first-child { flex: 1; }
+.tree-footer { padding: 6px 10px; border-top: 1px solid var(--border); }
+.tree-footer:has(.sync-status:empty) { display: none; }
+/* プロジェクトの横の「表示するチケット」ボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
+   フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ) */
+.node-filter { flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
+.node-filter svg.icon { width: 13px; height: 13px; }
+.node-filter:hover { background: var(--window); color: var(--text); }
+.node:hover .node-filter, .node-filter:focus-visible, .node-filter.own { opacity: 1; }
+.node-filter.inherited { opacity: .7; }
+.node-filter.own { color: var(--accent); }
+.node-filter.own svg.icon { fill: currentColor; }
 .sync-status { font-size: 11px; color: var(--text-muted); padding: 0 2px; }
 
 /* ---- 一覧 ---- */

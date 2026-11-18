@@ -93,12 +93,12 @@ def test_follows_visible_relations_and_filter(db):
     ctx, sid, n, backend, api, opened = setup(db)
     ctx.issues.upsert_issue(sid, {"id": 5, "project": {"id": 1}, "subject": "担当"}, REL_ASSIGNED)
     ctx.issues.upsert_issue(sid, {"id": 6, "project": {"id": 1}, "subject": "ウォッチ"}, REL_WATCHING)
-    # 一覧に出すチケット(表示するチケット・絞り込み)だけを通知する
-    ctx.settings.set("visible_relations", ["assigned", "group", "authored"])
+    # 一覧に出すチケット(プロジェクトごとの表示するチケット・絞り込み)だけを通知する。子プロジェクトにも効く
+    ctx.projects.set_visible_relations(sid, 1, ["assigned", "group", "authored"])
     ctx.bus.publish("newComments", serverId=sid, comments=[comment(5), comment(6)])
     [shown] = backend.shown
     assert shown.issue_id == 5 and "ほか" not in shown.body
-    ctx.settings.set("visible_relations", ["assigned", "group", "watching", "authored"])
+    ctx.projects.set_visible_relations(sid, 1, None)
     ctx.settings.set("relation_filter", "watching")
     ctx.bus.publish("newComments", serverId=sid, comments=[comment(5)])
     assert len(backend.shown) == 1

@@ -26,7 +26,7 @@ from remi.paths import attachment_cache_dir
 from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
 from remi.server.tree import build_tree
-from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS, shown_relations
+from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
 from remi.store.servers import POLL_INTERVALS, Server
 
@@ -39,7 +39,6 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "language": lambda v: v == "system" or v in SUPPORTED_LANGUAGES,
     "notify_enabled": lambda v: isinstance(v, bool),
     "autostart": lambda v: isinstance(v, bool),
-    "show_all_projects": lambda v: isinstance(v, bool),
     "show_closed": lambda v: isinstance(v, bool),
     "unread_first": lambda v: isinstance(v, bool),
     "closed_retention_days": lambda v: isinstance(v, int) and 0 <= v <= 365,
@@ -49,8 +48,6 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "tree_collapsed": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
     "redmine_open_in": lambda v: v in ("app", "browser"),
     "relation_filter": lambda v: v in RELATION_FILTERS,
-    "visible_relations": lambda v: (isinstance(v, list) and len(v) > 0 and len(set(v)) == len(v)
-                                    and all(x in RELATIONS for x in v)),
 }
 # 一覧の絞り込み(設計書 §5.1)
 RELATION_FILTERS = {"all": 0, "assigned": REL_ASSIGNED, "watching": REL_WATCHING, "authored": REL_AUTHORED}
@@ -64,6 +61,11 @@ PERMISSIONS_TTL = 600
 SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters")
 # 初期化の前に同期スレッドを止めるときの待ち時間。通信中でも読み取りのタイムアウト(30秒)で終わる
 SYNC_STOP_TIMEOUT = 40.0
+
+
+def _valid_relations(v: Any) -> bool:
+    """表示するチケット(プロジェクトごと)の値: 関係の重複のないリスト(1つ以上)。"""
+    return isinstance(v, list) and len(v) > 0 and len(set(v)) == len(v) and all(x in RELATIONS for x in v)
 
 
 class RpcError(Exception):
@@ -308,12 +310,23 @@ class RemiApi:
             if eff is None and key == "notify":
                 eff = bool(server and server.notify_enabled)
             out[key] = {"value": self.ctx.projects.get_setting(serverId, projectId, key), "effective": bool(eff)}
+        own = self.ctx.projects.get_visible_relations(serverId, projectId)
+        eff_rel = self.ctx.projects.visible_relations_map(serverId).get(projectId, list(RELATIONS))
+        out["visible_relations"] = {"value": own, "effective": [r for r in RELATIONS if r in eff_rel]}
         p = self.ctx.projects.get(serverId, projectId)
         out["url"] = f"{server.url}/projects/{p.identifier or p.project_id}" if server and p else None
         return out
 
     @rpc
-    def setProjectSetting(self, serverId: int, projectId: int, key: str, value: bool | None) -> dict[str, Any]:  # noqa: N802,N803
+    def setProjectSetting(self, serverId: int, projectId: int, key: str, value: Any) -> dict[str, Any]:  # noqa: N802,N803
+        """プロジェクト単位の設定。None は親から継承する。visible_relations は関係のリスト、ほかは真偽値。"""
+        if key == "visible_relations":
+            if value is not None and not _valid_relations(value):
+                raise RpcError("invalid_setting", key)
+            self.ctx.projects.set_visible_relations(
+                serverId, projectId, None if value is None else [r for r in RELATIONS if r in value])
+            self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)
+            return self.getProjectSettings(serverId, projectId)
         if key not in SETTING_KEYS or value not in (None, True, False):
             raise RpcError("invalid_setting", key)
         self.ctx.projects.set_setting(serverId, projectId, key, value)
@@ -323,6 +336,16 @@ class RemiApi:
             self.sync.restart()
         self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)
         return self.getProjectSettings(serverId, projectId)
+
+    @rpc
+    def setShowAllProjects(self, serverId: int, value: bool) -> None:  # noqa: N802,N803
+        """チケットのないプロジェクトもツリーに表示するか(サーバーごと)。"""
+        if self.ctx.servers.get(serverId) is None:
+            raise RpcError("not_found")
+        if not isinstance(value, bool):
+            raise RpcError("invalid_setting", "show_all_projects")
+        self.ctx.servers.update_fields(serverId, show_all_projects=value)
+        self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)
 
     # --- 一覧 ---------------------------------------------------------------------
     @rpc
@@ -335,10 +358,11 @@ class RemiApi:
         show_closed = bool(self.ctx.settings.get("show_closed"))
         if relation not in RELATION_FILTERS:
             raise RpcError("invalid_input", "relation")
-        # 表示するチケットと絞り込みボタンの選択。ツリーの件数・未読数とトレイの未読数も同じもので数える
-        relations = shown_relations(self.ctx.settings.get("visible_relations"), relation)
+        # プロジェクトごとの表示するチケットと、絞り込みボタンの選択。ツリーの件数・未読数とトレイの未読数も
+        # 同じもので数える
+        scope = self.ctx.relation_scope(relation)
         rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
-                                           unread_only=unreadOnly, search=search, relations=relations)
+                                           unread_only=unreadOnly, search=search, relations=scope)
         names: dict[int, dict[str, Any]] = {}
         out = []
         for r in rows:

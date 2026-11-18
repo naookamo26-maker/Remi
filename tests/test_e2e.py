@@ -489,7 +489,7 @@ def test_pane_widths_change_only_by_splitter(page, remi, fake):
     assert not page.errors, page.errors
 
 
-def test_visible_relations_menu_and_grouped_changes(page, remi, fake):
+def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     seed(fake)
     fake.add_journal(10, 7, details=[
         {"property": "attr", "name": "status_id", "old_value": "1", "new_value": "2"},
@@ -498,19 +498,42 @@ def test_visible_relations_menu_and_grouped_changes(page, remi, fake):
     add_server(remi, fake)
     page.goto(remi.server.start_url)
     playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
-    # バージョンの表記
-    playwright_api.expect(page.locator(".tree-header .version")).to_have_text(re.compile(r"^v\d+\.\d+\.\d+"))
-    # 表示するチケット: ウォッチ中を外すと、ウォッチだけのチケットが一覧とツリーの件数から外れる
-    page.get_by_role("button", name="表示するチケット").click()
+    # バージョンはウィンドウのタイトルに「v」付きで出す(ツリーの上には出さない)
+    assert re.fullmatch(r"Remi v\d+\.\d+\.\d+.*", page.title())
+    playwright_api.expect(page.locator(".pane-tree")).not_to_contain_text("Remi")
+    # サーバーの追加は、設定を開かずにツリーの上のボタンから直接開ける
+    page.locator(".tree-header").get_by_role("button", name="サーバーを追加").click()
+    dialog = page.get_by_role("dialog", name="サーバーの登録")
+    playwright_api.expect(dialog).to_be_visible()
+    dialog.get_by_role("button", name="キャンセル").click()
+    # 表示するチケット(プロジェクトごと): 基幹システムでウォッチ中を外すと、子プロジェクトのウォッチだけの
+    # チケットも、一覧とツリーの件数から外れる
+    page.get_by_role("button", name="表示するチケット: 基幹システム").click()
     menu = page.get_by_role("menu")
+    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="既定(すべて表示)")).to_have_attribute("aria-checked", "true")
     menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    menu = page.get_by_role("menu")
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
+    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="既定(すべて表示)")).to_have_attribute("aria-checked", "false")
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("1")
-    menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
+    assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
+    # 子プロジェクトは親の設定を継承していることを示す
+    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
+    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 基幹システム")).to_have_class(re.compile("own"))
+    # 既定に戻す
+    menu.get_by_role("menuitemcheckbox", name="既定(すべて表示)").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("2")
     page.keyboard.press("Escape")
+    assert remi.ctx.projects.own_visible_relations(1) == {}
+    # 「すべてのプロジェクトを表示」は、サーバーの右クリックメニューで、サーバーごとに切り替える
+    page.locator(".tree .node.server").click(button="right")
+    page.get_by_role("menuitemcheckbox", name="すべてのプロジェクトを表示(このサーバー)").click()
+    end = time.monotonic() + 5
+    while time.monotonic() < end and not remi.ctx.servers.get(1).show_all_projects:
+        time.sleep(0.05)
+    assert remi.ctx.servers.get(1).show_all_projects is True
     # 1回の更新での複数の変更は、1つにまとめて表示する
     page.locator(".issue", has_text="CSVが文字化けする").click()
     group = page.locator(".pane-conv .change-group")

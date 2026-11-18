@@ -304,7 +304,7 @@ async function main() {
     const boot = await call("bootstrap");
     setCatalog(boot.lang, boot.catalog, boot.fallbackCatalog);
     document.documentElement.lang = boot.lang;
-    document.title = `Remi ${boot.version}`;
+    document.title = `Remi v${boot.version}`;
     const app = new App(boot);
     window.remi = app; // 開発・テスト用
     app.mount(root);

@@ -5,13 +5,8 @@ import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
 
-/** 表示するチケットの関係(設定 visible_relations)。src/remi/store/issues.py の RELATIONS と同じ */
+/** 表示するチケットの関係(プロジェクトごとの設定)。src/remi/store/issues.py の RELATIONS と同じ */
 export const RELATIONS = ["assigned", "group", "watching", "authored"];
-
-export function visibleRelations(settings) {
-  const v = settings.visible_relations;
-  return Array.isArray(v) && v.length ? RELATIONS.filter((r) => v.includes(r)) : [...RELATIONS];
-}
 
 export function selectionKey(sel) {
   return `${sel.kind}:${sel.serverId ?? ""}:${sel.projectId ?? ""}`;
@@ -24,22 +19,18 @@ export class Tree {
     this.el = h("ul", { class: "tree", role: "tree", "aria-label": t("tree.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.status = h("div", { class: "sync-status", "aria-live": "polite" });
-    // 表示するチケットの選択。ツリーの件数・未読数と一覧の両方に効くので、ツリーの上に置く
-    this.viewButton = h("button", { type: "button", class: "btn icon-only", title: t("tree.visibleRelations"),
-      "aria-label": t("tree.visibleRelations"), "aria-haspopup": "menu", onClick: (e) => this.viewMenu(e) }, icon("filter"));
+    // 設定・サーバーの追加・同期は、ツリーの上に並べる(アプリ名とバージョンはウィンドウのタイトルに出す)
+    const textButton = (iconName, label, onClick) => h("button", { type: "button", class: "btn", title: label, onClick },
+      icon(iconName), h("span", { class: "label" }, label));
     this.root = h("nav", { class: "pane pane-tree", "aria-label": t("tree.label") },
       h("header", { class: "tree-header" },
-        h("span", { class: "brand" }, "Remi"),
-        h("span", { class: "version", title: t("app.versionHint", { version: app.boot.version }) }, `v${app.boot.version}`),
+        textButton("gear", t("tree.settings"), () => app.openSettings()),
+        textButton("plus", t("tree.addServer"), () => app.openServerDialog()),
         h("span", { class: "spacer" }),
-        this.viewButton),
+        h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"), "aria-label": t("tree.syncNow"),
+          onClick: () => app.syncNow() }, icon("sync"))),
       this.el,
-      h("div", { class: "tree-footer" },
-        this.status,
-        h("div", { class: "row" },
-          h("button", { type: "button", class: "btn", onClick: () => app.openSettings() }, icon("gear"), t("tree.settings")),
-          h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"), "aria-label": t("tree.syncNow"),
-            onClick: () => app.syncNow() }, icon("sync")))));
+      h("div", { class: "tree-footer" }, this.status));
   }
 
   get collapsed() {
@@ -73,6 +64,7 @@ export class Tree {
           hasKids ? (isCollapsed ? "▶" : "▼") : ""),
         opts.icon ? icon(opts.icon) : null,
         h("span", { class: "name" }, label),
+        opts.extra || null,
         opts.dot ? h("span", { class: `dot ${opts.dot}`, title: opts.dotLabel, "aria-label": opts.dotLabel }) : null,
         opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
           : (opts.count ? h("span", { class: "count" }, opts.count) : null));
@@ -91,6 +83,7 @@ export class Tree {
         depth, unread: p.unread, count: p.unread ? 0 : p.count, token: `p:${s.serverId}:${p.projectId}`,
         cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : ""].join(" "),
         title: !p.accessible ? t("tree.noAccess") : null,
+        extra: this.relationsButton(s, p, depth),
         children: p.children.map((c) => project(c, depth + 1)),
       });
       const kids = [
@@ -112,10 +105,7 @@ export class Tree {
     if (!data.servers.length) {
       this.el.append(h("li", { class: "empty" }, t("tree.noServers")));
     }
-    const restricted = visibleRelations(this.app.settings).length < RELATIONS.length;
-    this.viewButton.classList.toggle("on", restricted);
-    this.viewButton.setAttribute("aria-pressed", String(restricted));
-        const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
+    const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
     this.status.textContent = times.length ? t("tree.lastSynced", { time: formatTime(times.at(-1)) }) : "";
   }
 
@@ -145,33 +135,74 @@ export class Tree {
     }
   }
 
-  // 表示するチケット(関係)を選ぶメニュー。チェックを続けて切り替えられるよう、押しても閉じない
-  viewMenu(e) {
-    const r = e.currentTarget.getBoundingClientRect();
-    const items = [{ label: t("tree.visibleRelations"), hint: true }];
+  // プロジェクトの横の「表示するチケット」ボタン。絞っているプロジェクトでは常に表示し、
+  // 自分で設定したものは強調する(継承しているものは控えめに)。ほかは行にマウスを乗せたときだけ表示する
+  relationsButton(server, p, depth) {
+    const restricted = p.relations.length < RELATIONS.length;
+    const summary = t("tree.relationsSummary", { list: p.relations.map((r) => t(`tree.relation.${r}`)).join("、") });
+    const title = !restricted ? t("tree.visibleRelations")
+      : (p.relationsOwn ? summary : t("tree.relationsInherited", { summary }));
+    const state = !restricted ? "" : (p.relationsOwn ? "own" : "inherited");
+    return h("button", { type: "button", class: `node-filter ${state}`.trim(), title,
+      "aria-label": `${t("tree.visibleRelations")}: ${p.name}`, "aria-haspopup": "menu",
+      onClick: (e) => {
+        e.stopPropagation();
+        const r = e.currentTarget.getBoundingClientRect();
+        this.relationsMenu(r.right + 4, r.top, server.serverId, p.projectId, depth === 1);
+      } }, icon("filter"));
+  }
+
+  findProject(serverId, projectId) {
+    const server = this.data?.servers.find((s) => s.serverId === serverId);
+    const find = (nodes) => {
+      for (const n of nodes) {
+        if (n.projectId === projectId) return n;
+        const r = find(n.children);
+        if (r) return r;
+      }
+      return null;
+    };
+    return server ? find(server.projects) : null;
+  }
+
+  // プロジェクトの「表示するチケット」を選ぶメニュー。変えるたびに開き直して、継承の状態とチェックを描き直す
+  relationsMenu(x, y, serverId, projectId, isRoot, focusLabel = null) {
+    const p = this.findProject(serverId, projectId);
+    if (!p) return;
+    const save = async (value, label) => {
+      await call("setProjectSetting", { serverId, projectId, key: "visible_relations", value });
+      await Promise.all([this.refresh(), this.app.list.refresh()]);
+      this.relationsMenu(x, y, serverId, projectId, isRoot, label);
+    };
+    // 最上位のプロジェクトで「継承」するのは、既定(すべて表示)と同じ
+    const inheritLabel = isRoot ? t("tree.relationsDefault") : t("tree.relationsInherit");
+    const items = [
+      { label: t("tree.visibleRelationsFor", { name: p.name }), hint: true },
+      { label: inheritLabel, checked: !p.relationsOwn,
+        onClick: () => save(p.relationsOwn ? null : [...p.relations], inheritLabel) },
+      { sep: true },
+    ];
     for (const rel of RELATIONS) {
+      const label = t(`tree.relation.${rel}`);
       items.push({
-        label: t(`tree.relation.${rel}`), checked: visibleRelations(this.app.settings).includes(rel), keepOpen: true,
-        onClick: async () => {
-          const cur = visibleRelations(this.app.settings);
-          const next = cur.includes(rel) ? cur.filter((x) => x !== rel) : RELATIONS.filter((x) => x === rel || cur.includes(x));
+        label, checked: p.relations.includes(rel),
+        onClick: () => {
+          const next = p.relations.includes(rel) ? p.relations.filter((x) => x !== rel)
+            : RELATIONS.filter((x) => x === rel || p.relations.includes(x));
           if (!next.length) {
             toast(t("tree.visibleRelationsAtLeastOne"));
-            return true;
+            this.relationsMenu(x, y, serverId, projectId, isRoot, label);
+            return;
           }
-          await this.app.saveSetting("visible_relations", next);
-          await Promise.all([this.refresh(), this.app.list.refresh()]);
-          return next.includes(rel);
+          save(next, label);
         },
       });
     }
     items.push({ sep: true }, { label: t("tree.visibleRelationsHint"), hint: true });
-    // ツリーの件数が隠れないよう、ボタンの右(一覧の上)に開く
-    contextMenu(r.right + 4, r.top, items);
+    contextMenu(x, y, items, { focusLabel });
   }
 
   async menu(e, sel) {
-    const app = this.app;
     const items = [{ label: t("menu.markAllRead"), onClick: () => call("markAllRead", { serverId: sel.serverId ?? null, projectId: sel.projectId ?? null }) }];
     const server = this.data.servers.find((s) => s.serverId === sel.serverId);
     if (sel.kind === "project") {
@@ -188,15 +219,20 @@ export class Tree {
         },
         hint: [t("menu.currently", { value: ps[key].effective ? t("menu.on") : t("menu.off") }), extra].filter(Boolean).join(" · "),
       });
+      const depth = server?.projects.some((p) => p.projectId === sel.projectId) ? 1 : 2;
       items.push({ sep: true }, seg("notify", t("menu.notifications")),
-        seg("watch_authored", t("menu.watchAuthored"), t("menu.appliesToSubprojects")));
+        seg("watch_authored", t("menu.watchAuthored"), t("menu.appliesToSubprojects")),
+        { sep: true },
+        { label: t("menu.visibleRelations"),
+          onClick: () => this.relationsMenu(e.clientX, e.clientY, sel.serverId, sel.projectId, depth === 1) });
     } else if (server) {
-      items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) });
+      // チケットのないプロジェクトも表示するかは、サーバーごとに選ぶ
+      items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) },
+        { sep: true },
+        { label: t("menu.showAllProjects"), checked: !!server.showAllProjects,
+          onClick: () => call("setShowAllProjects", { serverId: server.serverId, value: !server.showAllProjects })
+            .then(() => this.refresh()) });
     }
-    items.push({ sep: true }, {
-      label: t("menu.showAllProjects"), checked: !!this.data.showAllProjects,
-      onClick: () => app.saveSetting("show_all_projects", !this.data.showAllProjects).then(() => this.refresh()),
-    });
     contextMenu(e.clientX, e.clientY, items);
   }
 }

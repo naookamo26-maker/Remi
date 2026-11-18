@@ -33,6 +33,7 @@ class Server:
     last_synced_at: str | None = None
     last_error: str | None = None
     sort_order: int = 0
+    show_all_projects: bool = False  # チケットのないプロジェクトもツリーに表示する
 
     def issue_url(self, issue_id: int) -> str:
         return f"{self.url}/issues/{issue_id}"
@@ -49,7 +50,7 @@ class Server:
 _COLUMNS = (
     "name", "url", "enabled", "poll_interval", "notify_enabled", "text_format", "proxy_mode",
     "proxy_url", "my_user_id", "my_login", "my_name", "my_group_ids", "last_sync_cursor",
-    "initial_sync_done", "last_synced_at", "last_error", "sort_order",
+    "initial_sync_done", "last_synced_at", "last_error", "sort_order", "show_all_projects",
 )
 
 
@@ -73,6 +74,7 @@ def _from_row(row) -> Server:
         last_synced_at=row["last_synced_at"],
         last_error=row["last_error"],
         sort_order=row["sort_order"],
+        show_all_projects=bool(row["show_all_projects"]),
     )
 
 
@@ -81,6 +83,7 @@ def _values(s: Server) -> list:
         s.name, s.url, int(s.enabled), s.poll_interval, int(s.notify_enabled), s.text_format,
         s.proxy_mode, s.proxy_url, s.my_user_id, s.my_login, s.my_name, json.dumps(s.my_group_ids),
         s.last_sync_cursor, int(s.initial_sync_done), s.last_synced_at, s.last_error, s.sort_order,
+        int(s.show_all_projects),
     ]
 
 

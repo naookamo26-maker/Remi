@@ -35,6 +35,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
         unread = ctx.issues.unread_by_project(sid, scope)
         counts = ctx.issues.count_by_project(sid, scope)
         relations = ctx.projects.visible_relations_map(sid)
+        server_relations = s.visible_relations or list(RELATIONS)  # サーバーの既定
         own = ctx.projects.own_visible_relations(sid)
         # 表示するプロジェクトは、表示の選択で隠したチケットも含めて決める(選択を変えるたびに
         # ツリーの形が変わらないように)
@@ -56,7 +57,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 "unread": unread.get(p.project_id, 0) + sum(k["unread"] for k in kids),
                 "count": counts.get(p.project_id, 0) + sum(k["count"] for k in kids),
                 # 表示するチケット(継承を解決済み)と、このプロジェクト自身で設定しているか
-                "relations": [r for r in RELATIONS if r in relations.get(p.project_id, RELATIONS)],
+                "relations": [r for r in RELATIONS if r in relations.get(p.project_id, server_relations)],
                 "relationsOwn": p.project_id in own,
                 "children": kids,
             }
@@ -74,6 +75,9 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             "unread": s_unread,
             "count": sum(counts.values()),
             "showAllProjects": s.show_all_projects,
+            # 表示するチケットの既定(プロジェクトで設定していなければこれを使う)と、既定から変えているか
+            "relations": [r for r in RELATIONS if r in server_relations],
+            "relationsOwn": s.visible_relations is not None,
             "projects": roots,
         })
     # 一覧の絞り込みボタンは、どこかのプロジェクトで表示している関係のものだけを出す

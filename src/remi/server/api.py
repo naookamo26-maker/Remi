@@ -311,7 +311,8 @@ class RemiApi:
                 eff = bool(server and server.notify_enabled)
             out[key] = {"value": self.ctx.projects.get_setting(serverId, projectId, key), "effective": bool(eff)}
         own = self.ctx.projects.get_visible_relations(serverId, projectId)
-        eff_rel = self.ctx.projects.visible_relations_map(serverId).get(projectId, list(RELATIONS))
+        eff_rel = self.ctx.projects.visible_relations_map(serverId).get(
+            projectId, (server.visible_relations if server else None) or list(RELATIONS))
         out["visible_relations"] = {"value": own, "effective": [r for r in RELATIONS if r in eff_rel]}
         p = self.ctx.projects.get(serverId, projectId)
         out["url"] = f"{server.url}/projects/{p.identifier or p.project_id}" if server and p else None
@@ -338,13 +339,19 @@ class RemiApi:
         return self.getProjectSettings(serverId, projectId)
 
     @rpc
-    def setShowAllProjects(self, serverId: int, value: bool) -> None:  # noqa: N802,N803
-        """チケットのないプロジェクトもツリーに表示するか(サーバーごと)。"""
+    def setServerSetting(self, serverId: int, key: str, value: Any) -> None:  # noqa: N802,N803
+        """サーバーごとの表示の設定。show_all_projects: チケットのないプロジェクトもツリーに表示するか。
+        visible_relations: 表示するチケットの既定(None はすべて。プロジェクトで設定していなければこれを使う)。
+        """
         if self.ctx.servers.get(serverId) is None:
             raise RpcError("not_found")
-        if not isinstance(value, bool):
-            raise RpcError("invalid_setting", "show_all_projects")
-        self.ctx.servers.update_fields(serverId, show_all_projects=value)
+        if key == "show_all_projects" and isinstance(value, bool):
+            self.ctx.servers.update_fields(serverId, show_all_projects=value)
+        elif key == "visible_relations" and (value is None or _valid_relations(value)):
+            self.ctx.servers.update_fields(
+                serverId, visible_relations=None if value is None else [r for r in RELATIONS if r in value])
+        else:
+            raise RpcError("invalid_setting", key)
         self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)
 
     # --- 一覧 ---------------------------------------------------------------------

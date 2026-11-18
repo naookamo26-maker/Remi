@@ -35,17 +35,27 @@ export function clear(el) {
   return el;
 }
 
+// flush: 待たずにすぐ実行する。flushPending: 実行を待っているときだけ、すぐ実行する
 export function debounce(fn, ms) {
   let timer = null;
+  let pending = null; // 待っている呼び出しの引数
   const wrapped = (...args) => {
     clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), ms);
+    pending = args;
+    timer = setTimeout(() => { pending = null; fn(...args); }, ms);
   };
   wrapped.flush = (...args) => {
     clearTimeout(timer);
+    pending = null;
     fn(...args);
   };
-  wrapped.cancel = () => clearTimeout(timer);
+  wrapped.flushPending = () => {
+    if (pending) wrapped.flush(...pending);
+  };
+  wrapped.cancel = () => {
+    clearTimeout(timer);
+    pending = null;
+  };
   return wrapped;
 }
 

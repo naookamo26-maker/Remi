@@ -140,19 +140,16 @@ CREATE TABLE settings (
 );
 """
 
-# 「すべてのプロジェクトを表示」をサーバーごと、「表示するチケット」をプロジェクトごと(親から継承)の設定にする。
-# それまでのグローバル設定は、すべてのサーバーと、各サーバーの最上位のプロジェクトに引き継ぐ
+# 「すべてのプロジェクトを表示」をサーバーごと、「表示するチケット」をサーバーごとの既定とプロジェクトごと
+# (親から継承)の設定にする。それまでのグローバル設定は、すべてのサーバーに引き継ぐ
 V2 = """
 ALTER TABLE servers ADD COLUMN show_all_projects INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE servers ADD COLUMN visible_relations TEXT;
 ALTER TABLE project_settings ADD COLUMN visible_relations TEXT;
 UPDATE servers SET show_all_projects = 1
     WHERE (SELECT value FROM settings WHERE key = 'show_all_projects') = 'true';
-INSERT INTO project_settings(server_id, project_id, visible_relations)
-    SELECT p.server_id, p.project_id, (SELECT value FROM settings WHERE key = 'visible_relations')
-    FROM projects p
-    WHERE p.parent_id IS NULL
-      AND json_array_length((SELECT value FROM settings WHERE key = 'visible_relations')) BETWEEN 1 AND 3
-    ON CONFLICT(server_id, project_id) DO UPDATE SET visible_relations = excluded.visible_relations;
+UPDATE servers SET visible_relations = (SELECT value FROM settings WHERE key = 'visible_relations')
+    WHERE json_array_length((SELECT value FROM settings WHERE key = 'visible_relations')) BETWEEN 1 AND 3;
 DELETE FROM settings WHERE key IN ('show_all_projects', 'visible_relations')
 """
 

@@ -308,14 +308,42 @@ def test_show_all_projects_per_server(app, fake):
     names = lambda i: [p["name"] for p in app.rpc("getTree")["servers"][i]["projects"]]  # noqa: E731
     assert wait_until(lambda: names(0) == ["チケットあり"] and names(1) == ["チケットあり"])
     assert app.rpc("getTree")["servers"][0]["showAllProjects"] is False
-    app.rpc("setShowAllProjects", serverId=sid, value=True)
+    app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=True)
     tree = app.rpc("getTree")
     assert tree["servers"][0]["showAllProjects"] is True
     assert names(0) == ["チケットあり", "チケットなし"]
     assert names(1) == ["チケットあり"]  # ほかのサーバーには効かない
     assert app.ctx.servers.get(other).show_all_projects is False
-    assert app.rpc_error("setShowAllProjects", serverId=999, value=True)["code"] == "not_found"
-    assert app.rpc_error("setShowAllProjects", serverId=sid, value="yes")["code"] == "invalid_setting"
+    assert app.rpc_error("setServerSetting", serverId=999, key="show_all_projects", value=True)["code"] == "not_found"
+    for key, bad in (("show_all_projects", "yes"), ("visible_relations", []), ("x", True)):
+        assert app.rpc_error("setServerSetting", serverId=sid, key=key, value=bad)["code"] == "invalid_setting"
+
+
+def test_server_default_visible_relations(app, fake):
+    """サーバーの既定は、独自に設定していないプロジェクト(子を含む)に効く。"""
+    fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_project(3, "B")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(20, 2, "子のウォッチ", assigned_to=7, watchers={ME})
+    fake.add_issue(30, 3, "Bのウォッチ", assigned_to=7, watchers={ME})
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 3)
+    ids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues")["issues"])  # noqa: E731
+    app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=["assigned", "group"])
+    assert ids() == [10]
+    [server] = app.rpc("getTree")["servers"]
+    assert server["relations"] == ["assigned", "group"] and server["relationsOwn"] is True
+    assert server["count"] == 1
+    assert [p["relations"] for p in server["projects"]] == [["assigned", "group"]] * 2
+    assert app.rpc("getProjectSettings", serverId=sid, projectId=2)["visible_relations"] == {
+        "value": None, "effective": ["assigned", "group"]}
+    # プロジェクトの独自設定はサーバーの既定より優先し、子プロジェクトにも効く
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=["watching"])
+    assert ids() == [20]
+    app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=None)
+    assert ids() == [20, 30]
+    assert app.rpc("getTree")["servers"][0]["relationsOwn"] is False
 
 
 def test_write_permissions(app, fake):

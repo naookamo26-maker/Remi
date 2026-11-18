@@ -33,25 +33,27 @@ FILTER_RELATIONS: dict[str, tuple[str, ...] | None] = {
 
 @dataclass(frozen=True)
 class RelationScope:
-    """一覧に出すチケット: プロジェクトごとの「表示するチケット」(継承を解決済み)を、
-    一覧の絞り込みボタン(relation_filter)でさらに絞ったもの。
+    """一覧に出すチケット: 「表示するチケット」(プロジェクトの設定 → 親プロジェクト → サーバーの既定 の順に
+    解決したもの)を、一覧の絞り込みボタン(relation_filter)でさらに絞ったもの。
 
     一覧・ツリーの件数と未読数・トレイの未読数・通知で同じものを使い、数を一致させる。
-    default は「表示するチケット」を設定していないプロジェクトの関係、projects は設定のあるプロジェクトの関係
-    ((server_id, project_id) → 関係。空なら何も出さない)。in_use は、監視中のチケットがあるプロジェクトで
-    表示している関係の和(画面で出す絞り込みボタンを決める)。
+    servers はサーバーの既定の関係(server_id → 関係)、projects はプロジェクトで設定している(継承を含む)関係
+    ((server_id, project_id) → 関係)。どちらも空なら何も出さない。どちらにもなければ default。
+    in_use は、監視中のチケットがあるプロジェクトで表示している関係の和(画面で出す絞り込みボタンを決める)。
     """
 
     default: tuple[str, ...] = RELATIONS
+    servers: dict[int, tuple[str, ...]] = field(default_factory=dict)
     projects: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
     in_use: tuple[str, ...] = RELATIONS
 
     @classmethod
-    def build(cls, visible: dict[int, dict[int, list[str]]], in_use: set[str],
-              relation_filter: str | None = None) -> RelationScope:
-        """visible: server_id → (project_id → 表示するチケット)。設定のないプロジェクトは含めない。
+    def build(cls, server_defaults: dict[int, list[str] | None], visible: dict[int, dict[int, list[str]]],
+              in_use: set[str], relation_filter: str | None = None) -> RelationScope:
+        """server_defaults: server_id → サーバーの既定(None はすべて)。
+        visible: server_id → (project_id → 表示するチケット)。プロジェクトで設定していないものは含めない。
 
-        表示しないことにした関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+        どのプロジェクトでも表示しない関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
         """
         used = tuple(r for r in RELATIONS if r in in_use) or RELATIONS
         want = FILTER_RELATIONS.get(relation_filter or "all")
@@ -63,12 +65,13 @@ class RelationScope:
 
         return cls(
             default=narrow(RELATIONS),
+            servers={sid: narrow(rels) for sid, rels in server_defaults.items() if rels is not None},
             projects={(sid, pid): narrow(rels) for sid, m in visible.items() for pid, rels in m.items()},
             in_use=used,
         )
 
     def relations_for(self, server_id: int, project_id: int) -> tuple[str, ...]:
-        return self.projects.get((server_id, project_id), self.default)
+        return self.projects.get((server_id, project_id), self.servers.get(server_id, self.default))
 
     def matches(self, server_id: int, project_id: int, flags: int) -> bool:
         return matches_relations(flags, list(self.relations_for(server_id, project_id)))
@@ -76,22 +79,22 @@ class RelationScope:
     def sql(self) -> str:
         """チケット(別名 i)をこの範囲に絞るSQLの条件。値はすべて整数と固定の文字列なので、そのまま埋め込む。"""
         default = relation_condition(self.default)
-        if not self.projects:
+        if not self.projects and all(v == self.default for v in self.servers.values()):
             return default
-
-        def member(keys) -> str:
-            by_server: dict[int, list[int]] = {}
-            for sid, pid in keys:
-                by_server.setdefault(int(sid), []).append(int(pid))
-            return "(" + " OR ".join(
-                f"(i.server_id = {sid} AND i.project_id IN ({','.join(map(str, sorted(pids)))}))"
-                for sid, pids in sorted(by_server.items())) + ")"
-
-        groups: dict[tuple[str, ...], list[tuple[int, int]]] = {}
-        for key, rels in self.projects.items():
-            groups.setdefault(rels, []).append(key)
-        parts = [f"(NOT {member(self.projects)} AND {default})"]
-        parts += [f"({member(keys)} AND {relation_condition(rels)})" for rels, keys in sorted(groups.items())]
+        server_ids = sorted({int(sid) for sid in self.servers} | {int(sid) for sid, _ in self.projects})
+        parts = []
+        for sid in server_ids:
+            groups: dict[tuple[str, ...], list[int]] = {}
+            for (s_, pid), rels in self.projects.items():
+                if s_ == sid:
+                    groups.setdefault(rels, []).append(int(pid))
+            in_ = lambda pids: f"i.project_id IN ({','.join(map(str, sorted(pids)))})"  # noqa: E731
+            sub = [f"({in_(pids)} AND {relation_condition(rels)})" for rels, pids in sorted(groups.items())]
+            fallback = relation_condition(self.servers.get(sid, self.default))
+            own = [pid for pids in groups.values() for pid in pids]
+            sub.append(f"(NOT {in_(own)} AND {fallback})" if own else fallback)
+            parts.append(f"(i.server_id = {sid} AND ({' OR '.join(sub)}))")
+        parts.append(f"(i.server_id NOT IN ({','.join(map(str, server_ids))}) AND {default})")
         return f"({' OR '.join(parts)})"
 
 

@@ -137,6 +137,8 @@ class App {
   select(sel) {
     if (selectionKey(sel) === selectionKey(this.selection)) return;
     this.selection = sel;
+    // 開いていた会話は閉じる(別のプロジェクトなどを選んだのに、前のチケットが残って見えると紛らわしいので)
+    if (this.current) this.closeIssue({ keepDraft: true });
     this.tree.render();
     this.list.refresh();
   }
@@ -175,8 +177,11 @@ class App {
     if (note) this.conv.scrollToNote(note);
   }
 
-  // 開いている会話を閉じる(入力中の内容・送信前の添付も捨てる)
-  closeIssue() {
+  // 開いている会話を閉じる。送信前の添付は捨てる。keepDraft なら、入力中でまだ保存していない文章を
+  // 下書きとして保存する(サーバーの削除・ユーザーの変更で閉じるときは、前のデータを書き戻さないよう保存しない)
+  closeIssue({ keepDraft = false } = {}) {
+    if (keepDraft) this.conv.composer?.saveDraft.flushPending();
+    else this.conv.composer?.saveDraft.cancel();
     this.current = null;
     this.pendingRead = false;
     call("setOpenIssue", { serverId: null, issueId: null }).catch(() => {});

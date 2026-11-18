@@ -38,10 +38,12 @@ class AppContext:
         if relation_filter is None:
             relation_filter = self.settings.get("relation_filter")
         visible: dict[int, dict[int, list[str]]] = {}
+        defaults: dict[int, list[str] | None] = {}
         in_use: set[str] = set()
         for s in self.servers.list(enabled_only=True):
             m = self.projects.visible_relations_map(s.server_id)
             visible[s.server_id] = m
+            defaults[s.server_id] = s.visible_relations
             for pid in self.issues.count_by_project(s.server_id):
-                in_use.update(m.get(pid, RELATIONS))
-        return RelationScope.build(visible, in_use, relation_filter)
+                in_use.update(m.get(pid, s.visible_relations or RELATIONS))
+        return RelationScope.build(defaults, visible, in_use, relation_filter)

@@ -22,6 +22,8 @@
  * @property {number} unread
  * @property {number} count
  * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか(サーバーごと)
+ * @property {Relation[]} relations        表示するチケットの既定(プロジェクトで設定していなければこれを使う)
+ * @property {boolean} relationsOwn        表示するチケットの既定を、すべてから変えているか
  * @property {TreeProject[]} projects
  */
 
@@ -33,7 +35,7 @@
  * @property {boolean} active
  * @property {number} unread               子プロジェクトを含む
  * @property {number} count                子プロジェクトを含む
- * @property {Relation[]} relations        表示するチケット(親からの継承を解決済み)
+ * @property {Relation[]} relations        表示するチケット(親プロジェクト・サーバーの既定からの継承を解決済み)
  * @property {boolean} relationsOwn        表示するチケットを、このプロジェクト自身で設定しているか
  * @property {TreeProject[]} children
  */

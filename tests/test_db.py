@@ -73,7 +73,7 @@ def test_settings_defaults_and_roundtrip(db):
 
 
 def test_migrate_v2_moves_global_view_settings(tmp_path):
-    """「すべてのプロジェクトを表示」はすべてのサーバーへ、「表示するチケット」は最上位のプロジェクトへ引き継ぐ。"""
+    """「すべてのプロジェクトを表示」と「表示するチケット」は、すべてのサーバーの設定に引き継ぐ。"""
     import json
 
     from remi.store.migrations import MIGRATIONS
@@ -96,10 +96,11 @@ def test_migrate_v2_moves_global_view_settings(tmp_path):
         from remi.store.projects import ProjectStore
         from remi.store.servers import ServerStore
 
-        assert ServerStore(d).get(1).show_all_projects is True
+        server = ServerStore(d).get(1)
+        assert server.show_all_projects is True
+        assert server.visible_relations == ["assigned", "group"]  # サーバーの既定になる
         projects = ProjectStore(d)
-        assert projects.own_visible_relations(1) == {1: ["assigned", "group"]}
-        assert projects.visible_relations_map(1) == {1: ["assigned", "group"], 2: ["assigned", "group"]}
+        assert projects.own_visible_relations(1) == {}
         assert projects.get_setting(1, 1, "notify") is False  # ほかのプロジェクト設定は残る
         assert Settings(d).get("visible_relations") is None
     finally:
@@ -124,6 +125,7 @@ def test_migrate_v2_keeps_defaults(tmp_path):
         from remi.store.servers import ServerStore
 
         assert ServerStore(d).get(1).show_all_projects is False
+        assert ServerStore(d).get(1).visible_relations is None
         assert ProjectStore(d).own_visible_relations(1) == {}
     finally:
         d.close_all()

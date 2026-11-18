@@ -94,6 +94,7 @@ export class Tree {
       const dotLabel = s.status === "error" ? t("tree.statusError") : s.status === "ok" ? t("tree.statusOk") : null;
       const server = node(s.name, { kind: "server", serverId: s.serverId }, {
         icon: "server", cls: "server", header: true, token: `s:${s.serverId}`, children: kids,
+        extra: this.relationsButton(s),
         dot: s.status === "unknown" ? null : s.status, dotLabel, title: s.url,
       });
       this.el.append(server);
@@ -135,20 +136,22 @@ export class Tree {
     }
   }
 
-  // プロジェクトの横の「表示するチケット」ボタン。絞っているプロジェクトでは常に表示し、
-  // 自分で設定したものは強調する(継承しているものは控えめに)。ほかは行にマウスを乗せたときだけ表示する
-  relationsButton(server, p, depth) {
-    const restricted = p.relations.length < RELATIONS.length;
-    const summary = t("tree.relationsSummary", { list: p.relations.map((r) => t(`tree.relation.${r}`)).join("、") });
-    const title = !restricted ? t("tree.visibleRelations")
-      : (p.relationsOwn ? summary : t("tree.relationsInherited", { summary }));
-    const state = !restricted ? "" : (p.relationsOwn ? "own" : "inherited");
+  // サーバー・プロジェクトの横の「表示するチケット」ボタン。絞っているものでは常に表示し、
+  // 自分で設定したものは強調する(継承しているものは控えめに)。ほかは行にマウスを乗せたときだけ表示する。
+  // p を省略するとサーバー(既定)のボタン
+  relationsButton(server, p = null, depth = 0) {
+    const target = p || server;
+    const restricted = target.relations.length < RELATIONS.length;
+    const summary = t("tree.relationsSummary", { list: target.relations.map((r) => t(`tree.relation.${r}`)).join("、") });
+    const from = depth === 1 ? "tree.relationsFromServer" : "tree.relationsInherited";
+    const title = !restricted ? t("tree.visibleRelations") : (target.relationsOwn || !p ? summary : t(from, { summary }));
+    const state = !restricted ? "" : (target.relationsOwn ? "own" : "inherited");
     return h("button", { type: "button", class: `node-filter ${state}`.trim(), title,
-      "aria-label": `${t("tree.visibleRelations")}: ${p.name}`, "aria-haspopup": "menu",
+      "aria-label": `${t("tree.visibleRelations")}: ${target.name}`, "aria-haspopup": "menu",
       onClick: (e) => {
         e.stopPropagation();
         const r = e.currentTarget.getBoundingClientRect();
-        this.relationsMenu(r.right + 4, r.top, server.serverId, p.projectId, depth === 1);
+        this.relationsMenu(r.right + 4, r.top, server.serverId, p?.projectId ?? null, depth === 1);
       } }, icon("filter"));
   }
 
@@ -165,40 +168,60 @@ export class Tree {
     return server ? find(server.projects) : null;
   }
 
-  // プロジェクトの「表示するチケット」を選ぶメニュー。変えるたびに開き直して、継承の状態とチェックを描き直す
+  // 「表示するチケット」を選ぶメニュー。プロジェクトでは、上で[親と同じ|独自]を切り替え、独自のときだけ
+  // 下のチェックを変えられる。サーバー(projectId が null)では既定を選ぶ。変えるたびに開き直して描き直す
   relationsMenu(x, y, serverId, projectId, isRoot, focusLabel = null) {
-    const p = this.findProject(serverId, projectId);
-    if (!p) return;
+    const server = this.data?.servers.find((s) => s.serverId === serverId);
+    const target = projectId === null ? server : this.findProject(serverId, projectId);
+    if (!target) return;
+    const reopen = (label) => this.relationsMenu(x, y, serverId, projectId, isRoot, label);
     const save = async (value, label) => {
-      await call("setProjectSetting", { serverId, projectId, key: "visible_relations", value });
+      if (projectId === null) {
+        // サーバーの既定: すべてを選んだら「既定から変えていない」として保存する
+        await call("setServerSetting", { serverId, key: "visible_relations",
+          value: value && value.length === RELATIONS.length ? null : value });
+      } else {
+        await call("setProjectSetting", { serverId, projectId, key: "visible_relations", value });
+      }
       await Promise.all([this.refresh(), this.app.list.refresh()]);
-      this.relationsMenu(x, y, serverId, projectId, isRoot, label);
+      reopen(label);
     };
-    // 最上位のプロジェクトで「継承」するのは、既定(すべて表示)と同じ
-    const inheritLabel = isRoot ? t("tree.relationsDefault") : t("tree.relationsInherit");
-    const items = [
-      { label: t("tree.visibleRelationsFor", { name: p.name }), hint: true },
-      { label: inheritLabel, checked: !p.relationsOwn,
-        onClick: () => save(p.relationsOwn ? null : [...p.relations], inheritLabel) },
-      { sep: true },
-    ];
+    const own = projectId === null || target.relationsOwn;
+    const title = t("tree.visibleRelationsFor", { name: target.name });
+    const items = [];
+    if (projectId === null) {
+      items.push({ label: title, hint: true });
+    } else {
+      // 最上位のプロジェクトはサーバーの既定を、ほかは親プロジェクトの設定を引き継ぐ。
+      // 独自にしたときは、引き継いでいた値から始める
+      const inheritLabel = isRoot ? t("tree.relationsServer") : t("tree.relationsInherit");
+      const ownLabel = t("tree.relationsOwnMode");
+      items.push({ segmented: { label: title, value: own,
+        options: [{ label: inheritLabel, value: false }, { label: ownLabel, value: true }],
+        onChange: (v) => {
+          if (v === own) return reopen(v ? ownLabel : inheritLabel);
+          save(v ? [...target.relations] : null, v ? ownLabel : inheritLabel);
+        } } });
+    }
+    items.push({ sep: true });
     for (const rel of RELATIONS) {
       const label = t(`tree.relation.${rel}`);
       items.push({
-        label, checked: p.relations.includes(rel),
+        label, checked: target.relations.includes(rel), disabled: !own,
         onClick: () => {
-          const next = p.relations.includes(rel) ? p.relations.filter((x) => x !== rel)
-            : RELATIONS.filter((x) => x === rel || p.relations.includes(x));
+          const next = target.relations.includes(rel) ? target.relations.filter((r) => r !== rel)
+            : RELATIONS.filter((r) => r === rel || target.relations.includes(r));
           if (!next.length) {
             toast(t("tree.visibleRelationsAtLeastOne"));
-            this.relationsMenu(x, y, serverId, projectId, isRoot, label);
+            reopen(label);
             return;
           }
           save(next, label);
         },
       });
     }
-    items.push({ sep: true }, { label: t("tree.visibleRelationsHint"), hint: true });
+    items.push({ sep: true },
+      { label: projectId === null ? t("tree.visibleRelationsServerHint") : t("tree.visibleRelationsHint"), hint: true });
     contextMenu(x, y, items, { focusLabel });
   }
 
@@ -230,8 +253,10 @@ export class Tree {
       items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) },
         { sep: true },
         { label: t("menu.showAllProjects"), checked: !!server.showAllProjects,
-          onClick: () => call("setShowAllProjects", { serverId: server.serverId, value: !server.showAllProjects })
-            .then(() => this.refresh()) });
+          onClick: () => call("setServerSetting", { serverId: server.serverId, key: "show_all_projects",
+            value: !server.showAllProjects }).then(() => this.refresh()) },
+        { label: t("menu.visibleRelations"),
+          onClick: () => this.relationsMenu(e.clientX, e.clientY, server.serverId, null, false) });
     }
     contextMenu(e.clientX, e.clientY, items);
   }

@@ -510,19 +510,23 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     # チケットも、一覧とツリーの件数から外れる
     page.get_by_role("button", name="表示するチケット: 基幹システム").click()
     menu = page.get_by_role("menu")
-    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="既定(すべて表示)")).to_have_attribute("aria-checked", "true")
+    # 最上位のプロジェクトは、既定ではサーバーの既定を引き継ぐ。そのあいだはチェックを変えられない
+    playwright_api.expect(menu.get_by_role("button", name="サーバーと同じ")).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_be_disabled()
+    menu.get_by_role("button", name="独自").click()
+    menu = page.get_by_role("menu")
+    playwright_api.expect(menu.get_by_role("button", name="独自")).to_have_attribute("aria-pressed", "true")
     menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(1)
     menu = page.get_by_role("menu")
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
-    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="既定(すべて表示)")).to_have_attribute("aria-checked", "false")
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("1")
     assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
     # 子プロジェクトは親の設定を継承していることを示す
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 基幹システム")).to_have_class(re.compile("own"))
-    # 既定に戻す
-    menu.get_by_role("menuitemcheckbox", name="既定(すべて表示)").click()
+    # サーバーと同じに戻すと、独自の設定は消える
+    menu.get_by_role("button", name="サーバーと同じ").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("2")
     page.keyboard.press("Escape")
@@ -539,4 +543,25 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     group = page.locator(".pane-conv .change-group")
     playwright_api.expect(group).to_have_count(1, timeout=15000)
     playwright_api.expect(group.locator("li")).to_have_count(2)
+    assert not page.errors, page.errors
+
+
+def test_selecting_tree_item_closes_conversation_and_keeps_draft(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    conv.get_by_role("textbox", name="コメント").fill("書きかけ")
+    # すぐに別の項目を選ぶ: 会話は閉じ、書きかけの文章は下書きとして残る
+    page.locator(".tree .node", has_text="受注管理").click()
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    playwright_api.expect(conv).to_contain_text("チケットを選ぶと会話が表示されます")
+    end = time.monotonic() + 5
+    while time.monotonic() < end and remi.ctx.issues.get_draft(1, 10)[0] != "書きかけ":
+        time.sleep(0.05)
+    assert remi.ctx.issues.get_draft(1, 10)[0] == "書きかけ"
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(conv.get_by_role("textbox", name="コメント")).to_have_value("書きかけ", timeout=15000)
     assert not page.errors, page.errors

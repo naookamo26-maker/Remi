@@ -306,3 +306,76 @@ def test_open_redmine_menu(page, remi, fake, monkeypatch):
     page.get_by_role("menuitem", name="URLをコピー").click()
     playwright_api.expect(page.get_by_role("status")).to_contain_text("コピーしました")
     assert page.evaluate("() => navigator.clipboard.readText()") == f"{fake.base_url}/issues/10"
+
+
+def test_live_update_keeps_composer_state(page, remi, fake):
+    """同じチケットに更新が届いても、入力欄は作り直さない(入力中のフォーカス・カーソル・プレビューを保つ)。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    box = conv.get_by_role("textbox", name="コメント")
+    box.click()
+    box.press_sequentially("入力中")
+    box.press("ArrowLeft")
+    assert page.evaluate("getComputedStyle(document.querySelector('.chips')).display") == "none"
+    fake.add_journal(10, 8, "届いたコメント")
+    remi.sync.sync_now()
+    playwright_api.expect(conv.locator(".bubble", has_text="届いたコメント")).to_be_visible(timeout=30000)
+    assert box.evaluate("el => document.activeElement === el && el.selectionStart") == 2
+    assert box.input_value() == "入力中"
+    assert not page.errors, page.errors
+
+
+def test_switching_issue_while_sending(page, remi, fake):
+    """送信中に別のチケットへ移っても、移動先の入力欄は「送信中」にならない。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.get_by_label("ステータス", exact=True)).to_be_enabled(timeout=15000)
+    box = conv.get_by_role("textbox", name="コメント")
+    with fake._lock:  # 偽Redmineの応答を止めて、送信中の状態を作る
+        box.fill("送信中のコメント")
+        conv.get_by_role("button", name="送信").click()
+        playwright_api.expect(conv.locator(".msg.pending")).to_be_visible()
+        page.locator(".issue", has_text="メールの宛先").click()
+        playwright_api.expect(conv.locator("h1")).to_have_text("メールの宛先を追加したい")
+        playwright_api.expect(conv.locator(".msg.pending")).to_have_count(0)
+        box.fill("別のコメント")
+        playwright_api.expect(conv.get_by_role("button", name="送信")).to_be_enabled()
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(conv.locator(".msg.mine .bubble", has_text="送信中のコメント")).to_be_visible(timeout=20000)
+    playwright_api.expect(box).to_have_value("", timeout=10000)
+    assert not page.errors, page.errors
+
+
+def test_tree_toggle_and_settings_tabs(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    tree = page.locator(".tree")
+    playwright_api.expect(tree).to_contain_text("受注管理")
+    # 折りたたみは保存を待たずに反映され、←→キーでも操作できる
+    page.locator(".node.server .twisty").click()
+    playwright_api.expect(tree).not_to_contain_text("未読のみ", timeout=1000)
+    page.locator(".node.server .twisty").click()
+    playwright_api.expect(tree).to_contain_text("受注管理", timeout=1000)
+    page.locator(".node", has_text="基幹システム").click()
+    tree.press("ArrowLeft")
+    playwright_api.expect(tree).not_to_contain_text("受注管理", timeout=1000)
+    tree.press("ArrowRight")
+    playwright_api.expect(tree).to_contain_text("受注管理", timeout=1000)
+    assert remi.ctx.settings.get("tree_collapsed") == []
+
+    # 設定ダイアログ: タブを切り替えても、変更後の値が表示される
+    page.get_by_role("button", name="設定").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("外観").select_option("dark")
+    playwright_api.expect(page.locator("html")).to_have_class("theme-dark")
+    dialog.get_by_role("tab", name="サーバー").click()
+    dialog.get_by_role("tab", name="全般").click()
+    playwright_api.expect(dialog.get_by_label("外観")).to_have_value("dark")
+    assert not page.errors, page.errors

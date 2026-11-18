@@ -6,7 +6,11 @@ import { icon } from "./icons.js";
 import { contextMenu, lightbox } from "./ui.js";
 
 const PAGE = 50;
+// ヘッダで変更できる項目と、その表示名のキー
+const FIELD_LABELS = { status_id: "field.status", assigned_to_id: "field.assignee", priority_id: "field.priority" };
 const AVATAR_COLORS = ["#FCE7D6", "#E0E7FF", "#DCFCE7", "#FDE68A", "#FBCFE8", "#CFFAFE", "#E9D5FF", "#FED7AA"];
+
+const issueKey = (d) => (d ? `${d.serverId}:${d.issueId}` : "");
 
 function avatar(name, id) {
   const label = (name || "?").trim().charAt(0);
@@ -19,7 +23,9 @@ export class Conversation {
     this.app = app;
     this.data = null;
     this.limit = PAGE;
-    this.sending = false;
+    // 送信中のチケット(issueKey → 送った本文)。送信中に別のチケットへ移っても状態が混ざらないようにする
+    this.inFlight = new Map();
+    this.composerEl = null;
     this.changes = {}; // ヘッダで選んだ、送信前の変更 {status_id: {value, label, from}}
     this.uploads = []; // 送信前の添付 [{key, id, token, filename, contentType, isImage, url, state}]
     this.editOptions = null;
@@ -27,13 +33,19 @@ export class Conversation {
     this.showEmpty();
   }
 
+  get sending() {
+    return this.inFlight.has(issueKey(this.data));
+  }
+
   showEmpty() {
     this.data = null;
+    this.composerEl = null;
     clear(this.root).append(h("div", { class: "welcome" }, h("p", { class: "muted" }, t("conv.selectIssue"))));
   }
 
   showWelcome() {
     this.data = null;
+    this.composerEl = null;
     clear(this.root).append(h("div", { class: "welcome" },
       h("h2", {}, t("welcome.title")),
       h("p", { class: "muted" }, t("welcome.body")),
@@ -98,18 +110,27 @@ export class Conversation {
 
   render(sameIssue) {
     const d = this.data;
-    const composerState = sameIssue && this.textarea ? { value: this.textarea.value, private: this.privateBox.checked } : null;
-    clear(this.root);
-    this.root.append(this.header(d));
-    this.timeline = h("div", { class: "timeline", role: "log", "aria-label": t("conv.timeline"),
+    const header = this.header(d);
+    const timeline = h("div", { class: "timeline", role: "log", "aria-label": t("conv.timeline"),
       onClick: (e) => this.onTimelineClick(e),
       onScroll: () => { this.stickBottom = this.isNearBottom(); } });
     // 画像の読み込みで高さが変わっても、最下部を見ていたら最下部を保つ
-    this.timeline.addEventListener("load", (e) => {
-      if (e.target.tagName === "IMG" && this.stickBottom) this.timeline.scrollTop = this.timeline.scrollHeight;
+    timeline.addEventListener("load", (e) => {
+      if (e.target.tagName === "IMG" && this.stickBottom) timeline.scrollTop = timeline.scrollHeight;
     }, true);
-    this.root.append(this.timeline, this.composer(d, composerState));
+    if (sameIssue && this.composerEl?.isConnected) {
+      // 同じチケットの更新では入力欄を作り直さない(入力中のフォーカス・カーソル位置・IMEの変換・
+      // 元に戻す履歴・プレビューの状態を保つ)
+      this.headerEl.replaceWith(header);
+      this.timeline.replaceWith(timeline);
+    } else {
+      this.composerEl = this.composer(d);
+      clear(this.root).append(header, timeline, this.composerEl);
+    }
+    this.headerEl = header;
+    this.timeline = timeline;
     this.fillTimeline(d);
+    this.updateSend();
   }
 
   header(d) {
@@ -140,7 +161,8 @@ export class Conversation {
     const el = h("header", { class: "conv-header" },
       h("div", { class: "top" },
         h("div", { class: "titles" },
-          h("div", { class: "crumb" }, [d.serverName, ...d.breadcrumb].join(" › "), " · ", `${d.tracker} #${d.issueId}`),
+          h("div", { class: "crumb", title: [d.serverName, ...d.breadcrumb].join(" › ") },
+            [d.serverName, ...d.breadcrumb].join(" › "), " · ", `${d.tracker} #${d.issueId}`),
           h("h1", {}, d.subject)),
         h("div", { class: "actions" }, watchBtn, h("span", { class: "split" }, openBtn, moreBtn))),
       h("div", { class: "fields" },
@@ -155,7 +177,7 @@ export class Conversation {
 
   // 選択肢が読み込まれるまでは、今の値だけを表示して操作できないようにしておく
   fieldSelect(key, label, value) {
-    const sel = h("select", { disabled: true, "aria-label": t(`field.${{ status_id: "status", assigned_to_id: "assignee", priority_id: "priority" }[key]}`),
+    const sel = h("select", { disabled: true, "aria-label": t(FIELD_LABELS[key]),
       onChange: () => this.onFieldChange(key, sel) });
     sel.append(h("option", { value: value ?? "" }, label || "-"));
     sel.dataset.current = value ?? "";
@@ -292,8 +314,8 @@ export class Conversation {
   }
 
   // --- 入力欄 -------------------------------------------------------------------
-  composer(d, state) {
-    const draft = state ?? { value: d.draft.body, private: d.draft.private };
+  composer(d) {
+    const draft = { value: d.draft.body, private: d.draft.private };
     this.textarea = h("textarea", { "aria-label": t("conv.comment"), placeholder: t("conv.placeholder"), rows: "3",
       onInput: () => { this.saveDraft(); this.updateSend(); },
       onKeydown: (e) => this.onComposerKey(e),
@@ -307,7 +329,7 @@ export class Conversation {
       onChange: () => { this.addFiles([...this.fileInput.files], false); this.fileInput.value = ""; } });
     this.sendButton = h("button", { type: "button", class: "btn primary", onClick: () => this.send() }, icon("send"), t("conv.send"));
     this.error = h("div", { class: "error", role: "alert" });
-    if (d.draft.failed && !state) this.showFailed();
+    if (d.draft.failed) this.showFailed();
     const tab = (label, selected, onClick) => h("button", { type: "button", role: "tab", "aria-selected": String(selected), onClick }, label);
     const editTab = tab(t("conv.edit"), true, () => this.setPreview(false, editTab, previewTab));
     const previewTab = tab(t("conv.preview"), false, () => this.setPreview(true, editTab, previewTab));
@@ -344,9 +366,8 @@ export class Conversation {
   renderChips() {
     if (!this.chips) return;
     clear(this.chips);
-    const names = { status_id: "field.status", assigned_to_id: "field.assignee", priority_id: "field.priority" };
     for (const [key, c] of Object.entries(this.changes)) {
-      this.chips.append(h("span", { class: "chip" }, `${t(names[key])}: ${c.from} → ${c.label}`,
+      this.chips.append(h("span", { class: "chip" }, `${t(FIELD_LABELS[key])}: ${c.from} → ${c.label}`,
         h("button", { type: "button", "aria-label": t("conv.undoChange"), onClick: () => {
           delete this.changes[key];
           this.fillFields();
@@ -473,7 +494,8 @@ export class Conversation {
     const changes = Object.fromEntries(Object.entries(this.changes).map(([k, c]) => [k, c.value]));
     const uploads = this.uploads.filter((u) => u.state === "done")
       .map((u) => ({ token: u.token, filename: u.filename, contentType: u.contentType }));
-    this.sending = true;
+    this.saveDraft.cancel(); // 送信後に古い下書きが保存し直されないようにする(下書きはサーバー側で保存する)
+    this.inFlight.set(issueKey(d), body);
     this.error.textContent = "";
     this.updateSend();
     this.timeline.append(this.pendingMessage());
@@ -495,14 +517,20 @@ export class Conversation {
 
   // バックエンドから送信結果が届いた
   noteFinished(ev) {
+    const key = issueKey(ev);
+    if (!this.inFlight.has(key)) return;
+    const sent = this.inFlight.get(key);
+    this.inFlight.delete(key);
     const d = this.data;
-    if (!d || ev.serverId !== d.serverId || ev.issueId !== d.issueId) return;
-    this.sending = false;
+    if (!d || issueKey(d) !== key) return; // 別のチケットを表示中: 開き直したときに下書きから復元される
     this.timeline.querySelector(".msg.pending")?.remove();
     if (ev.error) {
       this.showFailed(ev.error, ev.detail);
     } else {
-      this.textarea.value = "";
+      // 送信中に書き足した分は消さずに残す
+      const value = this.textarea.value;
+      this.textarea.value = value.startsWith(sent) ? value.slice(sent.length).replace(/^\s*\n/, "") : value;
+      if (this.textarea.value) this.saveDraft();
       this.error.textContent = "";
       this.changes = {};
       this.uploads = [];

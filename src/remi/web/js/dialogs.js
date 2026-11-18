@@ -127,20 +127,22 @@ export function serverDialog(app, server = null) {
 }
 
 export function settingsDialog(app) {
-  const s = app.settings;
+  app.settingsDialog?.close(); // 二重に開かない
   const tabs = h("div", { class: "dialog-tabs tabs", role: "tablist" });
   const panel = h("div", { class: "dialog-body" });
   const set = (key, value) => app.saveSetting(key, value);
 
+  // タブを切り替えて描き直すたびに、その時点の設定を読む(開いたときの値のままにしない)
   const select = (key, options, onChange = null) => {
     const el = h("select", { onChange: () => { set(key, el.value); onChange?.(el.value); } },
-      options.map(([v, label]) => h("option", { value: v, selected: s[key] === v }, label)));
+      options.map(([v, label]) => h("option", { value: v, selected: app.settings[key] === v }, label)));
     return el;
   };
   const check = (key, label) => h("label", {},
-    h("input", { type: "checkbox", checked: !!s[key], onChange: (e) => set(key, e.target.checked) }), label);
+    h("input", { type: "checkbox", checked: !!app.settings[key], onChange: (e) => set(key, e.target.checked) }), label);
 
   const general = () => {
+    const s = app.settings;
     const note = h("div", { class: "help", hidden: true }, t("settings.languageNote"));
     const langs = [["system", t("settings.followSystem")], ...Object.entries(app.boot.languages)];
     const retention = h("input", { type: "number", min: "0", max: "365", value: s.closed_retention_days,
@@ -171,8 +173,7 @@ export function settingsDialog(app) {
           h("button", { type: "button", class: "btn danger", onClick: async () => {
             if (await confirmDialog(t("settings.deleteTitle"), t("settings.deleteBody", { name: sv.name }), t("common.delete"), { danger: true })) {
               await call("deleteServer", { serverId: sv.serverId });
-              app.onServersChanged();
-              show("servers");
+              app.onServersChanged(); // 一覧はこの中で描き直される
             }
           } }, t("common.delete"))));
       }
@@ -189,8 +190,10 @@ export function settingsDialog(app) {
     tabs.append(h("button", { type: "button", role: "tab", dataset: { page: name }, onClick: () => show(name) }, label));
   }
   const close = h("button", { type: "button", class: "btn", onClick: () => m.close() }, t("common.close"));
-  const m = modal({ title: t("settings.title"), body: h("div", {}, tabs, panel), footer: [close] });
+  const m = modal({ title: t("settings.title"), body: h("div", {}, tabs, panel), footer: [close],
+    onClose: () => { if (app.settingsDialog === handle) app.settingsDialog = null; } });
+  const handle = { refresh: () => show("servers"), close: () => m.close() };
   show("general");
-  app.settingsDialog = { refresh: () => show("servers"), close: () => m.close() };
+  app.settingsDialog = handle;
   return m;
 }

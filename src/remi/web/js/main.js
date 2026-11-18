@@ -8,6 +8,7 @@ import { IssueList } from "./list.js";
 import { selectionKey, Tree } from "./tree.js";
 
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+const CONV_MIN_WIDTH = 360;
 
 class App {
   constructor(boot) {
@@ -77,7 +78,10 @@ class App {
     sp.setPointerCapture(e.pointerId);
     sp.classList.add("dragging");
     const min = index === 0 ? 180 : 240;
-    const move = (ev) => { target.style.width = `${Math.max(min, Math.min(innerWidth * 0.5, startW + ev.clientX - startX))}px`; };
+    // 会話ペインの最小幅(CSSの .pane-conv と同じ)を残す
+    const other = (index === 0 ? this.list.root : this.tree.root).getBoundingClientRect().width;
+    const max = Math.max(min, Math.min(innerWidth * 0.5, innerWidth - other - CONV_MIN_WIDTH));
+    const move = (ev) => { target.style.width = `${Math.max(min, Math.min(max, startW + ev.clientX - startX))}px`; };
     const up = () => {
       sp.classList.remove("dragging");
       sp.removeEventListener("pointermove", move);
@@ -132,8 +136,13 @@ class App {
   async openIssue(serverId, issueId, { note = null } = {}) {
     this.current = { serverId, issueId };
     this.list.markSelected();
-    call("setOpenIssue", { serverId, issueId });
-    await this.conv.load(serverId, issueId, { markRead: document.hasFocus() || document.visibilityState === "visible", resetLimit: true });
+    call("setOpenIssue", { serverId, issueId }).catch(() => {});
+    try {
+      await this.conv.load(serverId, issueId, { markRead: document.hasFocus() || document.visibilityState === "visible", resetLimit: true });
+    } catch (e) {
+      toast(t(`errors.${e.code || "connection_failed"}`));
+      return;
+    }
     if (note) this.conv.scrollToNote(note);
   }
 
@@ -219,7 +228,13 @@ class App {
         this.openIssue(e.serverId, e.issueId);
         break;
       case "watchFinished":
-        if (e.error) toast(t(`errors.${e.error}`));
+        if (e.error) {
+          toast(t(`errors.${e.error}`));
+          // 失敗したときは dataChanged が来ないので、描き直してボタンを押せる状態に戻す
+          if (this.current && e.serverId === this.current.serverId && e.issueId === this.current.issueId) {
+            this.conv.load(this.current.serverId, this.current.issueId, { markRead: false });
+          }
+        }
         break;
       case "openSettings":
         this.openSettings();
@@ -231,9 +246,10 @@ class App {
     }
   }
 
+  // 届いたイベントでの描き直し。失敗しても(アプリの終了中など)次のイベントで描き直されるので無視する
   refreshSoon = debounce(() => {
-    this.tree.refresh();
-    this.list.refresh();
+    this.tree.refresh().catch((e) => console.warn("tree refresh failed", e));
+    this.list.refresh().catch((e) => console.warn("list refresh failed", e));
   }, 300);
 }
 

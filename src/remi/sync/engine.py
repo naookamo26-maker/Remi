@@ -79,6 +79,9 @@ class ServerSync:
         self.issues = IssueStore(db)
         self.projects = ProjectStore(db)
         self.masters = MasterStore(db)
+        # journal を取得したときの updated_on。updated_on は秒単位なので、取得と同じ秒に入った更新は
+        # updated_on が変わらず見逃してしまう。開いているチケットは、取得後に一度だけ確認し直す。
+        self._unconfirmed: dict[int, str | None] = {}
 
     @property
     def server(self) -> Server:
@@ -210,6 +213,7 @@ class ServerSync:
             self.masters.remember(self.server_id, "custom_field", cf.get("id"), cf.get("name"))
         if first_fetch:
             self.issues.apply_read_baseline(self.server_id, issue_id)
+        self._unconfirmed[issue_id] = data.get("updated_on")
         if new_ids:
             result.changed_issue_ids.add(issue_id)
         if notify and new_ids:
@@ -225,10 +229,15 @@ class ServerSync:
     def check_issue(self, issue_id: int) -> SyncResult:
         """開いているチケットの軽い確認: updated_on が変わっていたら取得し直す(設計書 §4.5)。"""
         data = self.client.issue(issue_id)
-        if data.get("updated_on") == self.issues.updated_on(self.server_id, issue_id) \
-                and self.issues.journals_synced(self.server_id, issue_id):
+        updated_on = data.get("updated_on")
+        unchanged = updated_on == self.issues.updated_on(self.server_id, issue_id) \
+            and self.issues.journals_synced(self.server_id, issue_id)
+        if unchanged and self._unconfirmed.get(issue_id, "") != updated_on:
             return SyncResult()
-        return self.fetch_journals(issue_id)
+        result = self.fetch_journals(issue_id)
+        if unchanged:
+            self._unconfirmed.pop(issue_id, None)  # 確認できた: 次からは updated_on だけで判定する
+        return result
 
     def pending_journal_issue_ids(self, limit: int = 20) -> list[int]:
         return self.issues.issues_needing_journals(self.server_id, limit)

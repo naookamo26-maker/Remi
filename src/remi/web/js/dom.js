@@ -45,6 +45,7 @@ export function debounce(fn, ms) {
     clearTimeout(timer);
     fn(...args);
   };
+  wrapped.cancel = () => clearTimeout(timer);
   return wrapped;
 }
 

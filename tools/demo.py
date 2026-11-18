@@ -68,6 +68,12 @@ def seed(fake) -> None:
         {"property": "attr", "name": "assigned_to_id", "old_value": "7", "new_value": str(ME)},
     ])
     fake.add_journal(1234, 7, "ありがとうございます!テスト環境で確認します。", created_on=ts(2))
+    # 自動リンクの見本(http / https / www. / mailto と、link_schemes.json で指定したスキーム)
+    fake.add_journal(1234, 8, "手順書はhttps://wiki.example.com/csv-exportです(社外:www.example.co.jp)。\n"
+                     "テスト環境: http://test-redmine.local/issues/1234\n"
+                     "共有フォルダ: smb://fs01/share/受注/仕様書\n"
+                     "サーバー: ssh://deploy@app01.local 、問い合わせは mailto:support@example.co.jp か tel:0312345678 へ。",
+                     created_on=ts(1))
     fake.add_issue(1229, 2, "受注確定メールの宛先に営業担当を追加したい", assigned_to=7, watchers={ME}, updated_on=ts(45))
     fake.add_journal(1229, 8, "仕様を確認しました。来週着手します。", created_on=ts(44))
     fake.add_issue(1198, 2, "帳票出力の文字コードをShift_JISに統一する", assigned_to=100, updated_on=ts(1500))

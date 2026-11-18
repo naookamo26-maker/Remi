@@ -46,20 +46,33 @@ def link_schemes(path: Path = SCHEMES_FILE) -> tuple[LinkScheme, ...]:
     return tuple(out.values())
 
 
+# 常にリンクにするもの(ファイルでの指定は要らない)。www. で始まるものは http:// を補う
+BUILTIN = (LinkScheme("https", True, False), LinkScheme("http", True, False), LinkScheme("mailto", False, False))
+
+
 @lru_cache(maxsize=1)
-def _pattern() -> re.Pattern[str] | None:
-    schemes = link_schemes()
-    if not schemes:
-        return None
-    alts = [re.escape(s.scheme) + ("://" if s.slashes else ":") for s in schemes]
+def _pattern() -> re.Pattern[str]:
+    schemes = (*BUILTIN, *link_schemes())
+    alts = [re.escape(s.scheme) + ("://" if s.slashes else ":") for s in schemes] + [r"www\."]
     # 本文はHTMLのエスケープ済み。&lt; &gt; &quot; などの手前で止め、末尾の句読点・括弧はリンクに含めない
-    # 途中に含めない文字: 空白・引用符と、全角の句読点・括弧・空白(日本語の文章に続けて書かれることが多いため)
-    inner = "\\s<>\"'\u3001\u3002\uff0c\uff0e\u300c\u300d\u300e\u300f\uff08\uff09\u3010\u3011\u3000"
+    # 途中に含めない文字: 空白・引用符・バッククォートと、全角の句読点・括弧・空白・ひらがな
+    # (日本語の文章に続けて書かれることが多いため。漢字・カタカナはパスに使われるので区切らない)
+    inner = "\\s<>\"'`\u3041-\u309f\u3001\u3002\uff0c\uff0e\u300c\u300d\u300e\u300f\uff08\uff09\u3010\u3011\u3000"
     # 最後の文字に含めない文字: さらに半角の句読点・閉じ括弧
     last = inner + ".,;:!?)\\]"
     entity = r"(?!&(?:lt|gt|quot|#39|#x27);)"
     body = f"(?:{entity}[^{inner}])*(?:{entity}[^{last}])"
-    return re.compile(r"(?<![\w./+-])(?:" + "|".join(alts) + ")" + body, re.I)
+    # 英数字の直後は、単語の途中なのでリンクにしない(日本語の直後はリンクにする)
+    return re.compile(r"(?<![A-Za-z0-9./+@-])(?:" + "|".join(alts) + ")" + body, re.I)
+
+
+def _anchor(m: re.Match[str]) -> str:
+    text = m.group(0)
+    if text.lower().startswith("www."):
+        return f'<a href="http://{text}" rel="noopener noreferrer">{text}</a>'
+    if re.match(r"(?i)(https?|mailto):", text):
+        return f'<a href="{text}" rel="noopener noreferrer">{text}</a>'
+    return f'<a href="{text}" class="ext uri">{text}</a>'
 
 
 _TAG = re.compile(r"(<[^>]+>)")
@@ -67,11 +80,11 @@ _SKIP = re.compile(r"<(/?)(a|code|pre)\b", re.I)
 
 
 def link_custom_schemes(html_text: str) -> str:
-    """サニタイズ済みのHTMLの文字の部分で、指定したスキームのURIをリンクにする。
-    リンク・コード・整形済みテキストの中は変えない。
+    """サニタイズ済みのHTMLの文字の部分で、URI(http / https / mailto / www. と、指定したスキーム)をリンクにする。
+    リンク・コード・整形済みテキストの中は変えない。どの書式(Markdown / Textile / プレーンテキスト)でも同じ規則にする。
     """
     pattern = _pattern()
-    if pattern is None or ":" not in html_text:
+    if ":" not in html_text and "www." not in html_text.lower():
         return html_text
     out = []
     skip = 0
@@ -84,7 +97,7 @@ def link_custom_schemes(html_text: str) -> str:
         elif skip:
             out.append(part)
         else:
-            out.append(pattern.sub(lambda u: f'<a href="{u.group(0)}" class="ext uri">{u.group(0)}</a>', part))
+            out.append(pattern.sub(_anchor, part))
     return "".join(out)
 
 

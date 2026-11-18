@@ -140,3 +140,17 @@ def test_link_schemes_file(tmp_path):
     got = link_schemes(f)
     assert [(s.scheme, s.slashes, s.confirm) for s in got] == [("notes", True, False), ("tel", False, True)]
     assert link_schemes(tmp_path / "none.json") == ()
+
+
+@pytest.mark.parametrize("fmt", ["common_mark", "textile", "plain"])
+def test_http_links_in_every_format(fmt):
+    """http / https / mailto / www. は、どの書式でも同じ規則でリンクにする(日本語の文章の中でも)。"""
+    out = render("詳細は https://example.com/a?b=1&c=2 です。URLはhttps://example.com/bです(https://example.com/c)"
+                 "、http://intra/issues/1。www.example.com と mailto:a@b.jp abchttps://no", ctx(fmt))
+    assert '<a href="https://example.com/a?b=1&amp;c=2" rel="noopener noreferrer">' in out
+    assert '>https://example.com/b</a>です' in out  # ひらがなで区切る
+    assert '>https://example.com/c</a>)' in out  # 閉じ括弧は含めない
+    assert '>http://intra/issues/1</a>。' in out  # 句点は含めない
+    assert '<a href="http://www.example.com" rel="noopener noreferrer">www.example.com</a>' in out
+    assert '<a href="mailto:a@b.jp" rel="noopener noreferrer">' in out
+    assert 'href="https://no"' not in out  # 英数字の直後(単語の途中)はリンクにしない

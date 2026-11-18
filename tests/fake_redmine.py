@@ -45,6 +45,7 @@ class FakeRedmine:
         self.versions: dict[int, dict] = {}
         # カスタムフィールドの定義(/custom_fields.json は管理者だけ)と、プロジェクトのカテゴリ
         self.custom_fields: list[dict] = []
+        self.notes_editable = True  # コメントの編集を許すか(False なら 403)
         self.categories: dict[int, list[dict]] = {}
         self.journals: dict[int, list[dict]] = {}
         self.attachments: dict[int, dict] = {}  # id -> {..., "content": bytes}
@@ -348,6 +349,32 @@ class FakeRedmine:
                 sort = query.get("sort", "")
                 items.sort(key=lambda i: i["updated_on"], reverse=sort.endswith(":desc"))
                 return 200, self._page(items, query, "issues")
+            m = re.match(r"^/journals/(\d+)\.json$", path)
+            if m and method == "PUT":
+                jid = int(m.group(1))
+                for iid, js in self.journals.items():
+                    j = next((x for x in js if x["id"] == jid), None)
+                    if j is None:
+                        continue
+                    if not self.notes_editable:
+                        return 403, {}
+                    data = json.loads(body or b"{}").get("journal", {})
+                    j["notes"] = data.get("notes", j.get("notes", ""))
+                    if "private_notes" in data:
+                        j["private_notes"] = bool(data["private_notes"])
+                    if not j["notes"] and not j.get("details"):
+                        js.remove(j)  # 本文を空にすると、項目の変更がない journal は消える(Redmineと同じ)
+                    return 204, None
+                return 404, {}
+            m = re.match(r"^/attachments/(\d+)\.json$", path)
+            if m and method == "DELETE":
+                aid = int(m.group(1))
+                a = self.attachments.pop(aid, None)
+                if a is None:
+                    return 404, {}
+                self.add_journal(a["issue_id"], self.me, details=[
+                    {"property": "attachment", "name": str(aid), "old_value": a["filename"], "new_value": None}])
+                return 204, None
             m = re.match(r"^/issues/(\d+)\.json$", path)
             if m:
                 iid = int(m.group(1))

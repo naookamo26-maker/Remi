@@ -7,6 +7,14 @@ import { icon } from "./icons.js";
 /** @typedef {import("./types.js").Journal} Journal */
 /** @typedef {import("./types.js").JournalDetail} JournalDetail */
 
+/**
+ * コメントの編集・削除、添付の削除の操作(会話ビューが持つ。権限がなければ null を返す)。
+ * @typedef {object} TimelineActions
+ * @property {(j: Journal) => HTMLElement|null} noteTools      吹き出しの「⋯」メニューのボタン
+ * @property {(j: Journal) => HTMLElement|null} noteEditor     編集中なら、吹き出しの代わりの編集欄
+ * @property {(det: JournalDetail) => HTMLElement|null} attachmentTools  添付の削除ボタン
+ */
+
 const AVATAR_COLORS = ["#FCE7D6", "#E0E7FF", "#DCFCE7", "#FDE68A", "#FBCFE8", "#CFFAFE", "#E9D5FF", "#FED7AA"];
 
 function avatar(name, id) {
@@ -19,9 +27,9 @@ function avatar(name, id) {
  * 会話を tl に描く。
  * @param {HTMLElement} tl
  * @param {ConversationData} d
- * @param {{onLoadMore: () => void}} handlers
+ * @param {{onLoadMore: () => void, actions?: TimelineActions}} handlers
  */
-export function renderTimeline(tl, d, { onLoadMore }) {
+export function renderTimeline(tl, d, { onLoadMore, actions = null }) {
   if (d.hasMore) {
     tl.append(h("div", { class: "system" }, h("button", { type: "button", class: "btn", onClick: onLoadMore },
       t("conv.loadMore", { count: d.total - d.journals.length }))));
@@ -50,8 +58,10 @@ export function renderTimeline(tl, d, { onLoadMore }) {
       unreadShown = true;
       tl.append(h("div", { class: "unread-sep", role: "separator" }, t("conv.unreadFrom")));
     }
-    if (j.details.length) tl.append(changeGroup(j));
-    if (j.html) tl.append(message({ ...j, noteNo: firstNote + i }));
+    if (j.details.length) tl.append(changeGroup(j, actions));
+    if (j.html) {
+      tl.append(message({ ...j, noteNo: firstNote + i, tools: actions?.noteTools(j), editor: actions?.noteEditor(j) }));
+    }
   });
   if (!d.journalsSynced) tl.append(h("div", { class: "system" }, t("conv.loading")));
 }
@@ -72,8 +82,9 @@ function message(m) {
     m.mine ? h("b", {}, t("conv.you")) : h("b", {}, m.userName || "?"),
     m.label ? ` · ${m.label}` : "", ` · ${formatTime(m.createdOn)}`,
     m.private ? h("span", { class: "private-badge" }, icon("lock"), t("conv.private")) : null,
-    m.noteNo ? h("span", { class: "muted" }, ` #${m.noteNo}`) : null);
-  const bubble = html(h("div", { class: "bubble content" }), m.html);
+    m.noteNo ? h("span", { class: "muted" }, ` #${m.noteNo}`) : null,
+    m.tools || null);
+  const bubble = m.editor || html(h("div", { class: "bubble content" }), m.html);
   return h("article", { class: cls, id: m.noteNo ? `note-${m.noteNo}` : null },
     m.mine ? null : avatar(m.userName, m.userId), h("div", { class: "body" }, who, bubble));
 }
@@ -83,9 +94,9 @@ function message(m) {
  * 誰が・いつ を先頭に1回だけ出し、変更は1行ずつ並べる。
  * @param {Journal} j
  */
-function changeGroup(j) {
+function changeGroup(j, actions) {
   const who = j.mine ? t("conv.you") : (j.userName || "?");
-  const items = j.details.map((det) => changeItem(det));
+  const items = j.details.map((det) => changeItem(det, actions));
   // 変更が1つだけなら、これまでどおり1行で出す
   if (items.length === 1) {
     return h("div", { class: "system" }, `${who}: `, [...items[0].childNodes], ` · ${formatTime(j.createdOn)}`);
@@ -96,7 +107,7 @@ function changeGroup(j) {
 }
 
 /** @param {JournalDetail} det */
-function changeItem(det) {
+function changeItem(det, actions) {
   const li = h("li", {}, det.text);
   if (det.kind === "attachment" && det.url) {
     if (det.isImage) {
@@ -106,6 +117,8 @@ function changeItem(det) {
       li.append(" ", h("a", { href: det.url, class: "attachment", dataset: { name: det.filename } },
         t("conv.openFile")), det.filesize ? ` (${formatSize(det.filesize)})` : "");
     }
+    const tools = actions?.attachmentTools(det);
+    if (tools) li.append(" ", tools);
   }
   return li;
 }

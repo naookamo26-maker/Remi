@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from remi.api.client import RedmineClient
@@ -209,7 +210,8 @@ class ServerSync:
         self.issues.upsert_issue(self.server_id, data, existing.relation_flags,
                                  self._is_monitored(data, existing.relation_flags, self._closed_ids()))
         new_ids = self.issues.upsert_journals(self.server_id, issue_id, data.get("journals") or [])
-        self.issues.upsert_attachments(self.server_id, issue_id, data.get("attachments") or [])
+        for path in self.issues.upsert_attachments(self.server_id, issue_id, data.get("attachments") or []):
+            Path(path).unlink(missing_ok=True)  # 削除された添付の画像キャッシュ
         for j in data.get("journals") or []:
             u = j.get("user") or {}
             self.masters.remember(self.server_id, "user", u.get("id"), u.get("name"))

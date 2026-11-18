@@ -323,3 +323,17 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .version-event .subject { color: var(--text); }
 .version-event.added .issue-ref { color: var(--success); }
 .version-event.removed .issue-ref { color: var(--danger); }
+
+/* ---- コメントの編集・削除、添付の削除 ---- */
+.msg-menu { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 6px; border-radius: 4px;
+  font-size: 14px; line-height: 18px; opacity: 0; }
+.msg:hover .msg-menu, .msg-menu:focus-visible { opacity: 1; }
+.msg-menu:hover { background: var(--surface); color: var(--text); }
+.note-editor { display: flex; flex-direction: column; gap: 8px; width: min(640px, 70vw); }
+.note-editor textarea { min-height: 90px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--window); color: var(--text); line-height: 1.6; font: inherit; }
+.note-editor .actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.note-editor .actions .spacer { flex: 1; }
+.note-editor .actions label { display: flex; align-items: center; gap: 4px; }
+.link-button { border: 0; background: transparent; padding: 0 2px; font-size: 11px; cursor: pointer; color: var(--link); text-decoration: underline; }
+.link-button.danger { color: var(--danger); }

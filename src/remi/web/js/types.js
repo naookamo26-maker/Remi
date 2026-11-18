@@ -141,6 +141,7 @@
 /**
  * @typedef {object} Journal
  * @property {number} journalId
+ * @property {string} notes                本文(書式のまま。編集に使う)
  * @property {number|null} userId
  * @property {string|null} userName
  * @property {boolean} mine
@@ -184,6 +185,7 @@
  * @property {boolean} comment             コメントを書ける
  * @property {boolean} privateNotes        プライベートコメントにできる
  * @property {boolean} attach              ファイルを添付できる
+ * @property {"all"|"own"|"none"} editNotes  コメントを編集・削除できる(すべて / 自分のものだけ / できない)
  * @property {"project_closed"|"no_permission"|null} reason  何も書き込めない理由
  */
 

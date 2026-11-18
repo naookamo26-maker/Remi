@@ -201,6 +201,17 @@ class RedmineClient:
             ]
         self.request("PUT", f"/issues/{issue_id}.json", json={"issue": issue})
 
+    def update_journal(self, journal_id: int, notes: str, private: bool | None = None) -> None:
+        """コメント(journal の notes)を書き換える(Redmine 5.0 以降)。notes を空にすると、項目の変更がない
+        journal は削除される(変更があれば、本文だけが消える)。"""
+        journal: dict[str, Any] = {"notes": notes}
+        if private is not None:
+            journal["private_notes"] = bool(private)
+        self.request("PUT", f"/journals/{journal_id}.json", json={"journal": journal})
+
+    def delete_attachment(self, attachment_id: int) -> None:
+        self.request("DELETE", f"/attachments/{attachment_id}.json")
+
     def upload(self, data: bytes, filename: str) -> str:
         """ファイルをアップロードし、添付に使うトークンを返す。"""
         resp = self.request("POST", "/uploads.json", params={"filename": filename}, data=data,

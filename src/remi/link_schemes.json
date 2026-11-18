@@ -1,0 +1,24 @@
+{
+  "説明": [
+    "本文(コメント・説明)の中で、自動でリンクにするURIスキーム。http / https / mailto は常にリンクになるので書かなくてよい。",
+    "scheme: スキーム名(小文字)。",
+    "form: \"//\" なら「スキーム://…」の形だけ、\":\" なら「スキーム:…」の形もリンクにする(info: のような普通の文章と区別するため、多くは \"//\" にする)。",
+    "confirm: true なら、開く前に確認する(省略すると true)。",
+    "安全のため、javascript / data / vbscript / about / blob は、ここに書いてもリンクにしない。",
+    "リンクを押すと、Windowsでそのスキームに関連付けられたアプリで開く。"
+  ],
+  "schemes": [
+    {"scheme": "ftp", "form": "//"},
+    {"scheme": "sftp", "form": "//"},
+    {"scheme": "ssh", "form": "//"},
+    {"scheme": "smb", "form": "//"},
+    {"scheme": "file", "form": "//"},
+    {"scheme": "tel", "form": ":"},
+    {"scheme": "ms-word", "form": ":"},
+    {"scheme": "ms-excel", "form": ":"},
+    {"scheme": "ms-powerpoint", "form": ":"},
+    {"scheme": "msteams", "form": ":"},
+    {"scheme": "zoommtg", "form": "//"},
+    {"scheme": "slack", "form": "//"}
+  ]
+}

@@ -3,6 +3,7 @@ import { call, subscribe } from "./api.js";
 import { Conversation } from "./conversation.js";
 import { debounce, h, toast } from "./dom.js";
 import { serverDialog, settingsDialog } from "./dialogs.js";
+import { confirmDialog } from "./ui.js";
 import { setCatalog, t } from "./i18n.js";
 import { IssueList } from "./list.js";
 import { selectionKey, Tree } from "./tree.js";
@@ -248,6 +249,16 @@ class App {
   // Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザ(Shift+クリックで常にブラウザ)
   openRedmine(url, { external = false } = {}) {
     return call("openRedmine", { url, external });
+  }
+
+  /** 本文の自動リンク(link_schemes.json のスキーム・mailto)を開く。指定に従って、開く前に確認する */
+  async openUri(url) {
+    const m = url.match(/^([a-z][a-z0-9+.-]*):/i);
+    const scheme = m ? m[1].toLowerCase() : "";
+    const conf = (this.boot.linkSchemes || []).find((x) => x.scheme === scheme);
+    if (!conf && scheme !== "mailto") return;
+    if (conf?.confirm && !(await confirmDialog(t("conv.openUriTitle"), t("conv.openUriBody", { url }), t("conv.openUriOk")))) return;
+    call("openUri", { url }).catch((e) => toast(t(`errors.${e.code || "connection_failed"}`)));
   }
 
   openSettings() {

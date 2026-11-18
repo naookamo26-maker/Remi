@@ -25,6 +25,8 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
+from remi.render.schemes import link_custom_schemes, link_schemes, scheme_of
+
 TEXT_FORMATS = ("common_mark", "textile", "plain")
 
 
@@ -87,6 +89,8 @@ def _attribute_filter(ctx: RenderContext):
             return ctx.resolve(v.rsplit("/", 1)[-1])  # 見つからない添付やその他のURLは読み込まない
         if tag == "a" and attr == "href":
             v = value.strip()
+            if scheme_of(v) is not None:
+                return v  # 自動リンクに指定したスキーム(明示したリンク)はそのまま
             if not re.match(r"^(https?://|mailto:|remi://|/|#)", v, re.I):
                 # 相対リンク(Redmine内のパス)はサーバーのURLに結びつける
                 url = ctx.resolve(v)
@@ -347,9 +351,9 @@ def render(text: str | None, ctx: RenderContext, *, _depth: int = 0) -> str:
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRIBUTES,
         attribute_filter=_attribute_filter(ctx),
-        url_schemes={"http", "https", "mailto", "remi", "remi-ext"},
+        url_schemes={"http", "https", "mailto", "remi", "remi-ext", *(x.scheme for x in link_schemes())},
         filter_style_properties=ALLOWED_STYLES,
         link_rel="noopener noreferrer",
     )
     clean = _finish_images(clean, ctx)
-    return ph.restore(clean).strip()
+    return link_custom_schemes(ph.restore(clean)).strip()

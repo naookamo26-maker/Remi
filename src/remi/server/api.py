@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
+import sys
 import threading
 import time
 import webbrowser
@@ -26,6 +28,7 @@ from remi.i18n import SUPPORTED_LANGUAGES, catalog, resolve_language
 from remi.paths import attachment_cache_dir
 from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
+from remi.render.schemes import link_schemes, scheme_of
 from remi.server.tree import build_tree
 from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
@@ -72,6 +75,14 @@ SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "draft
                        "versions", "version_issues", "version_events")
 # 初期化の前に同期スレッドを止めるときの待ち時間。通信中でも読み取りのタイムアウト(30秒)で終わる
 SYNC_STOP_TIMEOUT = 40.0
+
+
+def open_with_os(url: str) -> None:
+    """URIを、OSでそのスキームに関連付けられたアプリで開く(Windows: ShellExecute)。"""
+    if sys.platform == "win32":
+        os.startfile(url)  # noqa: S606 - 開けるのは指定したスキームだけ(openUri で確かめる)
+    else:
+        webbrowser.open(url)
 
 
 def _valid_change(key: str, v: Any) -> bool:
@@ -186,6 +197,8 @@ class RemiApi:
             "fallbackCatalog": catalog("en") if lang != "en" else {},
             "settings": self.getSettings(),
             "hasServers": bool(self.ctx.servers.list()),
+            # 本文で自動リンクにするスキーム(src/remi/link_schemes.json)。画面は開く前の確認に使う
+            "linkSchemes": [{"scheme": x.scheme, "confirm": x.confirm} for x in link_schemes()],
         }
 
     # --- 設定 -------------------------------------------------------------------
@@ -519,7 +532,7 @@ class RemiApi:
                     d["isImage"] = (a.content_type or "").startswith("image/") and a.content_type != "image/svg+xml"
                     d["filesize"] = a.filesize
             items.append({
-                "journalId": j.journal_id, "userId": j.user_id, "userName": j.user_name,
+                "journalId": j.journal_id, "userId": j.user_id, "userName": j.user_name, "notes": j.notes,
                 "mine": j.user_id is not None and j.user_id == server.my_user_id,
                 "private": j.private_notes, "createdOn": j.created_on,
                 "html": render(j.notes, rctx) if j.notes else "", "details": details,
@@ -627,6 +640,39 @@ class RemiApi:
             raise RpcError("connection_failed")
         return {"accepted": True}
 
+    @rpc
+    def editNote(self, serverId: int, issueId: int, journalId: int, notes: str,  # noqa: N802,N803
+                 private: bool | None = None) -> None:
+        """コメントを書き換える。notes を空にすると削除する(項目の変更も行った更新なら、本文だけが消える)。
+        できるかはRedmineが判断する(権限がなければ forbidden)。終わったら、チケットを取り直す。
+        """
+        if not isinstance(notes, str) or (private is not None and not isinstance(private, bool)):
+            raise RpcError("invalid_input")
+        if not any(j.journal_id == journalId for j in self.ctx.issues.journals(serverId, issueId)):
+            raise RpcError("not_found")
+        try:
+            self._client(serverId).update_journal(journalId, notes, private)
+        except RedmineError as e:
+            raise RpcError(e.code.value, e.detail) from e
+        self._refetch(serverId, issueId)
+
+    @rpc
+    def deleteAttachment(self, serverId: int, issueId: int, attachmentId: int) -> None:  # noqa: N802,N803
+        """添付ファイルを削除する(Redmineでは、チケットを編集できる人だけが削除できる)。"""
+        a = self.ctx.issues.get_attachment(serverId, attachmentId)
+        if a is None or a.issue_id != issueId:
+            raise RpcError("not_found")
+        try:
+            self._client(serverId).delete_attachment(attachmentId)
+        except RedmineError as e:
+            raise RpcError(e.code.value, e.detail) from e
+        self._refetch(serverId, issueId)
+
+    def _refetch(self, server_id: int, issue_id: int) -> None:
+        """変更したチケットを、同期スレッドに(コメントごと)取り直させる。結果は dataChanged で画面に届く。"""
+        if self.sync is not None:
+            self.sync.refetch_issue(server_id, issue_id)
+
     # --- 編集(設計書 §6.2) -------------------------------------------------------------
     def _client(self, server_id: int):
         client = self.sync.client(server_id) if self.sync is not None else None
@@ -712,20 +758,23 @@ class RemiApi:
         project = self.ctx.projects.get(server.server_id, row.project_id)
         if project is not None and project.status != PROJECT_STATUS_ACTIVE:
             return {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                    "attach": False, "reason": "project_closed"}
+                    "attach": False, "editNotes": "none", "reason": "project_closed"}
         perms = self._project_permissions(server.server_id, row.project_id)
         if perms is None or "admin" in perms:
             edit = comment = private = True
+            edit_notes = "all"
         else:
             own = row.author_id is not None and row.author_id == server.my_user_id
             edit = "edit_issues" in perms or ("edit_own_issues" in perms and own)
             comment = "add_issue_notes" in perms
             private = "set_notes_private" in perms
+            # コメントの編集・削除(Redmineの Journal#editable_by? と同じ): すべて / 自分のものだけ / できない
+            edit_notes = "all" if "edit_issue_notes" in perms else "own" if "edit_own_issue_notes" in perms else "none"
         # ワークフロー上、今のステータスから移れる先がなければ、ステータスは変えられない(Redmine 5.0 以降)
         transitions = allowed is None or any(int(x["id"]) != row.status_id for x in allowed)
         return {
             "editFields": edit, "changeStatus": edit and transitions, "comment": comment,
-            "privateNotes": comment and private, "attach": edit or comment,
+            "privateNotes": comment and private, "attach": edit or comment, "editNotes": edit_notes,
             "reason": None if (edit or comment) else "no_permission",
         }
 
@@ -911,6 +960,14 @@ class RemiApi:
         if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
             raise RpcError("invalid_url")
         webbrowser.open(url)
+
+    @rpc
+    def openUri(self, url: str) -> None:  # noqa: N802
+        """本文の自動リンク(link_schemes.json で指定したスキーム、mailto)を、OSで関連付けられたアプリで開く。"""
+        if not isinstance(url, str) or any(c in url for c in "\r\n\0") or (
+                scheme_of(url) is None and not url.lower().startswith("mailto:")):
+            raise RpcError("invalid_url")
+        open_with_os(url)
 
     @rpc
     def openRedmine(self, url: str, external: bool = False) -> str:  # noqa: N802

@@ -141,6 +141,12 @@ class ServerWorker(threading.Thread):
                 self.sched.attachments.append(aid)
         elif cmd == "update":
             self._update_issue(*args)
+        elif cmd == "refetch":
+            (issue_id,) = args
+            try:
+                self._emit(self.sync.fetch_journals(issue_id, notify=False), extra={issue_id})
+            except RedmineError as e:
+                log.info("refetch #%s failed: %s", issue_id, e)
         elif cmd == "watch":
             self._set_watching(*args)
 
@@ -426,6 +432,14 @@ class SyncManager:
         if w is None:
             return False
         w.send("update", issue_id, notes, private, changes, uploads)
+        return True
+
+    def refetch_issue(self, server_id: int, issue_id: int) -> bool:
+        """チケットをコメント・添付ごと取り直す(コメントの編集・添付の削除のあと)。"""
+        w = self._worker(server_id)
+        if w is None:
+            return False
+        w.send("refetch", issue_id)
         return True
 
     def set_watching(self, server_id: int, issue_id: int, watching: bool) -> bool:

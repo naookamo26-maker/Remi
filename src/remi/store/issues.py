@@ -388,19 +388,26 @@ class IssueStore:
 
     # --- journal --------------------------------------------------------------
     def upsert_journals(self, server_id: int, issue_id: int, journals: list[dict[str, Any]]) -> list[int]:
-        """journal を保存し、新しく追加された journal_id を返す。notes が変わったものは更新する。"""
-        existing = {r[0]: r[1] for r in self.db.query(
-            "SELECT journal_id, notes FROM journals WHERE server_id = ? AND issue_id = ?", (server_id, issue_id))}
+        """チケットの journal をすべて受け取って保存し、新しく追加された journal_id を返す。
+        notes・プライベートが変わったものは更新し、Redmineで削除された(届かなかった)ものは消す。
+        """
+        existing = {r[0]: (r[1], bool(r[2])) for r in self.db.query(
+            "SELECT journal_id, notes, private_notes FROM journals WHERE server_id = ? AND issue_id = ?",
+            (server_id, issue_id))}
         new_ids: list[int] = []
         with self.db.tx() as c:
+            for jid in existing.keys() - {int(j["id"]) for j in journals}:
+                c.execute("DELETE FROM journals WHERE server_id = ? AND journal_id = ?", (server_id, jid))
             for j in journals:
                 jid = int(j["id"])
                 user = j.get("user") or {}
                 notes = j.get("notes") or ""
+                private = bool(j.get("private_notes"))
                 if jid in existing:
-                    if existing[jid] != notes:
-                        c.execute("UPDATE journals SET notes = ?, updated_on = ? WHERE server_id = ? AND journal_id = ?",
-                                  (notes, j.get("updated_on"), server_id, jid))
+                    if existing[jid] != (notes, private):
+                        c.execute("UPDATE journals SET notes = ?, private_notes = ?, updated_on = ? "
+                                  "WHERE server_id = ? AND journal_id = ?",
+                                  (notes, int(private), j.get("updated_on"), server_id, jid))
                     continue
                 c.execute(
                     """INSERT INTO journals(server_id, journal_id, issue_id, user_id, user_name, notes,
@@ -450,8 +457,17 @@ class IssueStore:
             "ORDER BY updated_on DESC LIMIT ?", (server_id, limit))]
 
     # --- 添付 -----------------------------------------------------------------
-    def upsert_attachments(self, server_id: int, issue_id: int, attachments: list[dict[str, Any]]) -> None:
+    def upsert_attachments(self, server_id: int, issue_id: int, attachments: list[dict[str, Any]]) -> list[str]:
+        """チケットの添付をすべて受け取って保存する。Redmineで削除されたものは消し、
+        その画像キャッシュのファイルのパスを返す(呼び出し側で消す)。
+        """
+        keep = {int(a["id"]) for a in attachments}
+        removed = [(r[0], r[1]) for r in self.db.query(
+            "SELECT attachment_id, local_path FROM attachments WHERE server_id = ? AND issue_id = ?",
+            (server_id, issue_id)) if r[0] not in keep]
         with self.db.tx() as c:
+            for aid, _ in removed:
+                c.execute("DELETE FROM attachments WHERE server_id = ? AND attachment_id = ?", (server_id, aid))
             for a in attachments:
                 c.execute(
                     """INSERT INTO attachments(server_id, attachment_id, issue_id, filename, content_type,
@@ -465,6 +481,7 @@ class IssueStore:
                      a.get("filesize"), a.get("content_url"), a.get("description"),
                      (a.get("author") or {}).get("name"), a.get("created_on")),
                 )
+        return [path for _, path in removed if path]
 
     def attachments(self, server_id: int, issue_id: int) -> list[AttachmentRow]:
         return [AttachmentRow(r["server_id"], r["attachment_id"], r["issue_id"], r["filename"], r["content_type"],

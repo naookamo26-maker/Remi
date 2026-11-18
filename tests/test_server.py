@@ -362,10 +362,10 @@ def test_write_permissions(app, fake):
 
     # コメントだけできるロール
     assert perms(10) == {"editFields": False, "changeStatus": False, "comment": True, "privateNotes": False,
-                         "attach": True, "reason": None}
+                         "attach": True, "editNotes": "none", "reason": None}
     # 終了したプロジェクトには書き込めない
     assert perms(20) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                         "attach": False, "reason": "project_closed"}
+                         "attach": False, "editNotes": "none", "reason": "project_closed"}
     # メンバーでない(権限が分からない)ときは制限しない
     assert perms(30)["editFields"] and perms(30)["comment"]
 
@@ -374,7 +374,7 @@ def test_write_permissions(app, fake):
     fake.my_roles = {1: [3]}
     app.api._role_perms.clear()
     assert perms(10) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                         "attach": False, "reason": "no_permission"}
+                         "attach": False, "editNotes": "none", "reason": "no_permission"}
     fake.my_roles = {1: [3, 4]}
     app.api._my_roles.clear()
     assert perms(10)["reason"] is None
@@ -616,3 +616,54 @@ def test_issue_details_and_update(app, fake):
     for bad in ({"start_date": "12/01"}, {"done_ratio": 150}, {"estimated_hours": "x"}, {"cf:x": "a"},
                 {"tracker_id": "1"}, {"subject": "件名"}):
         assert app.rpc_error("postNote", serverId=sid, issueId=10, changes=bad)["code"] == "invalid_input"
+
+
+def test_edit_delete_note_and_attachment(app, fake):
+    """コメントの編集・削除と添付の削除。Redmineで消えたものは、取り直したときに手元からも消す。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    j1 = fake.add_journal(10, ME, "自分のコメント")
+    j2 = fake.add_journal(10, ME, "変更つき", details=[
+        {"property": "attr", "name": "priority_id", "old_value": "2", "new_value": "3"}])
+    fake.add_attachment(10, 77, "shot.png", b"png")
+    fake.add_journal(10, 7, details=[{"property": "attachment", "name": "77", "new_value": "shot.png"}])
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10) and app.ctx.issues.attachments(sid, 10))
+    perms = app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]
+    assert perms["editNotes"] == "all"
+
+    notes = lambda: {j.journal_id: (j.notes, j.private_notes) for j in app.ctx.issues.journals(sid, 10)}  # noqa: E731
+    app.rpc("editNote", serverId=sid, issueId=10, journalId=j1["id"], notes="書き直した", private=True)
+    assert wait_until(lambda: notes().get(j1["id"]) == ("書き直した", True))
+    # 本文を空にすると削除。項目の変更もある更新は、本文だけが消える
+    app.rpc("editNote", serverId=sid, issueId=10, journalId=j1["id"], notes="")
+    app.rpc("editNote", serverId=sid, issueId=10, journalId=j2["id"], notes="")
+    assert wait_until(lambda: j1["id"] not in notes() and notes().get(j2["id"]) == ("", False))
+    assert app.rpc_error("editNote", serverId=sid, issueId=10, journalId=99999, notes="x")["code"] == "not_found"
+    fake.notes_editable = False
+    j3 = fake.add_journal(10, ME, "もう1つ")
+    app.rpc("syncNow", serverId=sid, issueId=10)
+    assert wait_until(lambda: j3["id"] in notes())
+    assert app.rpc_error("editNote", serverId=sid, issueId=10, journalId=j3["id"], notes="x")["code"] == "forbidden"
+
+    app.rpc("deleteAttachment", serverId=sid, issueId=10, attachmentId=77)
+    assert 77 not in fake.attachments
+    assert wait_until(lambda: not app.ctx.issues.attachments(sid, 10))
+    assert app.rpc_error("deleteAttachment", serverId=sid, issueId=10, attachmentId=77)["code"] == "not_found"
+
+
+def test_edit_notes_permission_follows_redmine(app, fake):
+    """コメントの編集・削除は、Redmineと同じく edit_issue_notes(すべて)/ edit_own_issue_notes(自分のもの)。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    fake.my_roles = {1: [3]}
+    fake.roles = {3: ["view_issues", "add_issue_notes", "edit_own_issue_notes"]}
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None)
+    assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "own"
+    fake.roles = {3: ["view_issues", "edit_issue_notes"]}
+    app.api._role_perms.clear()
+    assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "all"
+    fake.roles = {3: ["view_issues"]}
+    app.api._role_perms.clear()
+    assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "none"

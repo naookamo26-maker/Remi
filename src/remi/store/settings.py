@@ -24,6 +24,8 @@ DEFAULTS: dict[str, Any] = {
     "tree_collapsed": [],
     "redmine_open_in": "app",  # app / browser(設計書 §5.4)
     "relation_filter": "all",  # 一覧の絞り込み: all / assigned / watching / authored
+    # 表示するチケット(ツリーの件数・未読数と一覧に反映する): assigned / group / watching / authored
+    "visible_relations": ["assigned", "group", "watching", "authored"],
     "pane_sizes": [260, 360],
 }
 

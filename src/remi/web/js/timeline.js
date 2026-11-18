@@ -50,7 +50,7 @@ export function renderTimeline(tl, d, { onLoadMore }) {
       unreadShown = true;
       tl.append(h("div", { class: "unread-sep", role: "separator" }, t("conv.unreadFrom")));
     }
-    for (const det of j.details) tl.append(systemLine(j, det));
+    if (j.details.length) tl.append(changeGroup(j));
     if (j.html) tl.append(message({ ...j, noteNo: firstNote + i }));
   });
   if (!d.journalsSynced) tl.append(h("div", { class: "system" }, t("conv.loading")));
@@ -79,20 +79,33 @@ function message(m) {
 }
 
 /**
+ * 1回の更新(journal)で行われた項目の変更・添付の追加などを、1つにまとめて描く。
+ * 誰が・いつ を先頭に1回だけ出し、変更は1行ずつ並べる。
  * @param {Journal} j
- * @param {JournalDetail} det
  */
-function systemLine(j, det) {
+function changeGroup(j) {
   const who = j.mine ? t("conv.you") : (j.userName || "?");
-  const line = h("div", { class: "system" }, `${who}: ${det.text} · ${formatTime(j.createdOn)}`);
+  const items = j.details.map((det) => changeItem(det));
+  // 変更が1つだけなら、これまでどおり1行で出す
+  if (items.length === 1) {
+    return h("div", { class: "system" }, `${who}: `, [...items[0].childNodes], ` · ${formatTime(j.createdOn)}`);
+  }
+  return h("div", { class: "system change-group" },
+    h("div", { class: "change-who" }, `${who} · ${formatTime(j.createdOn)}`),
+    h("ul", { class: "change-list" }, items));
+}
+
+/** @param {JournalDetail} det */
+function changeItem(det) {
+  const li = h("li", {}, det.text);
   if (det.kind === "attachment" && det.url) {
     if (det.isImage) {
-      line.append(h("a", { href: det.url, class: "attachment image" },
+      li.append(h("a", { href: det.url, class: "attachment image" },
         h("img", { class: "att-thumb", src: det.url, alt: det.filename, loading: "lazy" })));
     } else {
-      line.append(" ", h("a", { href: det.url, class: "attachment", dataset: { name: det.filename } },
+      li.append(" ", h("a", { href: det.url, class: "attachment", dataset: { name: det.filename } },
         t("conv.openFile")), det.filesize ? ` (${formatSize(det.filesize)})` : "");
     }
   }
-  return line;
+  return li;
 }

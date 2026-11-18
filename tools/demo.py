@@ -50,6 +50,12 @@ def seed(fake) -> None:
                      private=True, created_on=ts(30))
     fake.add_journal(1234, ME, "@tanaka 確認しました。#1198 と同じく BOM なしの UTF-8 が原因です。"
                      "`encoding=\"utf-8-sig\"` に変更します。", created_on=ts(25))
+    # 1回の更新で複数の項目を変えた(まとめて1つの変更履歴として表示される)
+    fake.add_journal(1234, 7, created_on=ts(20), details=[
+        {"property": "attr", "name": "status_id", "old_value": "1", "new_value": "2"},
+        {"property": "attr", "name": "priority_id", "old_value": "2", "new_value": "3"},
+        {"property": "attr", "name": "assigned_to_id", "old_value": "7", "new_value": str(ME)},
+    ])
     fake.add_journal(1234, 7, "ありがとうございます!テスト環境で確認します。", created_on=ts(2))
     fake.add_issue(1229, 2, "受注確定メールの宛先に営業担当を追加したい", assigned_to=7, watchers={ME}, updated_on=ts(45))
     fake.add_journal(1229, 8, "仕様を確認しました。来週着手します。", created_on=ts(44))

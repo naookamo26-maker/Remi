@@ -1,9 +1,17 @@
 // 左ペイン: サーバー / プロジェクトのツリー(設計書 §3.2、モック「メインウィンドウ」左)
 import { call } from "./api.js";
-import { clear, countText, h } from "./dom.js";
+import { clear, countText, h, toast } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
+
+/** 表示するチケットの関係(設定 visible_relations)。src/remi/store/issues.py の RELATIONS と同じ */
+export const RELATIONS = ["assigned", "group", "watching", "authored"];
+
+export function visibleRelations(settings) {
+  const v = settings.visible_relations;
+  return Array.isArray(v) && v.length ? RELATIONS.filter((r) => v.includes(r)) : [...RELATIONS];
+}
 
 export function selectionKey(sel) {
   return `${sel.kind}:${sel.serverId ?? ""}:${sel.projectId ?? ""}`;
@@ -16,7 +24,15 @@ export class Tree {
     this.el = h("ul", { class: "tree", role: "tree", "aria-label": t("tree.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.status = h("div", { class: "sync-status", "aria-live": "polite" });
+    // 表示するチケットの選択。ツリーの件数・未読数と一覧の両方に効くので、ツリーの上に置く
+    this.viewButton = h("button", { type: "button", class: "btn icon-only", title: t("tree.visibleRelations"),
+      "aria-label": t("tree.visibleRelations"), "aria-haspopup": "menu", onClick: (e) => this.viewMenu(e) }, icon("filter"));
     this.root = h("nav", { class: "pane pane-tree", "aria-label": t("tree.label") },
+      h("header", { class: "tree-header" },
+        h("span", { class: "brand" }, "Remi"),
+        h("span", { class: "version", title: t("app.versionHint", { version: app.boot.version }) }, `v${app.boot.version}`),
+        h("span", { class: "spacer" }),
+        this.viewButton),
       this.el,
       h("div", { class: "tree-footer" },
         this.status,
@@ -96,7 +112,10 @@ export class Tree {
     if (!data.servers.length) {
       this.el.append(h("li", { class: "empty" }, t("tree.noServers")));
     }
-    const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
+    const restricted = visibleRelations(this.app.settings).length < RELATIONS.length;
+    this.viewButton.classList.toggle("on", restricted);
+    this.viewButton.setAttribute("aria-pressed", String(restricted));
+        const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
     this.status.textContent = times.length ? t("tree.lastSynced", { time: formatTime(times.at(-1)) }) : "";
   }
 
@@ -124,6 +143,31 @@ export class Tree {
       e.preventDefault();
       if (this.collapsed.has(token) === (e.key === "ArrowRight")) this.toggle(token);
     }
+  }
+
+  // 表示するチケット(関係)を選ぶメニュー。チェックを続けて切り替えられるよう、押しても閉じない
+  viewMenu(e) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const items = [{ label: t("tree.visibleRelations"), hint: true }];
+    for (const rel of RELATIONS) {
+      items.push({
+        label: t(`tree.relation.${rel}`), checked: visibleRelations(this.app.settings).includes(rel), keepOpen: true,
+        onClick: async () => {
+          const cur = visibleRelations(this.app.settings);
+          const next = cur.includes(rel) ? cur.filter((x) => x !== rel) : RELATIONS.filter((x) => x === rel || cur.includes(x));
+          if (!next.length) {
+            toast(t("tree.visibleRelationsAtLeastOne"));
+            return true;
+          }
+          await this.app.saveSetting("visible_relations", next);
+          await Promise.all([this.refresh(), this.app.list.refresh()]);
+          return next.includes(rel);
+        },
+      });
+    }
+    items.push({ sep: true }, { label: t("tree.visibleRelationsHint"), hint: true });
+    // ツリーの件数が隠れないよう、ボタンの右(一覧の上)に開く
+    contextMenu(r.right + 4, r.top, items);
   }
 
   async menu(e, sel) {

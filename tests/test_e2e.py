@@ -463,3 +463,57 @@ def test_list_keys_search_shortcut_and_lightbox(page, remi, fake):
     page.keyboard.press("Enter")
     playwright_api.expect(box).to_have_count(0)
     assert not page.errors, page.errors
+
+
+def test_pane_widths_change_only_by_splitter(page, remi, fake):
+    seed(fake)
+    # 長い行(折り返せないコード)のあるチケット: 内容でペインの幅が押し縮められないこと
+    fake.add_journal(11, 7, "```\n" + "x" * 400 + "\n```")
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    widths = """() => ['.pane-tree', '.pane-list'].map((s) => Math.round(document.querySelector(s).getBoundingClientRect().width))"""
+    before = page.evaluate(widths)
+    for name in ("CSVが文字化けする", "メールの宛先", "CSVが文字化けする"):
+        page.locator(".issue", has_text=name).click()
+        playwright_api.expect(page.locator(".pane-conv h1")).to_contain_text(name)
+        assert page.evaluate(widths) == before
+    # 一覧と会話の間の仕切りを動かしても、ツリーの幅は変わらない
+    box = page.locator(".splitter").nth(1).bounding_box()
+    page.mouse.move(box["x"] + 2, box["y"] + 200)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 200, box["y"] + 200, steps=5)
+    page.mouse.up()
+    after = page.evaluate(widths)
+    assert after[0] == before[0] and after[1] > before[1]
+    assert not page.errors, page.errors
+
+
+def test_visible_relations_menu_and_grouped_changes(page, remi, fake):
+    seed(fake)
+    fake.add_journal(10, 7, details=[
+        {"property": "attr", "name": "status_id", "old_value": "1", "new_value": "2"},
+        {"property": "attr", "name": "priority_id", "old_value": "2", "new_value": "3"},
+    ])
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    # バージョンの表記
+    playwright_api.expect(page.locator(".tree-header .version")).to_have_text(re.compile(r"^v\d+\.\d+\.\d+"))
+    # 表示するチケット: ウォッチ中を外すと、ウォッチだけのチケットが一覧とツリーの件数から外れる
+    page.get_by_role("button", name="表示するチケット").click()
+    menu = page.get_by_role("menu")
+    menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
+    playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("1")
+    menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("2")
+    page.keyboard.press("Escape")
+    # 1回の更新での複数の変更は、1つにまとめて表示する
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    group = page.locator(".pane-conv .change-group")
+    playwright_api.expect(group).to_have_count(1, timeout=15000)
+    playwright_api.expect(group.locator("li")).to_have_count(2)
+    assert not page.errors, page.errors

@@ -63,7 +63,7 @@ def api(db, fake):
 def test_types_js_parses():
     names = documented()
     for name in ("TreeData", "TreeServer", "TreeProject", "IssueSummary", "ConversationData", "Journal",
-                 "JournalDetail", "EditOptions", "FieldChange", "Upload"):
+                 "JournalDetail", "EditOptions", "WritePermissions", "FieldChange", "Upload"):
         assert names.get(name, (set(), set()))[0] | names.get(name, (set(), set()))[1], name
 
 
@@ -84,4 +84,6 @@ def test_types_match_api_results(api):
             check("JournalDetail", d)
     assert any(j["details"] for j in conv["journals"])  # 添付の追加(JournalDetail)も確かめる
 
-    check("EditOptions", api.getEditOptions(serverId=1, issueId=10))
+    opts = api.getEditOptions(serverId=1, issueId=10)
+    check("EditOptions", opts)
+    check("WritePermissions", opts["permissions"])

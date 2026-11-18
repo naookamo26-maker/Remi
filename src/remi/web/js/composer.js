@@ -32,6 +32,8 @@ export class Composer {
     this.chips = h("div", { class: "chips", "aria-live": "polite" });
     this.fileInput = h("input", { type: "file", multiple: true, hidden: true,
       onChange: () => { this.addFiles([...this.fileInput.files], false); this.fileInput.value = ""; } });
+    this.attachButton = h("button", { type: "button", class: "btn", onClick: () => this.fileInput.click() }, t("conv.attach"));
+    this.privateLabel = h("label", {}, this.privateBox, t("conv.sendPrivate"));
     this.sendButton = h("button", { type: "button", class: "btn primary", onClick: () => this.conv.send() }, icon("send"), t("conv.send"));
     this.error = h("div", { class: "error", role: "alert" });
     this.saveDraft = debounce(() => {
@@ -44,11 +46,11 @@ export class Composer {
     const previewTab = tab(t("conv.preview"), false, () => this.setPreview(true, editTab, previewTab));
     const fmt = { common_mark: "Markdown", textile: "Textile", plain: t("conv.plainText") }[d.textFormat] || d.textFormat;
     this.el = h("div", { class: "composer",
-      onDragover: (e) => { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); this.el.classList.add("dragging"); } },
+      onDragover: (e) => { if (e.dataTransfer?.types?.includes("Files") && this.can.attach) { e.preventDefault(); this.el.classList.add("dragging"); } },
       onDragleave: () => this.el.classList.remove("dragging"),
       onDrop: (e) => {
         this.el.classList.remove("dragging");
-        if (e.dataTransfer?.files?.length) {
+        if (e.dataTransfer?.files?.length && this.can.attach) {
           e.preventDefault();
           this.addFiles([...e.dataTransfer.files], true);
         }
@@ -57,8 +59,8 @@ export class Composer {
         h("span", { class: "spacer" }), h("span", { class: "fmt" }, t("conv.format", { format: fmt }))),
       this.textarea, this.preview, this.chips, this.error,
       h("div", { class: "actions" },
-        h("button", { type: "button", class: "btn", onClick: () => this.fileInput.click() }, t("conv.attach")), this.fileInput,
-        h("label", {}, this.privateBox, t("conv.sendPrivate")),
+        this.attachButton, this.fileInput,
+        this.privateLabel,
         h("span", { class: "muted" }, t("conv.sendHint")),
         h("span", { class: "spacer" }),
         this.sendButton));
@@ -70,7 +72,7 @@ export class Composer {
   /** 送る内容。添付はアップロードが終わったものだけ */
   payload() {
     return {
-      body: this.textarea.value, private: this.privateBox.checked,
+      body: this.can.comment ? this.textarea.value : "", private: this.privateBox.checked,
       uploads: this.uploads.filter((u) => u.state === "done")
         .map((u) => ({ token: u.token, filename: u.filename, contentType: u.contentType })),
     };
@@ -78,7 +80,7 @@ export class Composer {
 
   /** 送信中の吹き出しに出す内容 */
   pendingParts() {
-    return [this.textarea.value, ...Object.values(this.conv.changes).map((c) => `${c.from} → ${c.label}`),
+    return [this.can.comment ? this.textarea.value : "", ...Object.values(this.conv.changes).map((c) => `${c.from} → ${c.label}`),
       ...this.uploads.filter((u) => u.state === "done").map((u) => u.filename)];
   }
 
@@ -108,11 +110,32 @@ export class Composer {
       h("button", { type: "button", class: "btn", onClick: () => this.conv.send() }, t("conv.retry")));
   }
 
-  /** 送信ボタンを押せるか(送信中・アップロード中は押せない) */
+  /**
+   * できる操作。権限がまだ分からない(選択肢を読み込む前)ときは、すべてできるものとして扱う
+   * (できなければ送信時にRedmineが拒否する)
+   */
+  get can() {
+    const p = this.conv.permissions;
+    return { comment: !p || p.comment, attach: !p || p.attach, privateNotes: !p || p.privateNotes };
+  }
+
+  /** 送信ボタンを押せるか(送信中・アップロード中は押せない)と、書き込めない入力欄の無効化 */
   update() {
+    const can = this.can;
+    this.textarea.disabled = !can.comment;
+    this.textarea.placeholder = can.comment ? t("conv.placeholder") : t("conv.noCommentPermission");
+    this.attachButton.disabled = !can.attach;
+    this.attachButton.title = can.attach ? "" : t("conv.noAttachPermission");
+    if (!can.privateNotes && this.privateBox.checked) {
+      // 権限がないとRedmineは黙って公開のコメントにするので、チェックを外して見えるようにしておく
+      this.privateBox.checked = false;
+    }
+    this.privateBox.disabled = !can.privateNotes;
+    this.privateLabel.classList.toggle("disabled", !can.privateNotes);
+    this.privateLabel.title = can.privateNotes ? "" : t("conv.noPrivatePermission");
     const busy = this.uploads.some((u) => u.state === "uploading");
     const hasUpload = this.uploads.some((u) => u.state === "done");
-    const hasContent = this.textarea.value.trim() || Object.keys(this.conv.changes).length || hasUpload;
+    const hasContent = (can.comment && this.textarea.value.trim()) || Object.keys(this.conv.changes).length || hasUpload;
     this.sendButton.disabled = this.conv.sending || busy || !hasContent;
   }
 
@@ -143,7 +166,7 @@ export class Composer {
       .filter(Boolean);
     if (!files.length) return;
     e.preventDefault();
-    this.addFiles(files, true);
+    if (this.can.attach) this.addFiles(files, true);
   }
 
   addFiles(files, insertImages) {

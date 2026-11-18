@@ -14,6 +14,8 @@ class App {
   constructor(boot) {
     this.boot = boot;
     this.settings = boot.settings;
+    /** @type {Record<string, number>} 保存中の設定と、その最新の保存の番号 */
+    this.latestSave = {};
     this.selection = { kind: boot.hasServers ? "all" : "none" };
     this.current = null; // {serverId, issueId}
     this.pendingRead = false;
@@ -95,7 +97,14 @@ class App {
   }
 
   async saveSetting(key, value) {
-    this.settings = await call("setSetting", { key, value });
+    const seq = (this.saveSeq = (this.saveSeq || 0) + 1);
+    this.latestSave[key] = seq;
+    const saved = await call("setSetting", { key, value });
+    // 応答を待つ間に同じ項目を保存し直していたら(ツリーの折りたたみを続けて切り替えたときなど)、
+    // 古い応答で画面の状態を巻き戻さない
+    if (this.latestSave[key] === seq) delete this.latestSave[key];
+    else saved[key] = this.settings[key];
+    this.settings = saved;
     if (key === "theme") this.applyTheme();
     if (key === "mine_side") this.applyMineSide();
     if (key === "language") {
@@ -295,7 +304,7 @@ async function main() {
     const boot = await call("bootstrap");
     setCatalog(boot.lang, boot.catalog, boot.fallbackCatalog);
     document.documentElement.lang = boot.lang;
-    document.title = "Remi";
+    document.title = `Remi ${boot.version}`;
     const app = new App(boot);
     window.remi = app; // 開発・テスト用
     app.mount(root);

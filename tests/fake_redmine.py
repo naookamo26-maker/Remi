@@ -29,7 +29,10 @@ class FakeRedmine:
             7: {"id": 7, "login": "tanaka", "firstname": "一郎", "lastname": "田中"},
             8: {"id": 8, "login": "sato", "firstname": "花子", "lastname": "佐藤"},
         }
-        self.groups = [{"id": 100, "name": "開発チーム"}]
+        self.groups = [{"id": 100, "name": "開発チーム"}]  # ME だけが所属する
+        # APIキー → ユーザー。リクエストごとに self.me を切り替える(_lock の中で処理するので安全)
+        self.keys = {API_KEY: ME}
+        self.me = ME
         self.projects: list[dict] = []
         self.statuses = [
             {"id": 1, "name": "新規", "is_closed": False},
@@ -161,7 +164,7 @@ class FakeRedmine:
             details.append({"property": "attachment", "name": str(aid), "new_value": up.get("filename") or filename})
         if not notes.strip() and not details:
             return 422, {"errors": ["Notes can't be blank"]}
-        self.add_journal(iid, ME, notes, details=details, private=bool(data.get("private_notes")))
+        self.add_journal(iid, self.me, notes, details=details, private=bool(data.get("private_notes")))
         return 204, None
 
     # --- 内部 -----------------------------------------------------------------
@@ -176,7 +179,7 @@ class FakeRedmine:
         return {"id": uid, "name": f"{u['lastname']} {u['firstname']}"}
 
     def _match(self, issue: dict, q: dict[str, str]) -> bool:
-        me_ids = {ME, *(g["id"] for g in self.groups)}
+        me_ids = {self.me, *(g["id"] for g in self.groups if self.me == ME)}
         if "assigned_to_id" in q:
             a = issue.get("assigned_to", {}).get("id")
             if q["assigned_to_id"] == "me":
@@ -184,9 +187,9 @@ class FakeRedmine:
                     return False
             elif str(a) != q["assigned_to_id"]:
                 return False
-        if q.get("watcher_id") == "me" and ME not in self.watchers.get(issue["id"], set()):
+        if q.get("watcher_id") == "me" and self.me not in self.watchers.get(issue["id"], set()):
             return False
-        if q.get("author_id") == "me" and issue["author"]["id"] != ME:
+        if q.get("author_id") == "me" and issue["author"]["id"] != self.me:
             return False
         status = q.get("status_id", "open")
         if status == "open" and issue["status"]["is_closed"]:
@@ -213,14 +216,16 @@ class FakeRedmine:
             if self.fail_next_put is not None and method == "PUT":
                 code, self.fail_next_put = self.fail_next_put, None
                 return code, {"errors": ["forced"]}
-            if headers.get("X-Redmine-API-Key") != API_KEY:
+            me = self.keys.get(headers.get("X-Redmine-API-Key"))
+            if me is None:
                 return 401, {}
+            self.me = me
             if not self.rest_enabled:
                 return 403, {}
 
             if path == "/users/current.json":
-                u = dict(self.users[ME])
-                u["groups"] = self.groups
+                u = dict(self.users[self.me])
+                u["groups"] = self.groups if self.me == ME else []
                 return 200, {"user": u}
             if path == "/projects.json":
                 return 200, self._page(self.projects, query, "projects")

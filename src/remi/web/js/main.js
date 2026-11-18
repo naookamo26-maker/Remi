@@ -146,6 +146,15 @@ class App {
     if (note) this.conv.scrollToNote(note);
   }
 
+  // 開いている会話を閉じる(入力中の内容・送信前の添付も捨てる)
+  closeIssue() {
+    this.current = null;
+    this.pendingRead = false;
+    call("setOpenIssue", { serverId: null, issueId: null }).catch(() => {});
+    this.conv.showEmpty();
+    this.list.markSelected();
+  }
+
   // 本文中の #123: 監視中なら開き、そうでなければブラウザで開く
   async openIssueOrBrowser(serverId, issueId, note) {
     try {
@@ -183,9 +192,12 @@ class App {
       this.selection = { kind: "none" };
       this.current = null;
       this.conv.showWelcome();
-    } else if (this.selection.kind === "none" || (this.selection.serverId && !servers.some((s) => s.serverId === this.selection.serverId))) {
-      this.selection = servers.length === 1 ? { kind: "server", serverId: servers[0].serverId } : { kind: "all" };
-      if (!this.current) this.conv.showEmpty();
+    } else {
+      if (this.current && !servers.some((s) => s.serverId === this.current.serverId)) this.closeIssue(); // サーバーを削除した
+      if (this.selection.kind === "none" || (this.selection.serverId && !servers.some((s) => s.serverId === this.selection.serverId))) {
+        this.selection = servers.length === 1 ? { kind: "server", serverId: servers[0].serverId } : { kind: "all" };
+        if (!this.current) this.conv.showEmpty();
+      }
     }
     this.tree.render();
     this.list.refresh();
@@ -219,6 +231,10 @@ class App {
         break;
       case "serversChanged":
         this.onServersChanged();
+        break;
+      case "serverCacheCleared":
+        // 接続先や認証ユーザーが変わった: 前のユーザーのデータ(入力中の内容・添付を含む)を残さない
+        if (this.current?.serverId === e.serverId) this.closeIssue();
         break;
       case "noteFinished":
         this.conv.noteFinished(e);

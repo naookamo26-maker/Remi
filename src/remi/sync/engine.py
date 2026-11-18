@@ -198,12 +198,13 @@ class ServerSync:
     def fetch_journals(self, issue_id: int, notify: bool = True) -> SyncResult:
         """チケットの履歴と添付を取得する(設計書 §4.3)。"""
         result = SyncResult()
-        data = self.client.issue(issue_id, include="journals,attachments")
         existing = self.issues.get(self.server_id, issue_id)
-        first_fetch = existing is None or not existing.journals_synced_on
-        if existing is not None:
-            self.issues.upsert_issue(self.server_id, data, existing.relation_flags,
-                                     self._is_monitored(data, existing.relation_flags, self._closed_ids()))
+        if existing is None:
+            return result  # 一覧の同期で保存していないチケット(関係がない・削除された)の履歴は保存しない
+        data = self.client.issue(issue_id, include="journals,attachments")
+        first_fetch = not existing.journals_synced_on
+        self.issues.upsert_issue(self.server_id, data, existing.relation_flags,
+                                 self._is_monitored(data, existing.relation_flags, self._closed_ids()))
         new_ids = self.issues.upsert_journals(self.server_id, issue_id, data.get("journals") or [])
         self.issues.upsert_attachments(self.server_id, issue_id, data.get("attachments") or [])
         for j in data.get("journals") or []:

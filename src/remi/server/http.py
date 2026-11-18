@@ -27,10 +27,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import requests
-
 from remi import user_agent
 from remi.render.markup import highlight_css
+from remi.server import external_image
 from remi.server.api import RemiApi, RpcError
 
 log = logging.getLogger(__name__)
@@ -86,7 +85,11 @@ class LocalServer:
         self.httpd.server_close()
 
     def _on_event(self, event: dict[str, Any]) -> None:
-        if event.get("type") == "attachmentReady":
+        if event.get("type") == "serverCacheCleared":
+            with self._lock:
+                for pid in [k for k, v in self._pending.items() if v[0] == event["serverId"]]:
+                    del self._pending[pid]
+        elif event.get("type") == "attachmentReady":
             with self._lock:
                 ev = self._attachment_events.get((event["serverId"], event["attachmentId"]))
             if ev is not None:
@@ -145,23 +148,14 @@ class LocalServer:
             if url in self._external_cache:
                 self._external_cache.move_to_end(url)
                 return self._external_cache[url]
-        try:
-            r = requests.get(url, timeout=(5, 20), stream=True, headers={"User-Agent": user_agent()})
-            ctype = r.headers.get("Content-Type", "").split(";")[0].strip()
-            if r.status_code != 200 or not ctype.startswith("image/") or ctype == "image/svg+xml":
-                return None
-            data = b""
-            for chunk in r.iter_content(64 * 1024):
-                data += chunk
-                if len(data) > EXTERNAL_IMAGE_MAX:
-                    return None
-        except requests.RequestException:
+        got = external_image.fetch(url, user_agent(), EXTERNAL_IMAGE_MAX)  # 接続先の検査もここで行う
+        if got is None:
             return None
         with self._lock:
-            self._external_cache[url] = (data, ctype)
+            self._external_cache[url] = got
             while len(self._external_cache) > 50:
                 self._external_cache.popitem(last=False)
-        return data, ctype
+        return got
 
     # --- リクエスト処理 -------------------------------------------------------------
     def _handler(self):

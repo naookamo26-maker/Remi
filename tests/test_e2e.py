@@ -379,3 +379,28 @@ def test_tree_toggle_and_settings_tabs(page, remi, fake):
     dialog.get_by_role("tab", name="全般").click()
     playwright_api.expect(dialog.get_by_label("外観")).to_have_value("dark")
     assert not page.errors, page.errors
+
+
+def test_switching_user_closes_open_conversation(page, remi, fake):
+    """別のユーザーのAPIキーに替えたら、開いている会話(前のユーザーのデータ)を閉じる。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_have_text("CSVが文字化けする")
+    conv.get_by_role("textbox", name="コメント").fill("前のユーザーの入力")
+
+    fake.keys["key-b"] = 7
+    api = remi.server.api
+    probe = api.testConnection(url=fake.base_url, apiKey="key-b", serverId=1)
+    api.saveServer({"serverId": 1, "name": "社内Redmine", "url": fake.base_url, "apiKey": "key-b",
+                    "textFormat": "common_mark", "pollInterval": 180, "userId": probe["userId"],
+                    "login": probe["login"], "userName": probe["name"], "groupIds": probe["groupIds"]})
+    playwright_api.expect(conv.locator("h1")).to_have_count(0, timeout=10000)
+    playwright_api.expect(conv.get_by_role("textbox", name="コメント")).to_have_count(0)
+    assert api.open_issue is None  # 前のユーザーで開いていたチケットを、同期でも取りに行かない
+    assert remi.ctx.issues.journals(1, 10) == []
+    playwright_api.expect(page.locator(".issue", has_text="CSVが文字化けする")).to_have_count(0, timeout=10000)
+    playwright_api.expect(page.locator(".issue", has_text="メールの宛先")).to_be_visible(timeout=20000)
+    assert not page.errors, page.errors

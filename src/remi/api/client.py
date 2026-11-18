@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlsplit, urlparse
 
 import requests
 
@@ -25,6 +25,26 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = (5.0, 30.0)  # (接続, 読み取り) 秒
 PAGE_LIMIT = 100
+MAX_REDIRECTS = 5
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    """(スキーム, ホスト, ポート)。ホストは小文字、ポートは省略時の既定値で補う。"""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    return scheme, (parts.hostname or "").lower(), parts.port or (443 if scheme == "https" else 80)
+
+
+def same_server(base_url: str, url: str) -> bool:
+    """APIキーを付けて送ってよい接続先か: 登録したRedmineと同じスキーム・ホスト・ポート。
+    同じホストへの http → https の移動(より安全になる)も許す。"""
+    try:
+        b, u = _origin(base_url), _origin(url)
+    except ValueError:
+        return False
+    if b == u:
+        return True
+    return b[1] == u[1] and b[0] == "http" and u[0] == "https" and u[2] == 443
 
 
 def normalize_url(url: str) -> str:
@@ -60,6 +80,8 @@ class RedmineClient:
         self.min_interval = min_interval
         self._lock = threading.Lock()
         self._last_request = 0.0
+        # 同期を止めたあとは、通信中だったものも含めて結果を返さない(切り替えた後に前のデータを書き戻させない)
+        self._cancelled = threading.Event()
         s = requests.Session()
         s.headers.update(
             {
@@ -76,6 +98,14 @@ class RedmineClient:
     def close(self) -> None:
         self.session.close()
 
+    def cancel(self) -> None:
+        """これ以降のリクエストを送らず、通信中のリクエストの結果も捨てる(CANCELLED)。どのスレッドから呼んでもよい。"""
+        self._cancelled.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
     # --- 低レベル -----------------------------------------------------------
     def url(self, path: str) -> str:
         if path.startswith(("http://", "https://")):
@@ -88,11 +118,41 @@ class RedmineClient:
             time.sleep(wait)
 
     def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+        """リクエストを送る。APIキーを付けるので、登録したRedmine以外へは送らない。
+
+        requests のリダイレクトの自動追跡は、別のホストへ移るときに Authorization しか外さず、
+        X-Redmine-API-Key はそのまま送ってしまう。そのため自動では追わず、移動先も検査してから追う。
+        """
         kwargs.setdefault("timeout", self.timeout)
+        kwargs["allow_redirects"] = False
+        url = self.url(path)
+        for _ in range(MAX_REDIRECTS + 1):
+            if not same_server(self.base_url, url):
+                log.warning("refused to send the API key to another host: %s", urlsplit(url).hostname)
+                raise RedmineError(ErrorCode.OTHER_HOST, detail=urlsplit(url).hostname or "")
+            resp = self._send(method, url, **kwargs)
+            if not resp.is_redirect:
+                break
+            location = resp.headers.get("Location")
+            resp.close()
+            if not location or method not in ("GET", "HEAD"):
+                raise RedmineError(ErrorCode.INVALID_RESPONSE, resp.status_code, "redirect")
+            url = urljoin(url, location)
+            kwargs.pop("params", None)  # 移動先のURLには、クエリが含まれている
+        else:
+            raise RedmineError(ErrorCode.INVALID_RESPONSE, resp.status_code, "too many redirects")
+        log.debug("%s %s -> %s", method, path, resp.status_code)
+        if resp.status_code >= 400:
+            raise _error_for_status(resp)
+        return resp
+
+    def _send(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        if self.cancelled:
+            raise RedmineError(ErrorCode.CANCELLED)
         with self._lock:
             self._throttle()
             try:
-                resp = self.session.request(method, self.url(path), **kwargs)
+                resp = self.session.request(method, url, **kwargs)
             except requests.exceptions.SSLError as e:
                 raise RedmineError(ErrorCode.SSL_ERROR, detail=str(e)) from e
             except requests.exceptions.ProxyError as e:
@@ -105,9 +165,10 @@ class RedmineClient:
                 raise RedmineError(ErrorCode.INVALID_URL, detail=str(e)) from e
             finally:
                 self._last_request = time.monotonic()
-        log.debug("%s %s -> %s", method, path, resp.status_code)
-        if resp.status_code >= 400:
-            raise _error_for_status(resp)
+        if self.cancelled and method in ("GET", "HEAD"):
+            # 取得した結果は捨てる(止めた後に書き込ませない)。変更を送った結果は、送れたかを伝えるために返す
+            resp.close()
+            raise RedmineError(ErrorCode.CANCELLED)
         return resp
 
     def get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -239,6 +300,11 @@ class RedmineClient:
     def remove_watcher(self, issue_id: int, user_id: int) -> None:
         self.request("DELETE", f"/issues/{issue_id}/watchers/{user_id}.json")
 
+    def attachment_url(self, attachment_id: int, filename: str) -> str:
+        """添付のダウンロード先。Redmineが返す content_url はRedmineの設定(ホスト名・プロトコル)から作られ、
+        接続先と違うことがある(http になっている・別名のホスト)ので、登録したURLから組み立てる。"""
+        return self.url(f"/attachments/download/{int(attachment_id)}/{quote(filename or 'file', safe='')}")
+
     def download(self, url: str, dest: Path, max_bytes: int) -> int:
         """添付ファイルをダウンロードする。上限を超えたら TOO_LARGE。"""
         resp = self.request("GET", url, stream=True)
@@ -252,6 +318,8 @@ class RedmineClient:
         try:
             with open(tmp, "wb") as f:
                 for chunk in resp.iter_content(64 * 1024):
+                    if self.cancelled:
+                        raise RedmineError(ErrorCode.CANCELLED)
                     written += len(chunk)
                     if written > max_bytes:
                         raise RedmineError(ErrorCode.TOO_LARGE, resp.status_code)

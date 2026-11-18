@@ -139,3 +139,27 @@ def test_opening_issue_refetches_comments_even_if_unchanged(db, fake):
         assert wait_until(lambda: any(j.notes == "同じ秒のコメント" for j in store.journals(sid, 1)))
     finally:
         mgr.stop_all()
+
+
+def test_stop_all_discards_response_of_request_in_flight(db, fake):
+    """止めたときに通信中だった取得の結果は、DBへ書き込まない。通信が終われば、残りの処理を待たずに止まる。"""
+    fake.add_project(1, "A")
+    fake.add_issue(1, 1, "担当")
+    sid = ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
+    mgr = SyncManager(db, EventBus())
+    mgr.restart()
+    store = IssueStore(db)
+    try:
+        assert wait_until(lambda: store.get(sid, 1) is not None and store.journals_synced(sid, 1))
+        fake.add_issue(2, 1, "止めた後に届く")
+        fake.delay = 2.0
+        mgr.sync_now()
+        time.sleep(1.3)  # 1秒以内に同期が始まり、一覧の取得が通信中になる
+        t = time.monotonic()
+        assert mgr.stop_all(10)
+        assert time.monotonic() - t < 5
+        time.sleep(1.5)
+        assert store.get(sid, 2) is None
+    finally:
+        fake.delay = 0
+        mgr.stop_all()

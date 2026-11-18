@@ -82,7 +82,11 @@ class ServerWorker(threading.Thread):
         self._commands.put((command, args))
 
     def stop(self) -> None:
+        """止める。通信中のリクエストの結果も捨てさせるので、止めた後にDBへ書き込むことはない
+        (書き込みの途中だった1件を除く。stop_all はそれを join で待つ)。"""
         self._stopping.set()
+        if self.sync is not None:
+            self.sync.client.cancel()
         self._commands.put(("noop", ()))
 
     # --- スレッド本体 ----------------------------------------------------------
@@ -95,7 +99,7 @@ class ServerWorker(threading.Thread):
                 timeout = max(0.0, next_tick - time.monotonic())
                 try:
                     cmd, args = self._commands.get(timeout=timeout)
-                    self._handle(cmd, args)
+                    self._dispatch(cmd, args)
                     continue  # 続けて届いた依頼を先に処理する
                 except queue.Empty:
                     pass
@@ -113,6 +117,8 @@ class ServerWorker(threading.Thread):
             return False
         client = RedmineClient(server.url, key, proxy_mode=server.proxy_mode, proxy_url=server.proxy_url)
         self.sync = ServerSync(self.db, self.server_id, client, self._retention())
+        if self._stopping.is_set():
+            client.cancel()  # 作る前に stop() が呼ばれていた
         last_delete = Settings(self.db).get(f"last_delete_check:{self.server_id}") or 0
         now = time.monotonic()
         wall_elapsed = time.time() - float(last_delete)
@@ -120,7 +126,10 @@ class ServerWorker(threading.Thread):
         self.sched.reconcile = now + 300
         return True
 
-    def _handle(self, cmd: str, args: tuple[Any, ...]) -> None:
+    # threading.Thread は内部で _handle などの属性を使う(Python 3.13 では _handle を上書きする)ので、別の名前にする
+    def _dispatch(self, cmd: str, args: tuple[Any, ...]) -> None:
+        if self._stopping.is_set():
+            return
         if cmd == "sync_now":
             self.sched.changes = 0
             self.sched.versions = 0
@@ -158,6 +167,13 @@ class ServerWorker(threading.Thread):
         try:
             self.sync.client.update_issue(issue_id, notes=notes, private=private, changes=changes, uploads=uploads)
         except RedmineError as e:
+            if e.code == ErrorCode.CANCELLED:
+                # 送る前に同期を止めた(サーバーの設定を保存した)。下書きとして残し、再送できるようにする
+                if notes:
+                    issues.save_draft(self.server_id, issue_id, notes, private, failed=True, error=e.code.value)
+                self.bus.publish("noteFinished", serverId=self.server_id, issueId=issue_id,
+                                 error=e.code.value, detail="")
+                return
             log.warning("updating #%s failed: %s", issue_id, e)
             # 送信に失敗したら、下書きとして残して再送できるようにする(設計書 §6)
             if notes:
@@ -166,7 +182,8 @@ class ServerWorker(threading.Thread):
                              error=e.code.value, detail=e.detail)
             return
         issues.clear_draft(self.server_id, issue_id)
-        self.bus.publish("noteFinished", serverId=self.server_id, issueId=issue_id, error=None, detail="")
+        self.bus.publish("noteFinished", serverId=self.server_id, issueId=issue_id, error=None, detail="",
+                         uploadTokens=[u["token"] for u in uploads or []])
         try:
             r = self.sync.fetch_journals(issue_id, notify=False)
             issues.mark_read(self.server_id, issue_id)
@@ -214,7 +231,8 @@ class ServerWorker(threading.Thread):
         try:
             self._run_due(now)
         except RedmineError as e:
-            self._on_error(e)
+            if e.code != ErrorCode.CANCELLED:
+                self._on_error(e)
         except LookupError:
             self._stopping.set()  # サーバーが削除された
         except Exception:  # noqa: BLE001 - 予期しないエラーでもワーカーは止めない
@@ -310,7 +328,7 @@ class ServerWorker(threading.Thread):
         ext = mimetypes.guess_extension(a.content_type or "") or ""
         dest = attachment_cache_dir(self.server_id) / f"{attachment_id}{ext}"
         try:
-            sync.client.download(a.content_url, dest, MAX_ATTACHMENT_BYTES)
+            sync.client.download(sync.client.attachment_url(attachment_id, a.filename), dest, MAX_ATTACHMENT_BYTES)
         except RedmineError as e:
             if e.code == ErrorCode.TOO_LARGE or not e.retryable:
                 ready(False)
@@ -322,6 +340,8 @@ class ServerWorker(threading.Thread):
 
     # --- 成功・失敗 -------------------------------------------------------------
     def _on_success(self) -> None:
+        if self._stopping.is_set():
+            return
         servers = ServerStore(self.db)
         server = servers.get(self.server_id)
         if server is None:
@@ -333,6 +353,8 @@ class ServerWorker(threading.Thread):
         self.bus.publish("syncState", serverId=self.server_id)
 
     def _on_error(self, err: RedmineError) -> None:
+        if self._stopping.is_set():
+            return
         self.sched.failures += 1
         if err.retryable:
             delay = min(BACKOFF_MAX, BACKOFF_BASE * 2 ** (self.sched.failures - 1))
@@ -384,17 +406,26 @@ class SyncManager:
         if sid is not None:
             self.set_open_issue(sid, iid)
 
-    def stop_all(self, timeout: float = 5.0) -> None:
+    def stop_all(self, timeout: float = 5.0) -> bool:
+        """すべての同期スレッドを止める。時間内に止まらないものがあれば False。
+
+        止めると、次のリクエストは送らず、通信中のリクエストの結果も捨てる(RedmineClient.cancel)。
+        そのため、ページングや複数の処理が残っていても、通信中の1件が終われば止まる。
+        True を返したときはスレッドが終わっているので、この後にDBへ書き込まれることはない。
+        """
         with self._lock:
             workers = list(self._workers.values())
             self._workers.clear()
         for w in workers:
             w.stop()
+        deadline = time.monotonic() + timeout
+        stopped = True
         for w in workers:
-            w.join(timeout)
+            w.join(max(0.0, deadline - time.monotonic()))
             if w.is_alive():
-                # 通信中で止まらない場合は待たずに進める(タイムアウトで必ず終わる。デーモンスレッド)
                 log.warning("sync thread %s did not stop in time", w.name)
+                stopped = False
+        return stopped
 
     def _worker(self, server_id: int) -> ServerWorker | None:
         with self._lock:

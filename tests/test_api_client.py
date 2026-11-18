@@ -154,3 +154,121 @@ def test_edit_options_and_watchers(fake, client):
     assert ME in fake.watchers[10]
     client.remove_watcher(10, ME)
     assert ME not in fake.watchers[10]
+
+
+# --- APIキーを登録したRedmine以外へ送らない ------------------------------------------
+@pytest.fixture
+def redirector():
+    """Redmine役(/to-other で別ホストへ、/to-self で自分へリダイレクトする)と、別ホスト役のサーバー。
+    別ホスト役には localhost の名前で接続させる(127.0.0.1 とはホストとして別)。"""
+    import http.server
+    import threading
+
+    got: dict[str, list] = {"other": [], "self": []}
+
+    class Other(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            got["other"].append(self.headers.get("X-Redmine-API-Key"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    other = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Other)
+
+    class Red(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path.startswith("/to-other"):
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{other.server_port}/x")
+            elif self.path.startswith("/to-self"):
+                self.send_response(302)
+                self.send_header("Location", "/final?a=1")
+            else:
+                got["self"].append((self.path, self.headers.get("X-Redmine-API-Key")))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def do_PUT(self):  # noqa: N802
+            self.send_response(307)
+            self.send_header("Location", "/final")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    red = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Red)
+    for s in (other, red):
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    c = RedmineClient(f"http://127.0.0.1:{red.server_port}", "SECRET", min_interval=0,
+                      proxy_mode="manual", proxy_url=None)
+    c.session.trust_env = False  # 環境のプロキシを使わない
+    yield c, got, other.server_port
+    c.close()
+    for s in (other, red):
+        s.shutdown()
+        s.server_close()
+
+
+def test_api_key_is_not_sent_to_other_host_on_redirect(redirector, tmp_path):
+    c, got, _ = redirector
+    with pytest.raises(RedmineError) as e:
+        c.download(c.url("/to-other"), tmp_path / "a.png", 100)
+    assert e.value.code == ErrorCode.OTHER_HOST
+    assert got["other"] == []
+
+
+def test_api_key_is_not_sent_to_other_absolute_url(redirector):
+    c, got, port = redirector
+    with pytest.raises(RedmineError) as e:
+        c.get_json(f"http://localhost:{port}/attachments/download/1/a.png")
+    assert e.value.code == ErrorCode.OTHER_HOST
+    assert got["other"] == []
+
+
+def test_redirect_within_same_server_is_followed(redirector):
+    c, got, _ = redirector
+    assert c.get_json("/to-self", {"b": 2}) == {}
+    assert got["self"] == [("/final?a=1", "SECRET")]  # 移動先のクエリを使い、元のクエリは付け直さない
+
+
+def test_redirect_of_update_is_not_followed(redirector):
+    c, got, _ = redirector
+    with pytest.raises(RedmineError) as e:
+        c.request("PUT", "/issues/1.json", json={})
+    assert e.value.code == ErrorCode.INVALID_RESPONSE
+    assert got["self"] == []
+
+
+def test_same_server():
+    from remi.api.client import same_server
+
+    assert same_server("https://r.example.com/redmine", "https://R.example.com:443/redmine/x")
+    assert same_server("http://r.example.com", "https://r.example.com/x")  # https への移動は許す
+    assert not same_server("https://r.example.com", "http://r.example.com/x")  # 暗号化しない接続へは送らない
+    assert not same_server("https://r.example.com", "https://evil.example.com/x")
+    assert not same_server("https://r.example.com", "https://r.example.com:8443/x")
+    assert not same_server("https://r.example.com", "https://r.example.com.evil.com/x")
+
+
+def test_attachment_url_uses_registered_url():
+    c = RedmineClient("https://r.example.com/redmine", "k")
+    assert c.attachment_url(5, "スクリーン ショット#1.png") == \
+        "https://r.example.com/redmine/attachments/download/5/%E3%82%B9%E3%82%AF%E3%83%AA%E3%83%BC%E3%83%B3%20" \
+        "%E3%82%B7%E3%83%A7%E3%83%83%E3%83%88%231.png"
+
+
+def test_cancelled_client_sends_nothing(fake, client):
+    client.cancel()
+    n = len(fake.requests)
+    with pytest.raises(RedmineError) as e:
+        client.issue_statuses()
+    assert e.value.code == ErrorCode.CANCELLED and not e.value.retryable
+    assert len(fake.requests) == n

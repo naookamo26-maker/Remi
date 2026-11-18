@@ -73,7 +73,8 @@ PERMISSIONS_TTL = 600
 # 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
 SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters",
                        "versions", "version_issues", "version_events")
-# 初期化の前に同期スレッドを止めるときの待ち時間。通信中でも読み取りのタイムアウト(30秒)で終わる
+# 初期化の前に同期スレッドを止めるときの待ち時間。取得の通信は止めればすぐ終わる。
+# 変更を送っている途中なら、その応答(読み取りのタイムアウトは30秒)を待つ
 SYNC_STOP_TIMEOUT = 40.0
 
 
@@ -288,8 +289,11 @@ class RemiApi:
         user_changed = existing is not None and user_id is not None and existing.my_user_id != user_id
         reset = url_changed or user_changed
         if reset and self.sync is not None:
-            # 初期化の後に、動いている同期スレッドが前のデータを書き戻さないよう、先に止める
-            self.sync.stop_all(SYNC_STOP_TIMEOUT)
+            # 初期化の後に、動いている同期スレッドが前のデータを書き戻さないよう、先に止める。
+            # 止まりきらなければ(書き込みの途中で時間がかかっている)、キャッシュを消さずに切り替えをやめる
+            if not self.sync.stop_all(SYNC_STOP_TIMEOUT):
+                self._servers_changed()
+                raise RpcError("sync_busy")
         s.name, s.url, s.text_format, s.poll_interval = name, url, fmt, poll
         s.notify_enabled = bool(data.get("notifyEnabled", True))
         s.enabled = bool(data.get("enabled", True))
@@ -322,6 +326,7 @@ class RemiApi:
             for key in [k for k in self._role_perms if k[0] == server_id]:
                 del self._role_perms[key]
             self._my_roles.pop(server_id, None)
+            self._custom_fields.pop(server_id, None)  # 前のユーザー(管理者など)の権限で取得した定義
         if self.open_issue is not None and self.open_issue[0] == server_id:
             # 同期を動かし直したときに、前のユーザーで開いていたチケットを取りに行かない
             self.setOpenIssue(None, None)

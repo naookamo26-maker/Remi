@@ -418,6 +418,8 @@ def test_edit_upload_and_watch(app, fake):
     app.rpc("postNote", serverId=sid, issueId=10, body="", changes={"status_id": 2, "assigned_to_id": 7},
             uploads=[{"token": up["token"], "filename": "clip.png", "contentType": "image/png"}])
     assert wait_until(lambda: (app.ctx.issues.get(sid, 10).status_id == 2))
+    # 送信できた添付は、プレビュー用のメモリから消す
+    assert wait_until(lambda: app.http.get(app.server.origin + up["url"]).status_code == 404)
     conv = app.rpc("getConversation", serverId=sid, issueId=10)
     texts = [d["text"] for j in conv["journals"] for d in j["details"]]
     assert any("clip.png" in t_ for t_ in texts) and conv["assignedToId"] == 7
@@ -667,3 +669,58 @@ def test_edit_notes_permission_follows_redmine(app, fake):
     fake.roles = {3: ["view_issues"]}
     app.api._role_perms.clear()
     assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "none"
+
+
+def test_pending_uploads_keep_only_images_within_total_limit(app, fake, monkeypatch):
+    """送信前の添付は、プレビューに使う画像だけを、合計の上限までメモリに置く。"""
+    from remi.server import http as local_http
+
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "x")
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.sync.client(sid) is not None)
+
+    def upload(name, data):
+        url = f"{app.server.origin}/upload?serverId={sid}&filename={name}"
+        return app.http.post(url, data=data, headers={"X-Remi-Upload": "1"}).json()["result"]
+
+    doc = upload("report.pdf", b"%PDF" * 100)
+    assert not doc["isImage"] and doc["token"]
+    assert app.server._pending == {}  # 画像以外はメモリに置かない
+    monkeypatch.setattr(local_http, "PENDING_MAX_TOTAL", 25)
+    a, b = upload("a.png", b"a" * 10), upload("b.png", b"b" * 10)
+    c = upload("c.png", b"c" * 10)  # 合計が上限を超えるので、古いもの(a)から捨てる
+    assert app.http.get(app.server.origin + a["url"]).status_code == 404
+    assert app.http.get(app.server.origin + b["url"]).content == b"b" * 10
+    assert app.http.get(app.server.origin + c["url"]).content == b"c" * 10
+    assert app.server._pending_bytes == 20
+
+
+def test_switching_user_is_cancelled_if_sync_does_not_stop(app, fake, monkeypatch):
+    """同期スレッドが止まりきらなければ、前のデータを消さずに切り替えをやめる(後から書き戻されないように)。"""
+    fake.add_project(1, "基幹")
+    fake.add_issue(10, 1, "Aの担当")
+    fake.keys["key-b"] = 7
+    sid = _save(app, fake, API_KEY)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None)
+    real_stop = app.sync.stop_all
+    monkeypatch.setattr(app.sync, "stop_all", lambda timeout=5.0: (real_stop(timeout), False)[1])
+    probe = app.rpc("testConnection", url=fake.base_url, apiKey="key-b", serverId=sid)
+    err = app.rpc_error("saveServer", data={
+        "serverId": sid, "name": "社内", "url": fake.base_url, "apiKey": "key-b", "textFormat": "common_mark",
+        "pollInterval": 180, "userId": probe["userId"], "login": probe["login"], "userName": probe["name"],
+        "groupIds": probe["groupIds"]})
+    assert err["code"] == "sync_busy"
+    assert app.ctx.servers.get(sid).my_user_id == ME and app.ctx.servers.api_key(sid) == API_KEY
+    assert app.ctx.issues.get(sid, 10) is not None
+    assert app.sync.client(sid) is not None or wait_until(lambda: app.sync.client(sid) is not None)  # 同期は再開する
+
+
+def test_switching_user_clears_custom_field_definitions(app, fake):
+    """前のユーザー(管理者など)の権限で取得したカスタムフィールドの定義を、切り替えた後に使わない。"""
+    fake.add_project(1, "基幹")
+    fake.keys["key-b"] = 7
+    sid = _save(app, fake, API_KEY)
+    app.api._custom_fields[sid] = (time.monotonic(), [{"id": 1, "name": "管理者だけが見る項目"}])
+    _save(app, fake, "key-b", sid)
+    assert sid not in app.api._custom_fields

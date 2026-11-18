@@ -39,7 +39,10 @@ COOKIE = "remi_session"
 ATTACHMENT_WAIT = 20.0
 UPLOAD_MAX = 50 * 1024 * 1024  # 実際の上限はRedmineの設定で決まる(超えたらRedmineが拒否する)
 PENDING_KEEP = 50
+PENDING_MAX_TOTAL = 100 * 1024 * 1024  # 送信前の画像(プレビュー用)としてメモリに置く合計の上限
 EXTERNAL_IMAGE_MAX = 10 * 1024 * 1024
+EXTERNAL_CACHE_KEEP = 50
+EXTERNAL_CACHE_MAX_TOTAL = 50 * 1024 * 1024  # 外部画像のキャッシュの合計の上限
 SSE_KEEPALIVE = 15.0
 
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
@@ -54,9 +57,11 @@ class LocalServer:
         self.session = secrets.token_urlsafe(32)
         self._methods = api.methods()
         self._external_cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+        self._external_bytes = 0
         self._attachment_events: dict[tuple[int, int], threading.Event] = {}
-        # 送信前の添付(画像の表示用)。id -> (server_id, filename, content_type, data)
+        # 送信前の添付(プレビューで画像を表示する用。画像だけ)。id -> (server_id, token, content_type, data)
         self._pending: OrderedDict[int, tuple[int, str, str, bytes]] = OrderedDict()
+        self._pending_bytes = 0
         self._pending_seq = 0
         self._lock = threading.Lock()
         api.ctx.bus.on(self._on_event)
@@ -84,11 +89,23 @@ class LocalServer:
         self.httpd.shutdown()
         self.httpd.server_close()
 
+    def _drop_pending(self, pid: int) -> None:
+        """self._lock を持って呼ぶ。"""
+        got = self._pending.pop(pid, None)
+        if got is not None:
+            self._pending_bytes -= len(got[3])
+
     def _on_event(self, event: dict[str, Any]) -> None:
         if event.get("type") == "serverCacheCleared":
             with self._lock:
                 for pid in [k for k, v in self._pending.items() if v[0] == event["serverId"]]:
-                    del self._pending[pid]
+                    self._drop_pending(pid)
+        elif event.get("type") == "noteFinished" and not event.get("error") and event.get("uploadTokens"):
+            # 送信できた添付は、もうプレビューに使わない
+            tokens = set(event["uploadTokens"])
+            with self._lock:
+                for pid in [k for k, v in self._pending.items() if v[0] == event["serverId"] and v[1] in tokens]:
+                    self._drop_pending(pid)
         elif event.get("type") == "attachmentReady":
             with self._lock:
                 ev = self._attachment_events.get((event["serverId"], event["attachmentId"]))
@@ -130,14 +147,17 @@ class LocalServer:
         except RedmineError as e:
             raise RpcError(e.code.value, e.detail) from e
         ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        is_image = ctype.startswith("image/") and ctype != "image/svg+xml"
         with self._lock:
             self._pending_seq += 1
             pid = self._pending_seq
-            self._pending[pid] = (server_id, filename, ctype, data)
-            while len(self._pending) > PENDING_KEEP:
-                self._pending.popitem(last=False)
+            if is_image and len(data) <= PENDING_MAX_TOTAL:  # 画像以外は表示しないので、メモリに置かない
+                self._pending[pid] = (server_id, token, ctype, data)
+                self._pending_bytes += len(data)
+                while len(self._pending) > PENDING_KEEP or self._pending_bytes > PENDING_MAX_TOTAL:
+                    self._drop_pending(next(iter(self._pending)))
         return {"id": pid, "token": token, "filename": filename, "contentType": ctype, "size": len(data),
-                "isImage": ctype.startswith("image/") and ctype != "image/svg+xml", "url": f"/pending/{pid}"}
+                "isImage": is_image, "url": f"/pending/{pid}"}
 
     def external_image(self, url: str) -> tuple[bytes, str] | None:
         if not self.api.ctx.settings.get("allow_external_images"):
@@ -152,9 +172,12 @@ class LocalServer:
         if got is None:
             return None
         with self._lock:
-            self._external_cache[url] = got
-            while len(self._external_cache) > 50:
-                self._external_cache.popitem(last=False)
+            if url not in self._external_cache and len(got[0]) <= EXTERNAL_CACHE_MAX_TOTAL:
+                self._external_cache[url] = got
+                self._external_bytes += len(got[0])
+                while len(self._external_cache) > EXTERNAL_CACHE_KEEP or self._external_bytes > EXTERNAL_CACHE_MAX_TOTAL:
+                    _, old = self._external_cache.popitem(last=False)
+                    self._external_bytes -= len(old[0])
         return got
 
     # --- リクエスト処理 -------------------------------------------------------------

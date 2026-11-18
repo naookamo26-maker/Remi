@@ -489,7 +489,7 @@ def test_pane_widths_change_only_by_splitter(page, remi, fake):
     assert not page.errors, page.errors
 
 
-def test_visible_relations_menu_and_grouped_changes(page, remi, fake):
+def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     seed(fake)
     fake.add_journal(10, 7, details=[
         {"property": "attr", "name": "status_id", "old_value": "1", "new_value": "2"},
@@ -498,22 +498,204 @@ def test_visible_relations_menu_and_grouped_changes(page, remi, fake):
     add_server(remi, fake)
     page.goto(remi.server.start_url)
     playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
-    # バージョンの表記
-    playwright_api.expect(page.locator(".tree-header .version")).to_have_text(re.compile(r"^v\d+\.\d+\.\d+"))
-    # 表示するチケット: ウォッチ中を外すと、ウォッチだけのチケットが一覧とツリーの件数から外れる
-    page.get_by_role("button", name="表示するチケット").click()
+    # バージョンはウィンドウのタイトルに「v」付きで出す(ツリーの上には出さない)
+    assert re.fullmatch(r"Remi v\d+\.\d+\.\d+.*", page.title())
+    playwright_api.expect(page.locator(".pane-tree")).not_to_contain_text("Remi")
+    # サーバーの追加は、設定を開かずにツリーの上のボタンから直接開ける
+    page.locator(".tree-header").get_by_role("button", name="サーバーを追加").click()
+    dialog = page.get_by_role("dialog", name="サーバーの登録")
+    playwright_api.expect(dialog).to_be_visible()
+    dialog.get_by_role("button", name="キャンセル").click()
+    # 表示するチケット(プロジェクトごと): 基幹システムでウォッチ中を外すと、子プロジェクトのウォッチだけの
+    # チケットも、一覧とツリーの件数から外れる
+    page.get_by_role("button", name="表示するチケット: 基幹システム").click()
     menu = page.get_by_role("menu")
+    # 最上位のプロジェクトは、既定ではサーバーの既定を引き継ぐ。そのあいだはチェックを変えられない
+    playwright_api.expect(menu.get_by_role("button", name="サーバーと同じ")).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_be_disabled()
+    menu.get_by_role("button", name="独自").click()
+    menu = page.get_by_role("menu")
+    playwright_api.expect(menu.get_by_role("button", name="独自")).to_have_attribute("aria-pressed", "true")
     menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    menu = page.get_by_role("menu")
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("1")
-    menu.get_by_role("menuitemcheckbox", name="ウォッチ中").click()
+    assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
+    # 子プロジェクトは親の設定を継承していることを示す
+    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
+    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 基幹システム")).to_have_class(re.compile("own"))
+    # サーバーと同じに戻すと、独自の設定は消える
+    menu.get_by_role("button", name="サーバーと同じ").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("2")
     page.keyboard.press("Escape")
+    assert remi.ctx.projects.own_visible_relations(1) == {}
+    # 「すべてのプロジェクトを表示」は、サーバーの右クリックメニューで、サーバーごとに切り替える
+    page.locator(".tree .node.server").click(button="right")
+    page.get_by_role("menuitemcheckbox", name="すべてのプロジェクトを表示(このサーバー)").click()
+    end = time.monotonic() + 5
+    while time.monotonic() < end and not remi.ctx.servers.get(1).show_all_projects:
+        time.sleep(0.05)
+    assert remi.ctx.servers.get(1).show_all_projects is True
     # 1回の更新での複数の変更は、1つにまとめて表示する
     page.locator(".issue", has_text="CSVが文字化けする").click()
     group = page.locator(".pane-conv .change-group")
     playwright_api.expect(group).to_have_count(1, timeout=15000)
     playwright_api.expect(group.locator("li")).to_have_count(2)
+    assert not page.errors, page.errors
+
+
+def test_selecting_tree_item_closes_conversation_and_keeps_draft(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    conv.get_by_role("textbox", name="コメント").fill("書きかけ")
+    # すぐに別の項目を選ぶ: 会話は閉じ、書きかけの文章は下書きとして残る
+    page.locator(".tree .node", has_text="受注管理").click()
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    playwright_api.expect(conv).to_contain_text("チケットを選ぶと会話が表示されます")
+    end = time.monotonic() + 5
+    while time.monotonic() < end and remi.ctx.issues.get_draft(1, 10)[0] != "書きかけ":
+        time.sleep(0.05)
+    assert remi.ctx.issues.get_draft(1, 10)[0] == "書きかけ"
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(conv.get_by_role("textbox", name="コメント")).to_have_value("書きかけ", timeout=15000)
+    assert not page.errors, page.errors
+
+
+def test_roadmap_versions(page, remi, fake):
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_version(6, 2, "v0.9", status="closed")
+    fake.add_issue(20, 2, "関係ないチケット", assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    # プロジェクトの右クリックメニューで「未完了のバージョンをウォッチ」をオンにする
+    page.locator(".tree .node", has_text="基幹システム").click(button="right")
+    page.get_by_role("group", name="未完了のバージョンをウォッチ").get_by_role("button", name="オン").click()
+    roadmap = page.locator(".tree .node.roadmap").first
+    playwright_api.expect(roadmap).to_be_visible(timeout=20000)
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible()
+    # 終了したバージョンは畳んでおく
+    playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_have_count(0)
+    page.locator(".tree .node.version-group").click()
+    playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_be_visible()
+    # バージョンを選ぶと、関係ないチケットも一覧に出て、右に概要が出る(ほかの一覧の件数は変わらない)
+    version.click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(page.locator(".issue")).to_contain_text("関係ないチケット")
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    playwright_api.expect(conv).to_contain_text("まだ変化はありません")
+    # 変化が届くと、表示中のバージョンの記録に出る
+    fake.add_issue(21, 2, "追加されたチケット", assigned_to=7)
+    fake.set_version(21, 5)
+    remi.sync.sync_now()
+    playwright_api.expect(conv.locator(".version-event.added")).to_contain_text("#21", timeout=20000)
+    # チケットを開いてから、同じバージョンをもう一度押すと、変化の記録に戻る
+    page.locator(".issue", has_text="関係ないチケット").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("関係ないチケット", timeout=15000)
+    version.click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    # 別の項目を選ぶと閉じる。ロードマップを畳んでも、変化があれば印が出る
+    page.locator(".tree .node", has_text="すべて").first.click()
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    roadmap.click()
+    playwright_api.expect(version).to_have_count(0)
+    fake.set_version(20, None)
+    remi.sync.sync_now()
+    playwright_api.expect(roadmap.locator(".dot.changed")).to_be_visible(timeout=20000)
+    assert not page.errors, page.errors
+
+
+def test_issue_details_fields(page, remi, fake):
+    seed(fake)
+    fake.categories[2] = [{"id": 3, "name": "帳票"}]
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    # 既定では閉じている(ヘッダは3項目だけ)
+    playwright_api.expect(conv.locator(".details-fields")).to_be_hidden()
+    conv.get_by_role("button", name="詳細").click()
+    category = conv.get_by_label("カテゴリ")
+    playwright_api.expect(category).to_be_enabled(timeout=15000)
+    category.select_option(label="帳票")
+    conv.get_by_label("期日").fill("2026-11-30")
+    chips = conv.locator(".chip")
+    playwright_api.expect(chips).to_have_count(2)
+    playwright_api.expect(chips.first).to_contain_text("カテゴリ")
+    conv.get_by_role("button", name="送信").click()
+    end = time.monotonic() + 15
+    while time.monotonic() < end and fake.issues[10].get("due_date") != "2026-11-30":
+        time.sleep(0.1)
+    assert fake.issues[10]["category"]["id"] == 3 and fake.issues[10]["due_date"] == "2026-11-30"
+    playwright_api.expect(chips).to_have_count(0)
+    # 開いた状態は覚えておく(別のチケットを開いても開いたまま)
+    assert remi.ctx.settings.get("issue_details_open") is True
+    page.locator(".issue", has_text="メールの宛先").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("メールの宛先", timeout=15000)
+    playwright_api.expect(conv.locator(".details-fields")).to_be_visible()
+    assert not page.errors, page.errors
+
+
+def test_edit_delete_note_attachment_and_uri_link(page, remi, fake, monkeypatch):
+    import remi.server.api as api_module
+
+    opened = []
+    monkeypatch.setattr(api_module, "open_with_os", opened.append)
+    seed(fake)
+    mine = fake.add_journal(10, ME, "自分のコメント。共有は smb://fs01/share です")
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    msg = conv.locator(".msg", has_text="自分のコメント")
+    playwright_api.expect(msg).to_be_visible(timeout=15000)
+
+    # 自動リンク: 押すと確認してから、関連付けられたアプリで開く
+    msg.get_by_role("link", name="smb://fs01/share").click()
+    page.get_by_role("dialog", name="リンクを開く").get_by_role("button", name="開く").click()
+    end = time.monotonic() + 5
+    while time.monotonic() < end and not opened:
+        time.sleep(0.05)
+    assert opened == ["smb://fs01/share"]
+
+    # 編集: 吹き出しの「⋯」から
+    msg.hover()
+    msg.get_by_role("button", name="コメントの操作").click()
+    page.get_by_role("menuitem", name="編集").click()
+    editor = conv.locator(".note-editor textarea")
+    editor.fill("書き直したコメント")
+    conv.locator(".note-editor").get_by_role("button", name="保存").click()
+    playwright_api.expect(conv.locator(".msg", has_text="書き直したコメント")).to_be_visible(timeout=15000)
+    assert next(j for j in fake.journals[10] if j["id"] == mine["id"])["notes"] == "書き直したコメント"
+
+    # 削除
+    msg = conv.locator(".msg", has_text="書き直したコメント")
+    msg.hover()
+    msg.get_by_role("button", name="コメントの操作").click()
+    page.get_by_role("menuitem", name="コメントを削除").click()
+    page.get_by_role("dialog", name="コメントを削除").get_by_role("button", name="削除").click()
+    playwright_api.expect(conv.locator(".msg", has_text="書き直したコメント")).to_have_count(0, timeout=15000)
+
+    # 添付の削除(添付の行の「削除」)
+    fake.add_journal(10, 7, details=[{"property": "attachment", "name": "77", "new_value": "shot.png"}])
+    remi.sync.refetch_issue(1, 10)
+    delete = conv.locator(".change-group, .system").get_by_role("button", name="削除").first
+    playwright_api.expect(delete).to_be_visible(timeout=15000)
+    delete.click()
+    page.get_by_role("dialog", name="ファイルを削除").get_by_role("button", name="削除").click()
+    end = time.monotonic() + 15
+    while time.monotonic() < end and 77 in fake.attachments:
+        time.sleep(0.1)
+    assert 77 not in fake.attachments
+    playwright_api.expect(conv.get_by_role("button", name="削除")).to_have_count(0, timeout=15000)
     assert not page.errors, page.errors

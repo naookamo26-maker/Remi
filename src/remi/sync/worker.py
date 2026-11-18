@@ -35,6 +35,7 @@ TICK_SECONDS = 1.0
 OPEN_ISSUE_INTERVAL = 20  # 秒
 METADATA_INTERVAL = 3600
 RECONCILE_INTERVAL = 3600
+VERSIONS_MIN_INTERVAL = 300  # バージョンの監視の最短間隔(秒)。チケットの差分同期より軽く回す
 DELETE_CHECK_INTERVAL = 24 * 3600
 INACTIVE_FACTOR = 2
 BACKOFF_BASE = 30
@@ -52,6 +53,7 @@ class Schedule:
     changes: float = 0.0
     open_issue: float = 0.0
     reconcile: float = 0.0
+    versions: float = 0.0
     delete_check: float = 0.0
     backoff_until: float = 0.0
     failures: int = 0
@@ -121,6 +123,7 @@ class ServerWorker(threading.Thread):
     def _handle(self, cmd: str, args: tuple[Any, ...]) -> None:
         if cmd == "sync_now":
             self.sched.changes = 0
+            self.sched.versions = 0
             self.sched.backoff_until = 0
             self.sched.failures = 0
         elif cmd == "open":
@@ -138,6 +141,12 @@ class ServerWorker(threading.Thread):
                 self.sched.attachments.append(aid)
         elif cmd == "update":
             self._update_issue(*args)
+        elif cmd == "refetch":
+            (issue_id,) = args
+            try:
+                self._emit(self.sync.fetch_journals(issue_id, notify=False), extra={issue_id})
+            except RedmineError as e:
+                log.info("refetch #%s failed: %s", issue_id, e)
         elif cmd == "watch":
             self._set_watching(*args)
 
@@ -245,6 +254,12 @@ class ServerWorker(threading.Thread):
                     self._enqueue(iid)
             self._emit(result)
             self.sched.changes = now + self._interval(server.poll_interval)
+            did_network = True
+        if now >= self.sched.versions:
+            changed = sync.sync_versions()
+            if changed:
+                self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(changed))
+            self.sched.versions = now + self._interval(max(server.poll_interval, VERSIONS_MIN_INTERVAL))
             did_network = True
         if self.open_issue is not None and now >= self.sched.open_issue:
             if self.open_issue_full:
@@ -417,6 +432,14 @@ class SyncManager:
         if w is None:
             return False
         w.send("update", issue_id, notes, private, changes, uploads)
+        return True
+
+    def refetch_issue(self, server_id: int, issue_id: int) -> bool:
+        """チケットをコメント・添付ごと取り直す(コメントの編集・添付の削除のあと)。"""
+        w = self._worker(server_id)
+        if w is None:
+            return False
+        w.send("refetch", issue_id)
         return True
 
     def set_watching(self, server_id: int, issue_id: int, watching: bool) -> bool:

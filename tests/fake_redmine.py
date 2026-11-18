@@ -42,6 +42,11 @@ class FakeRedmine:
         self.trackers = [{"id": 1, "name": "バグ"}, {"id": 2, "name": "機能"}]
         self.priorities = [{"id": 2, "name": "通常"}, {"id": 3, "name": "高め"}]
         self.issues: dict[int, dict] = {}
+        self.versions: dict[int, dict] = {}
+        # カスタムフィールドの定義(/custom_fields.json は管理者だけ)と、プロジェクトのカテゴリ
+        self.custom_fields: list[dict] = []
+        self.notes_editable = True  # コメントの編集を許すか(False なら 403)
+        self.categories: dict[int, list[dict]] = {}
         self.journals: dict[int, list[dict]] = {}
         self.attachments: dict[int, dict] = {}  # id -> {..., "content": bytes}
         self.watchers: dict[int, set[int]] = {}
@@ -71,9 +76,34 @@ class FakeRedmine:
             p["parent"] = {"id": parent, "name": pname}
         self.projects.append(p)
 
+    def add_version(self, vid: int, project_id: int, name: str, *, status: str = "open",
+                    due_date: str | None = None) -> dict:
+        with self._lock:
+            proj = next((p for p in self.projects if p["id"] == project_id), {"id": project_id, "name": "?"})
+            v = {"id": vid, "project": {"id": project_id, "name": proj["name"]}, "name": name, "status": status,
+                 "due_date": due_date, "description": "", "sharing": "none",
+                 "created_on": now(), "updated_on": now()}
+            self.versions[vid] = v
+            return v
+
+    def update_version(self, vid: int, **changes) -> None:
+        with self._lock:
+            self.versions[vid].update(changes, updated_on=now())
+
+    def set_version(self, iid: int, vid: int | None) -> None:
+        """チケットの対象バージョンを変える(更新日時も進める)。"""
+        with self._lock:
+            issue = self.issues[iid]
+            if vid is None:
+                issue.pop("fixed_version", None)
+            else:
+                issue["fixed_version"] = {"id": vid, "name": self.versions[vid]["name"]}
+            issue["updated_on"] = now()
+
     def add_issue(self, iid: int, project_id: int, subject: str, *, assigned_to: int | None = ME,
                   author: int = 7, watchers: set[int] | None = None, status_id: int = 1,
-                  description: str = "", updated_on: str | None = None) -> dict:
+                  description: str = "", updated_on: str | None = None, version: int | None = None,
+                  custom_fields: list[dict] | None = None) -> dict:
         with self._lock:
             ts = updated_on or now()
             proj = next((p for p in self.projects if p["id"] == project_id), {"id": project_id, "name": "?"})
@@ -92,6 +122,10 @@ class FakeRedmine:
             }
             if assigned_to is not None:
                 issue["assigned_to"] = self._user_ref(assigned_to)
+            if version is not None:
+                issue["fixed_version"] = {"id": version, "name": self.versions[version]["name"]}
+            if custom_fields is not None:
+                issue["custom_fields"] = [dict(cf) for cf in custom_fields]
             self.issues[iid] = issue
             self.journals[iid] = []
             self.watchers[iid] = set(watchers or set())
@@ -162,6 +196,39 @@ class FakeRedmine:
             details.append({"property": "attr", "name": "done_ratio", "old_value": str(issue.get("done_ratio", 0)),
                             "new_value": str(data["done_ratio"])})
             issue["done_ratio"] = int(data["done_ratio"])
+        # 名前で参照する項目(トラッカー・カテゴリ・対象バージョン・親チケット)と、値をそのまま持つ項目
+        refs = {
+            "tracker_id": ("tracker", lambda v: next(t for t in self.trackers if t["id"] == v)),
+            "category_id": ("category", lambda v: next(c for cs in self.categories.values() for c in cs if c["id"] == v)),
+            "fixed_version_id": ("fixed_version", lambda v: {"id": v, "name": self.versions[v]["name"]}),
+            "parent_issue_id": ("parent", lambda v: {"id": v} if v in self.issues else None),
+        }
+        for key, (attr, ref) in refs.items():
+            if key not in data:
+                continue
+            old = (issue.get(attr) or {}).get("id")
+            v = None if data[key] in ("", None) else int(data[key])
+            if v is None:
+                issue.pop(attr, None)
+            else:
+                r = ref(v)
+                if r is None:
+                    return 422, {"errors": [f"{key} is invalid"]}
+                issue[attr] = r
+            details.append({"property": "attr", "name": key, "old_value": None if old is None else str(old),
+                            "new_value": None if v is None else str(v)})
+        for key in ("start_date", "due_date", "estimated_hours"):
+            if key in data:
+                v = None if data[key] in ("", None) else data[key]
+                details.append({"property": "attr", "name": key, "old_value": issue.get(key), "new_value": v})
+                issue[key] = v
+        for cf in data.get("custom_fields") or []:
+            cur = next((x for x in issue.setdefault("custom_fields", []) if x["id"] == int(cf["id"])), None)
+            if cur is None:
+                return 422, {"errors": [f"custom field {cf['id']} is invalid"]}
+            details.append({"property": "cf", "name": str(cf["id"]), "old_value": cur.get("value"),
+                            "new_value": cf["value"]})
+            cur["value"] = cf["value"]
         for up in data.get("uploads") or []:
             filename, content = self.uploads.pop(up["token"])
             aid = 9000 + len(self.attachments)
@@ -206,6 +273,8 @@ class FakeRedmine:
             return False
         if "issue_id" in q and str(issue["id"]) not in q["issue_id"].split(","):
             return False
+        if "fixed_version_id" in q and str((issue.get("fixed_version") or {}).get("id")) != q["fixed_version_id"]:
+            return False
         upd = q.get("updated_on")
         if upd:
             m = re.match(r"^>=(.+)$", upd)
@@ -246,6 +315,29 @@ class FakeRedmine:
                 return 200, {"role": {"id": rid, "name": f"role{rid}", "permissions": self.roles[rid]}}
             if path == "/projects.json":
                 return 200, self._page(self.projects, query, "projects")
+            m = re.match(r"^/projects/(\d+)\.json$", path)
+            if m:
+                p = next((x for x in self.projects if x["id"] == int(m.group(1))), None)
+                if p is None:
+                    return 404, {}
+                p = dict(p)
+                inc = query.get("include", "").split(",")
+                if "trackers" in inc:
+                    p["trackers"] = [{"id": t["id"], "name": t["name"]} for t in self.trackers]
+                if "issue_categories" in inc:
+                    p["issue_categories"] = self.categories.get(p["id"], [])
+                return 200, {"project": p}
+            if path == "/custom_fields.json":
+                if not self.admin:
+                    return 403, {}
+                return 200, {"custom_fields": self.custom_fields}
+            m = re.match(r"^/projects/(\d+)/versions\.json$", path)
+            if m:
+                pid = int(m.group(1))
+                if not any(p["id"] == pid for p in self.projects):
+                    return 404, {}
+                items = [v for v in self.versions.values() if v["project"]["id"] == pid or v["sharing"] == "system"]
+                return 200, {"versions": items, "total_count": len(items)}
             if path == "/issue_statuses.json":
                 return 200, {"issue_statuses": self.statuses}
             if path == "/trackers.json":
@@ -257,6 +349,32 @@ class FakeRedmine:
                 sort = query.get("sort", "")
                 items.sort(key=lambda i: i["updated_on"], reverse=sort.endswith(":desc"))
                 return 200, self._page(items, query, "issues")
+            m = re.match(r"^/journals/(\d+)\.json$", path)
+            if m and method == "PUT":
+                jid = int(m.group(1))
+                for iid, js in self.journals.items():
+                    j = next((x for x in js if x["id"] == jid), None)
+                    if j is None:
+                        continue
+                    if not self.notes_editable:
+                        return 403, {}
+                    data = json.loads(body or b"{}").get("journal", {})
+                    j["notes"] = data.get("notes", j.get("notes", ""))
+                    if "private_notes" in data:
+                        j["private_notes"] = bool(data["private_notes"])
+                    if not j["notes"] and not j.get("details"):
+                        js.remove(j)  # 本文を空にすると、項目の変更がない journal は消える(Redmineと同じ)
+                    return 204, None
+                return 404, {}
+            m = re.match(r"^/attachments/(\d+)\.json$", path)
+            if m and method == "DELETE":
+                aid = int(m.group(1))
+                a = self.attachments.pop(aid, None)
+                if a is None:
+                    return 404, {}
+                self.add_journal(a["issue_id"], self.me, details=[
+                    {"property": "attachment", "name": str(aid), "old_value": a["filename"], "new_value": None}])
+                return 204, None
             m = re.match(r"^/issues/(\d+)\.json$", path)
             if m:
                 iid = int(m.group(1))

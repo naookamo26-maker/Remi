@@ -109,3 +109,48 @@ def test_details():
     assert d["text"] == "Related to #5 added"
     d = describe_detail({"property": "attr", "name": "status_id", "old_value": "1", "new_value": "99"}, names, "en")
     assert "#99" in d["text"]
+
+
+@pytest.mark.parametrize("fmt", ["common_mark", "textile", "plain"])
+def test_custom_uri_schemes_are_linked(fmt):
+    """link_schemes.json で指定したスキームは、どの書式でも自動でリンクにする。"""
+    out = render("共有は smb://fs01/share/仕様書 です。電話は tel:0312345678、info: 詳細(ssh://h/x)", ctx(fmt))
+    assert '<a href="smb://fs01/share/仕様書" class="ext uri">' in out
+    assert '<a href="tel:0312345678" class="ext uri">tel:0312345678</a>、' in out  # 全角の読点で区切る
+    assert '<a href="ssh://h/x" class="ext uri">ssh://h/x</a>' in out
+    assert 'href="info' not in out and "info: 詳細" in out  # 指定していない info: はリンクにしない
+
+
+def test_custom_uri_schemes_skip_code_and_unsafe():
+    out = render("`ssh://in-code` と [サーバー](ssh://host/a)\n\n```\nftp://in-block\n```", ctx())
+    assert '<code>ssh://in-code</code>' in out
+    assert 'href="ssh://host/a"' in out and out.count('href="ssh://host/a"') == 1
+    assert 'href="ftp://in-block"' not in out
+    out = render("[x](javascript:alert(1)) javascript:alert(1) data:text/html,x vbscript:x", ctx())
+    assert 'href="javascript' not in out and 'href="data' not in out and 'href="vbscript' not in out
+
+
+def test_link_schemes_file(tmp_path):
+    from remi.render.schemes import link_schemes
+
+    f = tmp_path / "s.json"
+    f.write_text('{"schemes": [{"scheme": "Notes", "form": "//", "confirm": false}, {"scheme": "javascript"},'
+                 ' {"scheme": "bad scheme"}, {"scheme": "tel", "form": ":"}, {"scheme": "x", "form": "?"}]}',
+                 encoding="utf-8")
+    got = link_schemes(f)
+    assert [(s.scheme, s.slashes, s.confirm) for s in got] == [("notes", True, False), ("tel", False, True)]
+    assert link_schemes(tmp_path / "none.json") == ()
+
+
+@pytest.mark.parametrize("fmt", ["common_mark", "textile", "plain"])
+def test_http_links_in_every_format(fmt):
+    """http / https / mailto / www. は、どの書式でも同じ規則でリンクにする(日本語の文章の中でも)。"""
+    out = render("詳細は https://example.com/a?b=1&c=2 です。URLはhttps://example.com/bです(https://example.com/c)"
+                 "、http://intra/issues/1。www.example.com と mailto:a@b.jp abchttps://no", ctx(fmt))
+    assert '<a href="https://example.com/a?b=1&amp;c=2" rel="noopener noreferrer">' in out
+    assert '>https://example.com/b</a>です' in out  # ひらがなで区切る
+    assert '>https://example.com/c</a>)' in out  # 閉じ括弧は含めない
+    assert '>http://intra/issues/1</a>。' in out  # 句点は含めない
+    assert '<a href="http://www.example.com" rel="noopener noreferrer">www.example.com</a>' in out
+    assert '<a href="mailto:a@b.jp" rel="noopener noreferrer">' in out
+    assert 'href="https://no"' not in out  # 英数字の直後(単語の途中)はリンクにしない

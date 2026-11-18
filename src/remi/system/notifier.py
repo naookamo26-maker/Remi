@@ -17,7 +17,6 @@ from typing import Any
 from remi import APP_NAME
 from remi.context import AppContext
 from remi.i18n import resolve_language, t
-from remi.store.issues import matches_relations, shown_relations
 
 log = logging.getLogger(__name__)
 
@@ -93,9 +92,10 @@ class Notifier:
             return False
         # 一覧に出さないチケット(表示するチケット・絞り込みの選択から外れたもの)は通知しない。
         # ツリー・一覧・トレイの未読数と同じ判定にする
-        relations = shown_relations(self.ctx.settings.get("visible_relations"), self.ctx.settings.get("relation_filter"))
         row = self.ctx.issues.get(server_id, comment["issue_id"])
-        if row is not None and not matches_relations(row.relation_flags, relations):
+        if row is not None and not row.relation_flags:
+            return False  # 自分と関係ない(バージョンで見ている)チケット
+        if row is not None and not self.ctx.relation_scope().matches(server_id, row.project_id, row.relation_flags):
             return False
         # 表示中(ウィンドウがアクティブで開いている)のチケットは通知しない
         open_ = getattr(self.api, "open_issue", None)

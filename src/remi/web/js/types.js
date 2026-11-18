@@ -8,7 +8,7 @@
  * @typedef {object} TreeData
  * @property {number} unread              すべてのサーバーの未読数
  * @property {TreeServer[]} servers
- * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか
+ * @property {Relation[]} relationsInUse   どこかのプロジェクトで表示している関係(一覧の絞り込みボタンを決める)
  */
 
 /**
@@ -21,6 +21,9 @@
  * @property {string|null} lastSyncedAt    ISO 8601
  * @property {number} unread
  * @property {number} count
+ * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか(サーバーごと)
+ * @property {Relation[]} relations        表示するチケットの既定(プロジェクトで設定していなければこれを使う)
+ * @property {boolean} relationsOwn        表示するチケットの既定を、すべてから変えているか
  * @property {TreeProject[]} projects
  */
 
@@ -32,7 +35,52 @@
  * @property {boolean} active
  * @property {number} unread               子プロジェクトを含む
  * @property {number} count                子プロジェクトを含む
+ * @property {Relation[]} relations        表示するチケット(親プロジェクト・サーバーの既定からの継承を解決済み)
+ * @property {boolean} relationsOwn        表示するチケットを、このプロジェクト自身で設定しているか
+ * @property {TreeVersion[]} versions      ウォッチしているバージョン(期日順)
  * @property {TreeProject[]} children
+ */
+
+/**
+ * ツリーに出すバージョン(ロードマップの監視)。
+ * @typedef {object} TreeVersion
+ * @property {number} versionId
+ * @property {string} name
+ * @property {"open"|"locked"|"closed"} status
+ * @property {boolean} closed              終了したバージョン(ツリーでは畳んだ「終了したバージョン」の下に出す)
+ * @property {string|null} dueDate         期日(YYYY-MM-DD)
+ * @property {number} done                 完了したチケットの数
+ * @property {number} total                チケットの数
+ * @property {boolean} changed             まだ見ていない変化があるか
+ */
+
+/**
+ * getVersion の戻り値。
+ * @typedef {object} VersionData
+ * @property {number} serverId
+ * @property {number} versionId
+ * @property {string} name
+ * @property {"open"|"locked"|"closed"} status
+ * @property {string|null} dueDate
+ * @property {string} description
+ * @property {number} projectId
+ * @property {string[]} breadcrumb         プロジェクトの階層
+ * @property {number} done
+ * @property {number} total
+ * @property {string} url                  Redmineのバージョンのページ
+ * @property {VersionEvent[]} events       古い順
+ */
+
+/**
+ * @typedef {object} VersionEvent
+ * @property {number} eventId
+ * @property {"created"|"added"|"removed"|"closed"|"reopened"|"due_date"|"status"|"name"} kind
+ * @property {number|null} issueId
+ * @property {string|null} subject
+ * @property {string|null} oldValue
+ * @property {string|null} newValue
+ * @property {string} createdAt            ISO 8601
+ * @property {boolean} unread              まだ見ていない変化か
  */
 
 /**
@@ -93,6 +141,7 @@
 /**
  * @typedef {object} Journal
  * @property {number} journalId
+ * @property {string} notes                本文(書式のまま。編集に使う)
  * @property {number|null} userId
  * @property {string|null} userName
  * @property {boolean} mine
@@ -136,17 +185,44 @@
  * @property {boolean} comment             コメントを書ける
  * @property {boolean} privateNotes        プライベートコメントにできる
  * @property {boolean} attach              ファイルを添付できる
+ * @property {"all"|"own"|"none"} editNotes  コメントを編集・削除できる(すべて / 自分のものだけ / できない)
  * @property {"project_closed"|"no_permission"|null} reason  何も書き込めない理由
  */
 
-/** @typedef {"status_id"|"assigned_to_id"|"priority_id"} FieldKey ヘッダで変更できる項目 */
+/**
+ * ヘッダ・「詳細」で変更できる項目。カスタムフィールドは `cf:<ID>`
+ * @typedef {"status_id"|"assigned_to_id"|"priority_id"|"tracker_id"|"category_id"|"fixed_version_id"|"parent_issue_id"|"start_date"|"due_date"|"done_ratio"|"estimated_hours"|string} FieldKey
+ */
 
 /**
  * ヘッダで選んだ、送信前の変更(画面の中だけで使う)。
  * @typedef {object} FieldChange
- * @property {number|null} value
+ * @property {number|string|string[]|null} value
  * @property {string} label                選んだ値の表示名
  * @property {string} from                 元の値の表示名
+ * @property {string|null} [name]          項目名(カスタムフィールドのとき)
+ */
+
+/**
+ * getIssueDetails の戻り値(「詳細」の項目)。
+ * @typedef {object} IssueDetails
+ * @property {DetailField[]} fields
+ * @property {boolean} customFieldsKnown   カスタムフィールドの形式が分かるか(管理者でなければ false)
+ */
+
+/**
+ * 「詳細」の項目1つ。
+ * @typedef {object} DetailField
+ * @property {FieldKey} key
+ * @property {"select"|"multiselect"|"date"|"issue"|"int"|"float"|"text"} type
+ * @property {number|string|string[]|null} value  今の値(カスタムフィールドは文字列、複数選択は文字列のリスト)
+ * @property {string} display              今の値の表示名
+ * @property {{value: number|string|null, label: string}[]} [options]  選択肢(select・multiselect)
+ * @property {boolean} editable            ここで変更できる形式か(書き込めるかは permissions で判断する)
+ * @property {string} [label]              項目名(カスタムフィールド)
+ * @property {boolean} [multiple]          複数選択のカスタムフィールド
+ * @property {string|null} [format]        カスタムフィールドの形式(Redmineの field_format)
+ * @property {string} [reason]             変更できない理由(custom_field_unknown / custom_field_unsupported)
  */
 
 /**

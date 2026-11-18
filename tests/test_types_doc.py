@@ -63,7 +63,8 @@ def api(db, fake):
 def test_types_js_parses():
     names = documented()
     for name in ("TreeData", "TreeServer", "TreeProject", "IssueSummary", "ConversationData", "Journal",
-                 "JournalDetail", "EditOptions", "WritePermissions", "FieldChange", "Upload"):
+                 "JournalDetail", "EditOptions", "WritePermissions", "FieldChange", "Upload", "TreeVersion",
+                 "VersionData", "VersionEvent", "IssueDetails", "DetailField"):
         assert names.get(name, (set(), set()))[0] | names.get(name, (set(), set()))[1], name
 
 
@@ -87,3 +88,27 @@ def test_types_match_api_results(api):
     opts = api.getEditOptions(serverId=1, issueId=10)
     check("EditOptions", opts)
     check("WritePermissions", opts["permissions"])
+
+    details = api.getIssueDetails(serverId=1, issueId=10)
+    check("IssueDetails", details)
+    for f in details["fields"]:
+        check("DetailField", f)
+
+
+def test_version_types_match_api_results(api, fake):
+    """バージョン(ロードマップ)の戻り値。"""
+    from remi.sync.engine import ServerSync
+
+    fake.add_version(5, 2, "v1.0")
+    fake.add_issue(20, 2, "バージョンのチケット", assigned_to=7, version=5)
+    api.ctx.projects.set_setting(1, 1, "watch_versions", True)
+    engine = ServerSync(api.ctx.db, 1, api.sync.client(1))
+    engine.sync_versions()
+    fake.add_issue(21, 2, "追加", assigned_to=7)
+    fake.set_version(21, 5)
+    engine.sync_versions()
+    [version] = api.getTree()["servers"][0]["projects"][0]["children"][0]["versions"]
+    check("TreeVersion", version)
+    data = api.getVersion(serverId=1, versionId=5)
+    check("VersionData", data)
+    check("VersionEvent", data["events"][0])

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from remi.api.client import RedmineClient
@@ -18,6 +19,8 @@ from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHIN
 from remi.store.masters import MasterStore
 from remi.store.projects import ProjectStore
 from remi.store.servers import Server, ServerStore
+from remi.store.settings import Settings
+from remi.store.versions import Version, VersionStore
 from remi.sync.metadata import refresh_metadata
 
 log = logging.getLogger(__name__)
@@ -79,6 +82,7 @@ class ServerSync:
         self.issues = IssueStore(db)
         self.projects = ProjectStore(db)
         self.masters = MasterStore(db)
+        self.versions = VersionStore(db)
         # journal を取得したときの updated_on。updated_on は秒単位なので、取得と同じ秒に入った更新は
         # updated_on が変わらず見逃してしまう。開いているチケットは、取得後に一度だけ確認し直す。
         self._unconfirmed: dict[int, str | None] = {}
@@ -206,7 +210,8 @@ class ServerSync:
         self.issues.upsert_issue(self.server_id, data, existing.relation_flags,
                                  self._is_monitored(data, existing.relation_flags, self._closed_ids()))
         new_ids = self.issues.upsert_journals(self.server_id, issue_id, data.get("journals") or [])
-        self.issues.upsert_attachments(self.server_id, issue_id, data.get("attachments") or [])
+        for path in self.issues.upsert_attachments(self.server_id, issue_id, data.get("attachments") or []):
+            Path(path).unlink(missing_ok=True)  # 削除された添付の画像キャッシュ
         for j in data.get("journals") or []:
             u = j.get("user") or {}
             self.masters.remember(self.server_id, "user", u.get("id"), u.get("name"))
@@ -303,3 +308,104 @@ class ServerSync:
         if result.unmonitored_issue_ids:
             self.issues.set_monitored(self.server_id, sorted(result.unmonitored_issue_ids), False)
         return result
+
+    # --- ロードマップ(バージョン)の監視(設計書 §5.5) ------------------------------
+    def _seen_key(self) -> str:
+        return f"versions_seen_projects:{self.server_id}"
+
+    def sync_versions(self) -> set[int]:
+        """「未完了のバージョンをウォッチ」しているプロジェクトのバージョンと、含まれるチケットを取り直し、
+        前回からの変化(追加・外れた・完了など)を記録する。内容が変わったバージョンのIDを返す。
+
+        プロジェクトで最初に取得したとき・バージョンを最初に取得したときは、その状態を基準にして変化は記録しない。
+        ほかのプロジェクトから共有されたバージョンは、持ち主のプロジェクトをウォッチしているときだけ扱う。
+        """
+        sid = self.server_id
+        settings = Settings(self.db)
+        watched = self.projects.projects_with_setting(sid, "watch_versions")
+        seen_projects = set(settings.get(self._seen_key()) or [])
+        known = {v.version_id: v for v in self.versions.list(sid)}
+        closed_ids = self._closed_ids()
+        now = format_ts(datetime.now(UTC))
+        changed: set[int] = set()
+        found: set[int] = set()
+        fetched: set[int] = set()
+        for pid in sorted(watched):
+            project = self.projects.get(sid, pid)
+            if project is None or not project.accessible:
+                continue
+            try:
+                items = self.client.versions(pid)
+            except RedmineError as e:
+                if e.code in (ErrorCode.NOT_FOUND, ErrorCode.FORBIDDEN):
+                    continue  # プロジェクトが消えた・見えなくなった
+                raise
+            fetched.add(pid)
+            for data in items:
+                if int((data.get("project") or {}).get("id", -1)) != pid:
+                    continue
+                vid = int(data["id"])
+                found.add(vid)
+                old = known.get(vid)
+                self.versions.upsert(sid, data)
+                new = self.versions.get(sid, vid)
+                assert new is not None
+                if old is None:
+                    changed.add(vid)
+                    if pid in seen_projects:
+                        self.versions.add_event(sid, vid, "created", now, new_value=new.name)
+                else:
+                    for kind, before, after in (("name", old.name, new.name), ("status", old.status, new.status),
+                                                ("due_date", old.due_date, new.due_date)):
+                        if before != after:
+                            self.versions.add_event(sid, vid, kind, now, old_value=before, new_value=after)
+                            changed.add(vid)
+                # 終了したバージョンのチケットは、最初と、終了した(状態が変わった)ときだけ取り直す
+                if not new.closed or not new.issues_synced or (old is not None and old.status != new.status):
+                    if self._sync_version_issues(new, closed_ids, now):
+                        changed.add(vid)
+        # ウォッチをやめた・削除されたバージョンは消す。取得できなかったプロジェクトのものは残す
+        gone = {vid for vid, v in known.items() if vid not in found and v.project_id not in watched - fetched}
+        if gone:
+            self.versions.delete(sid, gone)
+            changed |= gone
+        settings.set(self._seen_key(), sorted(fetched | (seen_projects & watched)))
+        return changed
+
+    def _sync_version_issues(self, version: Version, closed_ids: set[int], now: str) -> bool:
+        """バージョンに含まれるチケットの一覧を取り直し、変化を記録する。一覧か状態が変わったら True。"""
+        sid, vid = self.server_id, version.version_id
+        before = self.versions.members(sid, vid)
+        after: dict[int, bool] = {}
+        items: dict[int, dict] = {}
+        for it in self.client.issues(fixed_version_id=vid, status_id="*", sort="updated_on"):
+            iid = int(it["id"])
+            proj = it.get("project") or {}
+            if self.projects.get(sid, int(proj["id"])) is None:
+                self.projects.ensure_placeholder(sid, int(proj["id"]), proj.get("name", ""))
+            self.issues.upsert_issue_data(sid, it)
+            # バージョンのチケットのコメントは未読として扱わない(開いたときに取得する)
+            self.issues.ensure_read_state(sid, iid, it.get("updated_on"))
+            for key in ("assigned_to", "author"):
+                ref = it.get(key) or {}
+                self.masters.remember(sid, "user", ref.get("id"), ref.get("name"))
+            status = it.get("status") or {}
+            after[iid] = bool(status.get("is_closed")) or status.get("id") in closed_ids
+            items[iid] = it
+        if version.issues_synced:
+            events: list[tuple[str, str, int, str | None]] = []
+            for iid in after.keys() - before.keys():
+                events.append((items[iid].get("updated_on") or now, "added", iid, items[iid].get("subject")))
+            for iid in before.keys() - after.keys():
+                row = self.issues.get(sid, iid)
+                events.append((now, "removed", iid, row.subject if row else None))
+            for iid in after.keys() & before.keys():
+                if after[iid] != before[iid]:
+                    kind = "closed" if after[iid] else "reopened"
+                    events.append((items[iid].get("updated_on") or now, kind, iid, items[iid].get("subject")))
+            for created_at, kind, iid, subject in sorted(events):
+                self.versions.add_event(sid, vid, kind, created_at, issue_id=iid, subject=subject)
+        if after == before and version.issues_synced:
+            return False
+        self.versions.set_members(sid, vid, after)
+        return True

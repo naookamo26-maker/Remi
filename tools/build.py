@@ -72,6 +72,7 @@ def main() -> None:
         "--runtime-hook", str(ROOT / "packaging" / "hook_truststore.py"),
         "--add-data", f"{src / 'web'}{sep}remi/web",
         "--add-data", f"{src / 'i18n' / '*.json'}{sep}remi/i18n",
+        "--add-data", f"{src / 'link_schemes.json'}{sep}remi",
         "--collect-submodules", "remi",
         "--collect-data", "pygments",
         "--hidden-import", "linkify_it",

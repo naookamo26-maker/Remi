@@ -7,7 +7,8 @@ import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { IssueHeader } from "./issue-header.js";
 import { pendingMessage, renderTimeline } from "./timeline.js";
-import { lightbox } from "./ui.js";
+import { confirmDialog, contextMenu, lightbox } from "./ui.js";
+import { renderVersion } from "./version-view.js";
 
 /** @typedef {import("./types.js").ConversationData} ConversationData */
 /** @typedef {import("./types.js").EditOptions} EditOptions */
@@ -36,6 +37,8 @@ export class Conversation {
      * 選択肢を読み直す間も、同じチケットのあいだは前の値を使う(入力欄が一瞬有効になるのを避ける)
      */
     this.permissions = null;
+    /** @type {import("./types.js").IssueDetails|null} 「詳細」の項目(開いたときに読み込む) */
+    this.details = null;
     this.header = new IssueHeader(this);
     /** @type {Composer|null} */
     this.composer = null;
@@ -49,12 +52,39 @@ export class Conversation {
 
   showEmpty() {
     this.data = null;
+    this.version = null;
+    this._versionToken = null; // 読み込み中のバージョンの表示は描かない
     this.composer = null;
     clear(this.root).append(h("div", { class: "welcome" }, h("p", { class: "muted" }, t("conv.selectIssue"))));
   }
 
+  /**
+   * バージョンの概要と変化の記録を表示する。markRead なら、変化を見たことにする
+   * @param {number} serverId
+   * @param {number} versionId
+   */
+  async showVersion(serverId, versionId, { markRead = true } = {}) {
+    const token = Symbol();
+    this._versionToken = token;
+    this.data = null; // 閉じたチケットの内容は使わない(読み込み中にチケットを開いたら、load が token を消す)
+    this.composer = null;
+    let d;
+    try {
+      d = await call("getVersion", { serverId, versionId, markRead });
+    } catch (e) {
+      if (this._versionToken === token) this.showEmpty();
+      if (e.code !== "not_found") throw e;
+      return;
+    }
+    // 読み込みの間に、チケットを開いた・別の項目を選んだときは描かない
+    if (this._versionToken !== token) return;
+    this.version = { serverId, versionId };
+    clear(this.root).append(renderVersion(d, this.app));
+  }
+
   showWelcome() {
     this.data = null;
+    this.version = null;
     this.composer = null;
     clear(this.root).append(h("div", { class: "welcome" },
       h("h2", {}, t("welcome.title")),
@@ -66,6 +96,8 @@ export class Conversation {
   // 開く(open=true)と既読にする。届いた更新で描き直すときは markRead を app が判断する
   async load(serverId, issueId, { markRead = true, keepScroll = false, resetLimit = false } = {}) {
     if (resetLimit) this.limit = PAGE;
+    this._versionToken = null; // 読み込み中のバージョンの表示は描かない
+    this.version = null;
     let data;
     try {
       data = await call("getConversation", { serverId, issueId, limit: this.limit, markRead });
@@ -80,6 +112,8 @@ export class Conversation {
       this.changes = {};
       this.editOptions = null;
       this.permissions = null;
+      this.details = null;
+      this.editingNote = null;
     }
     const prev = this.timeline;
     const atBottom = this.isNearBottom();
@@ -100,6 +134,24 @@ export class Conversation {
     }
     this.stickBottom = this.isNearBottom();
     if (!this.editOptions) this.loadEditOptions(serverId, issueId);
+    if (!this.details && this.app.settings.issue_details_open) this.loadDetails();
+  }
+
+  /** 「詳細」の項目(今の値と選択肢)を読み込む。開いたとき・開いたままチケットを開いたときに呼ぶ */
+  async loadDetails() {
+    const d = this.data;
+    if (!d) return;
+    const token = Symbol();
+    this._detailsToken = token;
+    this.header.showDetailsLoading();
+    try {
+      const details = await call("getIssueDetails", { serverId: d.serverId, issueId: d.issueId });
+      if (this._detailsToken !== token || issueKey(this.data) !== issueKey(d)) return;
+      this.details = details;
+      this.header.fillDetails();
+    } catch (e) {
+      if (this._detailsToken === token) this.header.showDetailsError(e.code);
+    }
   }
 
   // ヘッダで変更できる項目の選択肢を、表示とは別に読み込む(Redmineへの問い合わせを伴うため)
@@ -109,9 +161,12 @@ export class Conversation {
       const d = this.data;
       if (!d || d.serverId !== serverId || d.issueId !== issueId) return;
       this.editOptions = opts;
+      const before = JSON.stringify(this.permissions);
       this.permissions = opts.permissions;
       this.header.fill();
       this.composer?.update();
+      // 権限が分かったら、コメントの「⋯」メニュー・添付の削除ボタンを出すために描き直す
+      if (before !== JSON.stringify(opts.permissions)) this.refreshTimeline();
     } catch (e) {
       this.header.showError(e.code);
     }
@@ -143,7 +198,7 @@ export class Conversation {
     }
     this.headerEl = header;
     this.timeline = timeline;
-    renderTimeline(timeline, d, { onLoadMore: () => {
+    renderTimeline(timeline, d, { actions: this, onLoadMore: () => {
       this.limit += PAGE;
       this.load(d.serverId, d.issueId, { markRead: false, keepScroll: true });
     } });
@@ -163,6 +218,115 @@ export class Conversation {
     if (refill) this.header.fill();
     this.composer?.renderChips();
     this.composer?.update();
+  }
+
+  // --- コメントの編集・削除、添付の削除(Redmineと同じ権限で) --------------------------------
+  /** 表示中の位置を保って、会話を描き直す */
+  refreshTimeline() {
+    if (!this.data || !this.timeline) return;
+    const top = this.timeline.scrollTop;
+    this.render(true);
+    this.timeline.scrollTop = top;
+  }
+
+  /** このコメントを編集・削除できるか(Redmineの Journal#editable_by? と同じ) @param {import("./types.js").Journal} j */
+  canEditNote(j) {
+    const p = this.permissions;
+    return !!p && !!j.html && (p.editNotes === "all" || (p.editNotes === "own" && j.mine));
+  }
+
+  noteTools(j) {
+    if (!this.canEditNote(j) || this.editingNote?.journalId === j.journalId) return null;
+    return h("button", { type: "button", class: "msg-menu", "aria-label": t("conv.noteActions"), title: t("conv.noteActions"),
+      "aria-haspopup": "menu", onClick: (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        contextMenu(r.left, r.bottom + 4, [
+          { label: t("conv.editNote"), onClick: () => this.startEdit(j) },
+          { label: t("conv.deleteNote"), onClick: () => this.deleteNote(j) },
+        ]);
+      } }, "⋯");
+  }
+
+  startEdit(j) {
+    this.editingNote = { journalId: j.journalId, text: j.notes, private: j.private, saving: false };
+    this.refreshTimeline();
+    this.timeline?.querySelector(".note-editor textarea")?.focus();
+  }
+
+  /** 編集中のコメントの編集欄。描き直しても書きかけの内容が残るよう、入力は editingNote に持つ */
+  noteEditor(j) {
+    const e = this.editingNote;
+    if (!e || e.journalId !== j.journalId) return null;
+    const area = h("textarea", { value: e.text, "aria-label": t("conv.editNote"), disabled: e.saving,
+      onInput: () => { e.text = area.value; },
+      onKeydown: (ev) => {
+        if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); this.saveEdit(); }
+        if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); this.cancelEdit(); }
+      } });
+    const priv = this.permissions?.privateNotes ? h("label", {},
+      h("input", { type: "checkbox", checked: e.private, disabled: e.saving, onChange: (ev) => { e.private = ev.target.checked; } }),
+      t("conv.sendPrivate")) : null;
+    return h("div", { class: "bubble note-editor" }, area,
+      h("div", { class: "actions" }, priv, h("span", { class: "spacer" }),
+        h("button", { type: "button", class: "btn", disabled: e.saving, onClick: () => this.cancelEdit() }, t("common.cancel")),
+        h("button", { type: "button", class: "btn primary", disabled: e.saving, onClick: () => this.saveEdit() }, t("common.save"))));
+  }
+
+  cancelEdit() {
+    this.editingNote = null;
+    this.refreshTimeline();
+  }
+
+  async saveEdit() {
+    const e = this.editingNote;
+    const d = this.data;
+    if (!e || !d || e.saving) return;
+    const j = d.journals.find((x) => x.journalId === e.journalId);
+    if (!e.text.trim()) {
+      // 空にして保存するのは、削除と同じ
+      this.cancelEdit();
+      if (j) this.deleteNote(j);
+      return;
+    }
+    e.saving = true;
+    this.refreshTimeline();
+    try {
+      await call("editNote", { serverId: d.serverId, issueId: d.issueId, journalId: e.journalId, notes: e.text,
+        private: this.permissions?.privateNotes ? e.private : null });
+      if (this.editingNote === e) this.editingNote = null; // 新しい内容は dataChanged で届く
+      this.refreshTimeline();
+    } catch (err) {
+      e.saving = false;
+      this.refreshTimeline();
+      toast(t("conv.editNoteFailed", { reason: t(`errors.${err.code || "connection_failed"}`) }));
+    }
+  }
+
+  async deleteNote(j) {
+    const d = this.data;
+    // 項目の変更も行った更新なら、Redmineは本文だけを消す(変更の記録は残る)
+    const body = j.details.length ? t("conv.deleteNoteKeepChanges") : t("conv.deleteNoteBody");
+    if (!d || !(await confirmDialog(t("conv.deleteNote"), body, t("common.delete"), { danger: true }))) return;
+    try {
+      await call("editNote", { serverId: d.serverId, issueId: d.issueId, journalId: j.journalId, notes: "" });
+    } catch (err) {
+      toast(t("conv.editNoteFailed", { reason: t(`errors.${err.code || "connection_failed"}`) }));
+    }
+  }
+
+  /** 添付の削除ボタン(Redmineでは、チケットを編集できる人だけが削除できる) */
+  attachmentTools(det) {
+    if (!this.permissions?.editFields || det.kind !== "attachment" || !det.url || !det.attachmentId) return null;
+    return h("button", { type: "button", class: "link-button danger", onClick: async () => {
+      const d = this.data;
+      if (!d || !(await confirmDialog(t("conv.deleteFile"), t("conv.deleteFileBody", { name: det.filename }),
+        t("common.delete"), { danger: true }))) return;
+      try {
+        await call("deleteAttachment", { serverId: d.serverId, issueId: d.issueId, attachmentId: det.attachmentId });
+      } catch (err) {
+        toast(t("conv.deleteFileFailed", { reason: t(`errors.${err.code || "connection_failed"}`) }));
+      }
+    } }, t("conv.deleteFileShort"));
   }
 
   // --- 本文中のリンク ---------------------------------------------------------------
@@ -185,6 +349,8 @@ export class Conversation {
       const server = d.url.replace(/\/issues\/\d+$/, "");
       if (href.startsWith(server)) this.app.openRedmine(href, { external: e.shiftKey });
       else call("openExternal", { url: href });
+    } else {
+      this.app.openUri(href); // 自動リンクにしたスキーム・mailto(関連付けられたアプリで開く)
     }
   }
 
@@ -230,6 +396,7 @@ export class Conversation {
       c.finishSent(sent);
       this.changes = {};
       this.editOptions = null; // ステータスが変わると遷移できる先も変わるので読み直す
+      this.details = null; // 「詳細」の値も読み直す(開いていれば、次に描くときに読み込む)
       c.renderChips();
     }
     c.update();

@@ -3,6 +3,7 @@ import { call, subscribe } from "./api.js";
 import { Conversation } from "./conversation.js";
 import { debounce, h, toast } from "./dom.js";
 import { serverDialog, settingsDialog } from "./dialogs.js";
+import { confirmDialog } from "./ui.js";
 import { setCatalog, t } from "./i18n.js";
 import { IssueList } from "./list.js";
 import { selectionKey, Tree } from "./tree.js";
@@ -135,10 +136,29 @@ class App {
 
   // --- 選択 -------------------------------------------------------------------------
   select(sel) {
-    if (selectionKey(sel) === selectionKey(this.selection)) return;
+    if (selectionKey(sel) === selectionKey(this.selection)) {
+      // 選択中の項目をもう一度押したら、開いていた会話を閉じて、その項目の表示(バージョンの変化など)に戻る
+      if (this.current) this.closeIssue({ keepDraft: true });
+      return;
+    }
     this.selection = sel;
+    // 開いていた会話は閉じる(別のプロジェクトなどを選んだのに、前のチケットが残って見えると紛らわしいので)
+    if (this.current) this.closeIssue({ keepDraft: true });
+    else this.showSelectionView();
     this.tree.render();
     this.list.refresh();
+  }
+
+  // 選んでいたバージョンがツリーから消えた(ウォッチをやめた・削除された)ら、そのサーバーを選び直す
+  checkSelection() {
+    const sel = this.selection;
+    if (sel.kind !== "version" || !this.tree.data) return;
+    const server = this.tree.data.servers.find((s) => s.serverId === sel.serverId);
+    const has = (nodes) => nodes.some((n) => n.versions.some((v) => v.versionId === sel.versionId) || has(n.children));
+    if (server && has(server.projects)) return;
+    this.selection = server ? { kind: "server", serverId: server.serverId } : { kind: "all" };
+    if (!this.current) this.conv.showEmpty();
+    this.list.refresh().catch(() => {});
   }
 
   selectionLabels() {
@@ -148,6 +168,19 @@ class App {
     if (sel.kind === "all" || sel.kind === "none") return { title: t("tree.allServers"), crumb: "" };
     if (sel.kind === "unread") return { title: t("tree.unreadOnly"), crumb: server?.name || "" };
     if (sel.kind === "server") return { title: server?.name || "", crumb: "" };
+    if (sel.kind === "version") {
+      // バージョンを持つプロジェクトの階層をたどる
+      const trail = (nodes, path) => {
+        for (const n of nodes) {
+          const v = n.versions.find((x) => x.versionId === sel.versionId);
+          if (v) return { title: v.name, crumb: [...path, n.name, t("tree.roadmap")].join(" › ") };
+          const r = trail(n.children, [...path, n.name]);
+          if (r) return r;
+        }
+        return null;
+      };
+      return (server && trail(server.projects, [])) || { title: "", crumb: server?.name || "" };
+    }
     const path = [];
     const find = (nodes, trail) => {
       for (const n of nodes) {
@@ -175,13 +208,27 @@ class App {
     if (note) this.conv.scrollToNote(note);
   }
 
-  // 開いている会話を閉じる(入力中の内容・送信前の添付も捨てる)
-  closeIssue() {
+  // 開いている会話を閉じる。送信前の添付は捨てる。keepDraft なら、入力中でまだ保存していない文章を
+  // 下書きとして保存する(サーバーの削除・ユーザーの変更で閉じるときは、前のデータを書き戻さないよう保存しない)
+  closeIssue({ keepDraft = false } = {}) {
+    if (keepDraft) this.conv.composer?.saveDraft.flushPending();
+    else this.conv.composer?.saveDraft.cancel();
     this.current = null;
     this.pendingRead = false;
     call("setOpenIssue", { serverId: null, issueId: null }).catch(() => {});
-    this.conv.showEmpty();
+    this.showSelectionView();
     this.list.markSelected();
+  }
+
+  // チケットを開いていないときの右ペイン: バージョンを選んでいれば、その変化の記録。ほかは案内だけ
+  showSelectionView() {
+    const sel = this.selection;
+    if (sel.kind === "version") {
+      this.conv.showVersion(sel.serverId, sel.versionId, { markRead: document.hasFocus() })
+        .catch((e) => toast(t(`errors.${e.code || "connection_failed"}`)));
+    } else {
+      this.conv.showEmpty();
+    }
   }
 
   // 本文中の #123: 監視中なら開き、そうでなければブラウザで開く
@@ -202,6 +249,16 @@ class App {
   // Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザ(Shift+クリックで常にブラウザ)
   openRedmine(url, { external = false } = {}) {
     return call("openRedmine", { url, external });
+  }
+
+  /** 本文の自動リンク(link_schemes.json のスキーム・mailto)を開く。指定に従って、開く前に確認する */
+  async openUri(url) {
+    const m = url.match(/^([a-z][a-z0-9+.-]*):/i);
+    const scheme = m ? m[1].toLowerCase() : "";
+    const conf = (this.boot.linkSchemes || []).find((x) => x.scheme === scheme);
+    if (!conf && scheme !== "mailto") return;
+    if (conf?.confirm && !(await confirmDialog(t("conv.openUriTitle"), t("conv.openUriBody", { url }), t("conv.openUriOk")))) return;
+    call("openUri", { url }).catch((e) => toast(t(`errors.${e.code || "connection_failed"}`)));
   }
 
   openSettings() {
@@ -225,7 +282,7 @@ class App {
       if (this.current && !servers.some((s) => s.serverId === this.current.serverId)) this.closeIssue(); // サーバーを削除した
       if (this.selection.kind === "none" || (this.selection.serverId && !servers.some((s) => s.serverId === this.selection.serverId))) {
         this.selection = servers.length === 1 ? { kind: "server", serverId: servers[0].serverId } : { kind: "all" };
-        if (!this.current) this.conv.showEmpty();
+        if (!this.current) this.showSelectionView();
       }
     }
     this.tree.render();
@@ -235,6 +292,7 @@ class App {
   // --- アクティブ状態と既読 ------------------------------------------------------------
   onActive(active) {
     call("setActive", { active }).catch(() => {});
+    if (active && !this.current && this.selection.kind === "version") this.showSelectionView(); // 変化を見たことにする
     if (active && this.pendingRead && this.current) {
       // 非アクティブの間に届いたコメントは、アクティブになった時点で既読にする(設計書 §7.1)
       this.pendingRead = false;
@@ -258,6 +316,15 @@ class App {
       case "projectSettingsChanged":
         this.refreshSoon();
         break;
+      case "versionsChanged": {
+        this.refreshSoon();
+        const sel = this.selection;
+        if (sel.kind === "version" && sel.serverId === e.serverId && (e.versionIds || []).includes(sel.versionId)) {
+          if (!this.tree.data || e.source === "read") break;
+          if (!this.current) this.showSelectionView(); // 表示中のバージョンに変化が届いた
+        }
+        break;
+      }
       case "serversChanged":
         this.onServersChanged();
         break;
@@ -304,7 +371,7 @@ async function main() {
     const boot = await call("bootstrap");
     setCatalog(boot.lang, boot.catalog, boot.fallbackCatalog);
     document.documentElement.lang = boot.lang;
-    document.title = `Remi ${boot.version}`;
+    document.title = `Remi v${boot.version}`;
     const app = new App(boot);
     window.remi = app; // 開発・テスト用
     app.mount(root);

@@ -70,3 +70,62 @@ def test_settings_defaults_and_roundtrip(db):
     assert s.get("theme") == "dark"
     s.set("tree_expanded", ["1:2", "1:3"])
     assert s.get("tree_expanded") == ["1:2", "1:3"]
+
+
+def test_migrate_v2_moves_global_view_settings(tmp_path):
+    """「すべてのプロジェクトを表示」と「表示するチケット」は、すべてのサーバーの設定に引き継ぐ。"""
+    import json
+
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v1.db"
+    c = sqlite3.connect(p)
+    c.executescript(MIGRATIONS[0])
+    c.execute("PRAGMA user_version = 1")
+    c.execute("INSERT INTO servers(server_id, name, url) VALUES(1, 'S', 'http://s')")
+    c.execute("INSERT INTO projects(server_id, project_id, parent_id, name) VALUES(1, 1, NULL, 'A')")
+    c.execute("INSERT INTO projects(server_id, project_id, parent_id, name) VALUES(1, 2, 1, 'B')")
+    c.execute("INSERT INTO project_settings(server_id, project_id, notify) VALUES(1, 1, 0)")
+    c.execute("INSERT INTO settings(key, value) VALUES('show_all_projects', 'true')")
+    c.execute("INSERT INTO settings(key, value) VALUES('visible_relations', ?)",
+              (json.dumps(["assigned", "group"]),))
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.projects import ProjectStore
+        from remi.store.servers import ServerStore
+
+        server = ServerStore(d).get(1)
+        assert server.show_all_projects is True
+        assert server.visible_relations == ["assigned", "group"]  # サーバーの既定になる
+        projects = ProjectStore(d)
+        assert projects.own_visible_relations(1) == {}
+        assert projects.get_setting(1, 1, "notify") is False  # ほかのプロジェクト設定は残る
+        assert Settings(d).get("visible_relations") is None
+    finally:
+        d.close_all()
+
+
+def test_migrate_v2_keeps_defaults(tmp_path):
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v1b.db"
+    c = sqlite3.connect(p)
+    c.executescript(MIGRATIONS[0])
+    c.execute("PRAGMA user_version = 1")
+    c.execute("INSERT INTO servers(server_id, name, url) VALUES(1, 'S', 'http://s')")
+    c.execute("INSERT INTO projects(server_id, project_id, parent_id, name) VALUES(1, 1, NULL, 'A')")
+    c.execute("""INSERT INTO settings(key, value) VALUES('visible_relations', '["assigned", "group", "watching", "authored"]')""")
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.projects import ProjectStore
+        from remi.store.servers import ServerStore
+
+        assert ServerStore(d).get(1).show_all_projects is False
+        assert ServerStore(d).get(1).visible_relations is None
+        assert ProjectStore(d).own_visible_relations(1) == {}
+    finally:
+        d.close_all()

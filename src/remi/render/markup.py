@@ -25,6 +25,8 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
+from remi.render.schemes import link_custom_schemes, link_schemes, scheme_of
+
 TEXT_FORMATS = ("common_mark", "textile", "plain")
 
 
@@ -87,6 +89,8 @@ def _attribute_filter(ctx: RenderContext):
             return ctx.resolve(v.rsplit("/", 1)[-1])  # 見つからない添付やその他のURLは読み込まない
         if tag == "a" and attr == "href":
             v = value.strip()
+            if scheme_of(v) is not None:
+                return v  # 自動リンクに指定したスキーム(明示したリンク)はそのまま
             if not re.match(r"^(https?://|mailto:|remi://|/|#)", v, re.I):
                 # 相対リンク(Redmine内のパス)はサーバーのURLに結びつける
                 url = ctx.resolve(v)
@@ -262,18 +266,15 @@ def _replace_refs(text: str, ctx: RenderContext, ph: _Placeholders) -> str:
 # --- 書式ごとの変換 ----------------------------------------------------------------
 @lru_cache(maxsize=1)
 def _markdown() -> MarkdownIt:
-    # Redmine の CommonMark は改行をそのまま <br> にする(hardbreaks)
-    return MarkdownIt("commonmark", {"breaks": True, "linkify": True, "html": True}).enable(
-        ["table", "strikethrough", "linkify"])
-
-
-_URL = re.compile(r"(?<![\"'=])\bhttps?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]]")
+    # Redmine の CommonMark は改行をそのまま <br> にする(hardbreaks)。
+    # 文中のURLのリンクは、どの書式でも同じ規則にするため、変換の後で行う(schemes.link_custom_schemes)
+    return MarkdownIt("commonmark", {"breaks": True, "html": True}).enable(["table", "strikethrough"])
 
 
 def _plain_to_html(text: str) -> str:
-    escaped = html.escape(text)
-    linked = _URL.sub(lambda m: f'<a href="{m.group(0)}">{m.group(0)}</a>', escaped)
-    paras = [p.replace("\n", "<br>") for p in re.split(r"\n\s*\n", linked.strip())]
+    # URLのリンクは変換の後で行う(schemes.link_custom_schemes)
+    escaped = html.escape(text, quote=False)
+    paras = [p.replace("\n", "<br>") for p in re.split(r"\n\s*\n", escaped.strip())]
     return "".join(f"<p>{p}</p>" for p in paras if p)
 
 
@@ -347,9 +348,9 @@ def render(text: str | None, ctx: RenderContext, *, _depth: int = 0) -> str:
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRIBUTES,
         attribute_filter=_attribute_filter(ctx),
-        url_schemes={"http", "https", "mailto", "remi", "remi-ext"},
+        url_schemes={"http", "https", "mailto", "remi", "remi-ext", *(x.scheme for x in link_schemes())},
         filter_style_properties=ALLOWED_STYLES,
         link_rel="noopener noreferrer",
     )
     clean = _finish_images(clean, ctx)
-    return ph.restore(clean).strip()
+    return link_custom_schemes(ph.restore(clean)).strip()

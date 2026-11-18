@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,17 +31,75 @@ FILTER_RELATIONS: dict[str, tuple[str, ...] | None] = {
 }
 
 
-def shown_relations(visible: list[str] | None, relation_filter: str | None) -> list[str]:
-    """一覧に出す関係: 表示するチケット(visible)を、絞り込みボタン(relation_filter)でさらに絞ったもの。
+@dataclass(frozen=True)
+class RelationScope:
+    """一覧に出すチケット: 「表示するチケット」(プロジェクトの設定 → 親プロジェクト → サーバーの既定 の順に
+    解決したもの)を、一覧の絞り込みボタン(relation_filter)でさらに絞ったもの。
 
-    一覧・ツリーの件数と未読数・トレイの未読数で同じものを使い、数を一致させる。
-    表示しないことにした関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+    一覧・ツリーの件数と未読数・トレイの未読数・通知で同じものを使い、数を一致させる。
+    servers はサーバーの既定の関係(server_id → 関係)、projects はプロジェクトで設定している(継承を含む)関係
+    ((server_id, project_id) → 関係)。どちらも空なら何も出さない。どちらにもなければ default。
+    in_use は、監視中のチケットがあるプロジェクトで表示している関係の和(画面で出す絞り込みボタンを決める)。
     """
-    vis = [r for r in RELATIONS if visible is None or r in visible] or list(RELATIONS)
-    want = FILTER_RELATIONS.get(relation_filter or "all")
-    if want is None:
-        return vis
-    return [r for r in vis if r in want] or vis
+
+    default: tuple[str, ...] = RELATIONS
+    servers: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    projects: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
+    in_use: tuple[str, ...] = RELATIONS
+
+    @classmethod
+    def build(cls, server_defaults: dict[int, list[str] | None], visible: dict[int, dict[int, list[str]]],
+              in_use: set[str], relation_filter: str | None = None) -> RelationScope:
+        """server_defaults: server_id → サーバーの既定(None はすべて)。
+        visible: server_id → (project_id → 表示するチケット)。プロジェクトで設定していないものは含めない。
+
+        どのプロジェクトでも表示しない関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+        """
+        used = tuple(r for r in RELATIONS if r in in_use) or RELATIONS
+        want = FILTER_RELATIONS.get(relation_filter or "all")
+        if want is not None and not set(want) & set(used):
+            want = None
+
+        def narrow(rels) -> tuple[str, ...]:
+            return tuple(r for r in RELATIONS if r in rels and (want is None or r in want))
+
+        return cls(
+            default=narrow(RELATIONS),
+            servers={sid: narrow(rels) for sid, rels in server_defaults.items() if rels is not None},
+            projects={(sid, pid): narrow(rels) for sid, m in visible.items() for pid, rels in m.items()},
+            in_use=used,
+        )
+
+    def relations_for(self, server_id: int, project_id: int) -> tuple[str, ...]:
+        return self.projects.get((server_id, project_id), self.servers.get(server_id, self.default))
+
+    def matches(self, server_id: int, project_id: int, flags: int) -> bool:
+        return matches_relations(flags, list(self.relations_for(server_id, project_id)))
+
+    def sql(self) -> str:
+        """チケット(別名 i)をこの範囲に絞るSQLの条件。値はすべて整数と固定の文字列なので、そのまま埋め込む。"""
+        default = relation_condition(self.default)
+        if not self.projects and all(v == self.default for v in self.servers.values()):
+            return default
+        server_ids = sorted({int(sid) for sid in self.servers} | {int(sid) for sid, _ in self.projects})
+        parts = []
+        for sid in server_ids:
+            groups: dict[tuple[str, ...], list[int]] = {}
+            for (s_, pid), rels in self.projects.items():
+                if s_ == sid:
+                    groups.setdefault(rels, []).append(int(pid))
+            in_ = lambda pids: f"i.project_id IN ({','.join(map(str, sorted(pids)))})"  # noqa: E731
+            sub = [f"({in_(pids)} AND {relation_condition(rels)})" for rels, pids in sorted(groups.items())]
+            fallback = relation_condition(self.servers.get(sid, self.default))
+            own = [pid for pids in groups.values() for pid in pids]
+            sub.append(f"(NOT {in_(own)} AND {fallback})" if own else fallback)
+            parts.append(f"(i.server_id = {sid} AND ({' OR '.join(sub)}))")
+        parts.append(f"(i.server_id NOT IN ({','.join(map(str, server_ids))}) AND {default})")
+        return f"({' OR '.join(parts)})"
+
+
+def _scope_sql(relations: list[str] | RelationScope | None) -> str:
+    return relations.sql() if isinstance(relations, RelationScope) else relation_condition(relations)
 
 
 def matches_relations(flags: int, relations: list[str] | None) -> bool:
@@ -193,6 +251,16 @@ class IssueStore:
                 ),
             )
 
+    def upsert_issue_data(self, server_id: int, data: dict[str, Any]) -> None:
+        """自分との関係(relation_flags・監視対象か)を変えずに、チケットの内容だけを保存する。
+        まだ保存していなければ、関係のないチケット(監視対象外)として保存する(バージョンのチケットに使う)。
+        """
+        row = self.get(server_id, int(data["id"]))
+        if row is None:
+            self.upsert_issue(server_id, data, 0, monitored=False)
+        else:
+            self.upsert_issue(server_id, data, row.relation_flags, row.monitored)
+
     def get(self, server_id: int, issue_id: int) -> IssueRow | None:
         r = self.db.query_one("SELECT * FROM issues WHERE server_id = ? AND issue_id = ?", (server_id, issue_id))
         return _issue(r) if r else None
@@ -230,8 +298,11 @@ class IssueStore:
     def purge_stale(self, days: int = 90) -> int:
         """監視対象外で、長く開かれていないチケットのキャッシュを削除する。"""
         rows = self.db.query(
-            "SELECT server_id, issue_id FROM issues WHERE monitored = 0 AND "
-            "COALESCE(last_opened_at, updated_on, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?)",
+            "SELECT server_id, issue_id FROM issues i WHERE monitored = 0 AND "
+            "COALESCE(last_opened_at, updated_on, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) "
+            # ウォッチしているバージョンに含まれるチケットは残す(バージョンの一覧に出す)
+            "AND NOT EXISTS (SELECT 1 FROM version_issues v WHERE v.server_id = i.server_id "
+            "AND v.issue_id = i.issue_id)",
             (f"-{int(days)} days",),
         )
         by_server: dict[int, list[int]] = {}
@@ -244,10 +315,16 @@ class IssueStore:
     # --- 一覧・未読 -------------------------------------------------------------
     def list_issues(self, server_ids: list[int] | None = None, project_ids: set[int] | None = None,
                     *, include_unmonitored: bool = False, unread_only: bool = False,
-                    search: str = "", relations: list[str] | None = None) -> list[IssueRow]:
-        where = [relation_condition(relations)]
+                    search: str = "", relations: list[str] | RelationScope | None = None,
+                    version_id: int | None = None) -> list[IssueRow]:
+        """version_id を渡すと、そのバージョンに含まれるチケット(自分と関係ないものを含む)を返す。"""
+        where = [_scope_sql(relations)]
         params: list[Any] = []
-        if not include_unmonitored:
+        if version_id is not None:
+            where.append("EXISTS (SELECT 1 FROM version_issues v WHERE v.server_id = i.server_id "
+                         "AND v.issue_id = i.issue_id AND v.version_id = ?)")
+            params.append(int(version_id))
+        elif not include_unmonitored:
             where.append("i.monitored = 1")
         if server_ids is not None:
             if not server_ids:
@@ -282,22 +359,22 @@ class IssueStore:
             rows = [r for r in rows if r.unread > 0]
         return rows
 
-    def unread_by_project(self, server_id: int, relations: list[str] | None = None) -> dict[int, int]:
-        """プロジェクトごとの未読数。relations を渡すと、その関係のチケットだけを数える。"""
+    def unread_by_project(self, server_id: int, relations: list[str] | RelationScope | None = None) -> dict[int, int]:
+        """プロジェクトごとの未読数。relations(関係または RelationScope)を渡すと、そのチケットだけを数える。"""
         sql = f"""
             SELECT i.project_id, SUM({_UNREAD_SQL}) FROM issues i
             JOIN servers s ON s.server_id = i.server_id
             LEFT JOIN read_state rs ON rs.server_id = i.server_id AND rs.issue_id = i.issue_id
-            WHERE i.server_id = ? AND i.monitored = 1 AND {relation_condition(relations)}
+            WHERE i.server_id = ? AND i.monitored = 1 AND {_scope_sql(relations)}
             GROUP BY i.project_id
         """
         return {r[0]: int(r[1] or 0) for r in self.db.query(sql, (server_id,))}
 
-    def count_by_project(self, server_id: int, relations: list[str] | None = None) -> dict[int, int]:
-        """プロジェクトごとの件数。relations を渡すと、その関係のチケットだけを数える。"""
+    def count_by_project(self, server_id: int, relations: list[str] | RelationScope | None = None) -> dict[int, int]:
+        """プロジェクトごとの件数。relations(関係または RelationScope)を渡すと、そのチケットだけを数える。"""
         return {r[0]: r[1] for r in self.db.query(
             f"SELECT i.project_id, COUNT(*) FROM issues i WHERE i.server_id = ? AND i.monitored = 1 "
-            f"AND {relation_condition(relations)} GROUP BY i.project_id",
+            f"AND {_scope_sql(relations)} GROUP BY i.project_id",
             (server_id,))}
 
     def unread_count(self, server_id: int, issue_id: int) -> int:
@@ -311,19 +388,26 @@ class IssueStore:
 
     # --- journal --------------------------------------------------------------
     def upsert_journals(self, server_id: int, issue_id: int, journals: list[dict[str, Any]]) -> list[int]:
-        """journal を保存し、新しく追加された journal_id を返す。notes が変わったものは更新する。"""
-        existing = {r[0]: r[1] for r in self.db.query(
-            "SELECT journal_id, notes FROM journals WHERE server_id = ? AND issue_id = ?", (server_id, issue_id))}
+        """チケットの journal をすべて受け取って保存し、新しく追加された journal_id を返す。
+        notes・プライベートが変わったものは更新し、Redmineで削除された(届かなかった)ものは消す。
+        """
+        existing = {r[0]: (r[1], bool(r[2])) for r in self.db.query(
+            "SELECT journal_id, notes, private_notes FROM journals WHERE server_id = ? AND issue_id = ?",
+            (server_id, issue_id))}
         new_ids: list[int] = []
         with self.db.tx() as c:
+            for jid in existing.keys() - {int(j["id"]) for j in journals}:
+                c.execute("DELETE FROM journals WHERE server_id = ? AND journal_id = ?", (server_id, jid))
             for j in journals:
                 jid = int(j["id"])
                 user = j.get("user") or {}
                 notes = j.get("notes") or ""
+                private = bool(j.get("private_notes"))
                 if jid in existing:
-                    if existing[jid] != notes:
-                        c.execute("UPDATE journals SET notes = ?, updated_on = ? WHERE server_id = ? AND journal_id = ?",
-                                  (notes, j.get("updated_on"), server_id, jid))
+                    if existing[jid] != (notes, private):
+                        c.execute("UPDATE journals SET notes = ?, private_notes = ?, updated_on = ? "
+                                  "WHERE server_id = ? AND journal_id = ?",
+                                  (notes, int(private), j.get("updated_on"), server_id, jid))
                     continue
                 c.execute(
                     """INSERT INTO journals(server_id, journal_id, issue_id, user_id, user_name, notes,
@@ -373,8 +457,17 @@ class IssueStore:
             "ORDER BY updated_on DESC LIMIT ?", (server_id, limit))]
 
     # --- 添付 -----------------------------------------------------------------
-    def upsert_attachments(self, server_id: int, issue_id: int, attachments: list[dict[str, Any]]) -> None:
+    def upsert_attachments(self, server_id: int, issue_id: int, attachments: list[dict[str, Any]]) -> list[str]:
+        """チケットの添付をすべて受け取って保存する。Redmineで削除されたものは消し、
+        その画像キャッシュのファイルのパスを返す(呼び出し側で消す)。
+        """
+        keep = {int(a["id"]) for a in attachments}
+        removed = [(r[0], r[1]) for r in self.db.query(
+            "SELECT attachment_id, local_path FROM attachments WHERE server_id = ? AND issue_id = ?",
+            (server_id, issue_id)) if r[0] not in keep]
         with self.db.tx() as c:
+            for aid, _ in removed:
+                c.execute("DELETE FROM attachments WHERE server_id = ? AND attachment_id = ?", (server_id, aid))
             for a in attachments:
                 c.execute(
                     """INSERT INTO attachments(server_id, attachment_id, issue_id, filename, content_type,
@@ -388,6 +481,7 @@ class IssueStore:
                      a.get("filesize"), a.get("content_url"), a.get("description"),
                      (a.get("author") or {}).get("name"), a.get("created_on")),
                 )
+        return [path for _, path in removed if path]
 
     def attachments(self, server_id: int, issue_id: int) -> list[AttachmentRow]:
         return [AttachmentRow(r["server_id"], r["attachment_id"], r["issue_id"], r["filename"], r["content_type"],

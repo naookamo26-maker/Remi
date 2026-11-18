@@ -219,47 +219,131 @@ def test_relation_filter(app, fake):
 
 def test_visible_relations_filter_list_and_tree(app, fake):
     fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_project(3, "B")
     fake.add_issue(10, 1, "担当")
     fake.add_issue(11, 1, "ウォッチ", assigned_to=7, watchers={ME})
     fake.add_issue(13, 1, "グループ", assigned_to=100)
+    fake.add_issue(20, 2, "子のウォッチ", assigned_to=7, watchers={ME})
+    fake.add_issue(30, 3, "Bのウォッチ", assigned_to=7, watchers={ME})
     sid = _register(app, fake)
-    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 3)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 5)
     fake.add_journal(11, 7, "未読のコメント")
     app.rpc("syncNow")
     assert wait_until(lambda: app.rpc("getTree")["unread"] == 1)
-    ids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues")["issues"])  # noqa: E731
-    assert ids() == [10, 11, 13]
+    ids = lambda **kw: sorted(i["issueId"] for i in app.rpc("listIssues", **kw)["issues"])  # noqa: E731
+    assert ids() == [10, 11, 13, 20, 30]
+    projects = lambda: {p["projectId"]: p for p in app.rpc("getTree")["servers"][0]["projects"]}  # noqa: E731
+    assert projects()[1]["relations"] == ["assigned", "group", "watching", "authored"]
+    assert projects()[1]["relationsOwn"] is False
 
-    # ウォッチ中を表示しない: 一覧からも、ツリーの件数・未読数からも外れる(プロジェクトは残す)
-    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "authored"])
-    assert ids() == [10, 13]
+    # A でウォッチ中を表示しない: A と子プロジェクトのウォッチだけのチケットが、一覧からも、ツリーの件数・
+    # 未読数からも外れる(プロジェクトは残す)。B には効かない
+    ps = app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations",
+                 value=["authored", "assigned", "group"])
+    assert ps["visible_relations"] == {"value": ["assigned", "group", "authored"],
+                                       "effective": ["assigned", "group", "authored"]}
+    child = app.rpc("getProjectSettings", serverId=sid, projectId=2)["visible_relations"]
+    assert child == {"value": None, "effective": ["assigned", "group", "authored"]}
+    assert ids() == [10, 13, 30]
+    assert ids(serverId=sid, projectId=1) == [10, 13]
     tree = app.rpc("getTree")
     [server] = tree["servers"]
-    assert server["count"] == 2 and server["unread"] == 0 and tree["unread"] == 0
-    assert server["projects"][0]["count"] == 2
+    assert server["count"] == 3 and server["unread"] == 0 and tree["unread"] == 0
+    a = projects()[1]
+    assert a["count"] == 2 and a["relationsOwn"] is True and a["relations"] == ["assigned", "group", "authored"]
+    assert a["children"][0]["relations"] == ["assigned", "group", "authored"]
+    assert a["children"][0]["relationsOwn"] is False and a["children"][0]["count"] == 0
+    assert projects()[3]["count"] == 1
+    # 子プロジェクトで上書きできる
+    app.rpc("setProjectSetting", serverId=sid, projectId=2, key="visible_relations", value=["watching"])
+    assert ids() == [10, 13, 20, 30]
+
     # 絞り込みボタンで絞ると、ツリーの件数・未読数とトレイの未読数も一覧と一致する
     from remi.system.tray import Tray
 
     tray = Tray(app.ctx, on_open=lambda: None, on_settings=lambda: None, on_sync=lambda: None, on_quit=lambda: None)
-    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "watching", "authored"])
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=None)
+    app.rpc("setProjectSetting", serverId=sid, projectId=2, key="visible_relations", value=None)
     app.rpc("setSetting", key="relation_filter", value="watching")
-    assert sorted(i["issueId"] for i in app.rpc("listIssues", relation="watching")["issues"]) == [11]
+    assert ids(relation="watching") == [11, 20, 30]
     server = app.rpc("getTree")["servers"][0]
-    assert server["count"] == 1 and server["unread"] == 1 and tray.unread_total() == 1
+    assert server["count"] == 3 and server["unread"] == 1 and tray.unread_total() == 1
     app.rpc("setSetting", key="relation_filter", value="assigned")
     server = app.rpc("getTree")["servers"][0]
     assert server["count"] == 2 and server["unread"] == 0 and tray.unread_total() == 0
-    # 表示しないことにした関係で絞り込んでいたら「すべて」として扱う(画面ではボタンが隠れる)
-    app.rpc("setSetting", key="visible_relations", value=["watching"])
-    assert app.rpc("getTree")["servers"][0]["count"] == 1 and tray.unread_total() == 1
+    # 絞り込みは、各プロジェクトの表示するチケットの中で効く(表示しない関係のチケットは出さない)
+    app.rpc("setProjectSetting", serverId=sid, projectId=3, key="visible_relations", value=["assigned"])
+    app.rpc("setSetting", key="relation_filter", value="watching")
+    assert ids(relation="watching") == [11, 20]
+    # どのプロジェクトでも表示しない関係で絞り込んでいたら「すべて」として扱う(画面ではボタンが隠れる)
+    for pid in (1, 3):
+        app.rpc("setProjectSetting", serverId=sid, projectId=pid, key="visible_relations", value=["assigned"])
+    assert app.rpc("getTree")["relationsInUse"] == ["assigned"]
+    assert app.rpc("getTree")["servers"][0]["count"] == 1 and tray.unread_total() == 0
     app.rpc("setSetting", key="relation_filter", value="all")
     # 自分の担当だけ: グループ経由の担当は外れる
-    app.rpc("setSetting", key="visible_relations", value=["assigned"])
     assert ids() == [10]
-    assert app.rpc("getTree")["servers"][0]["count"] == 1
+    # 継承に戻す
+    app.rpc("setProjectSetting", serverId=sid, projectId=3, key="visible_relations", value=None)
+    assert ids() == [10, 30]
     # 何も選ばない・知らない関係は受け付けない
-    for bad in ([], ["x"], ["assigned", "assigned"], "assigned"):
-        assert app.rpc_error("setSetting", key="visible_relations", value=bad)["code"] == "invalid_setting"
+    for bad in ([], ["x"], ["assigned", "assigned"], "assigned", True):
+        err = app.rpc_error("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=bad)
+        assert err["code"] == "invalid_setting"
+    # グローバル設定としては、もう受け付けない
+    for key in ("visible_relations", "show_all_projects"):
+        assert app.rpc_error("setSetting", key=key, value=True)["code"] == "invalid_setting"
+
+
+def test_show_all_projects_per_server(app, fake):
+    from remi.store.servers import Server
+
+    fake.add_project(1, "チケットあり")
+    fake.add_project(2, "チケットなし")
+    fake.add_issue(10, 1, "担当")
+    sid = _register(app, fake)
+    other = app.ctx.servers.save(Server(name="T", url=fake.base_url, my_user_id=ME), api_key=API_KEY).server_id
+    app.sync.restart()
+    names = lambda i: [p["name"] for p in app.rpc("getTree")["servers"][i]["projects"]]  # noqa: E731
+    assert wait_until(lambda: names(0) == ["チケットあり"] and names(1) == ["チケットあり"])
+    assert app.rpc("getTree")["servers"][0]["showAllProjects"] is False
+    app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=True)
+    tree = app.rpc("getTree")
+    assert tree["servers"][0]["showAllProjects"] is True
+    assert names(0) == ["チケットあり", "チケットなし"]
+    assert names(1) == ["チケットあり"]  # ほかのサーバーには効かない
+    assert app.ctx.servers.get(other).show_all_projects is False
+    assert app.rpc_error("setServerSetting", serverId=999, key="show_all_projects", value=True)["code"] == "not_found"
+    for key, bad in (("show_all_projects", "yes"), ("visible_relations", []), ("x", True)):
+        assert app.rpc_error("setServerSetting", serverId=sid, key=key, value=bad)["code"] == "invalid_setting"
+
+
+def test_server_default_visible_relations(app, fake):
+    """サーバーの既定は、独自に設定していないプロジェクト(子を含む)に効く。"""
+    fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_project(3, "B")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(20, 2, "子のウォッチ", assigned_to=7, watchers={ME})
+    fake.add_issue(30, 3, "Bのウォッチ", assigned_to=7, watchers={ME})
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 3)
+    ids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues")["issues"])  # noqa: E731
+    app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=["assigned", "group"])
+    assert ids() == [10]
+    [server] = app.rpc("getTree")["servers"]
+    assert server["relations"] == ["assigned", "group"] and server["relationsOwn"] is True
+    assert server["count"] == 1
+    assert [p["relations"] for p in server["projects"]] == [["assigned", "group"]] * 2
+    assert app.rpc("getProjectSettings", serverId=sid, projectId=2)["visible_relations"] == {
+        "value": None, "effective": ["assigned", "group"]}
+    # プロジェクトの独自設定はサーバーの既定より優先し、子プロジェクトにも効く
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=["watching"])
+    assert ids() == [20]
+    app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=None)
+    assert ids() == [20, 30]
+    assert app.rpc("getTree")["servers"][0]["relationsOwn"] is False
 
 
 def test_write_permissions(app, fake):
@@ -278,10 +362,10 @@ def test_write_permissions(app, fake):
 
     # コメントだけできるロール
     assert perms(10) == {"editFields": False, "changeStatus": False, "comment": True, "privateNotes": False,
-                         "attach": True, "reason": None}
+                         "attach": True, "editNotes": "none", "reason": None}
     # 終了したプロジェクトには書き込めない
     assert perms(20) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                         "attach": False, "reason": "project_closed"}
+                         "attach": False, "editNotes": "none", "reason": "project_closed"}
     # メンバーでない(権限が分からない)ときは制限しない
     assert perms(30)["editFields"] and perms(30)["comment"]
 
@@ -290,7 +374,7 @@ def test_write_permissions(app, fake):
     fake.my_roles = {1: [3]}
     app.api._role_perms.clear()
     assert perms(10) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                         "attach": False, "reason": "no_permission"}
+                         "attach": False, "editNotes": "none", "reason": "no_permission"}
     fake.my_roles = {1: [3, 4]}
     app.api._my_roles.clear()
     assert perms(10)["reason"] is None
@@ -425,3 +509,161 @@ def test_switching_user_clears_previous_users_data(app, fake):
     assert app.ctx.issues.journals_synced(sid, 11)
     assert app.ctx.servers.get(sid).initial_sync_done
     assert not any(e["type"] == "serverCacheCleared" for e in events)
+
+
+def test_versions_api_list_tree_and_read(app, fake):
+    """バージョンのチケットは、バージョンを選んだときだけ一覧に出す(件数・未読数には入れない)。"""
+    from remi.sync.engine import ServerSync
+
+    fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_version(5, 2, "v1.0")
+    fake.add_version(6, 2, "v0.9", status="closed")
+    fake.add_issue(10, 1, "自分のチケット")
+    fake.add_issue(20, 2, "関係ない", assigned_to=7, version=5)
+    fake.add_issue(21, 2, "関係ない(完了)", assigned_to=7, status_id=5, version=5)
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 1)
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="watch_versions", value=True)
+    assert app.rpc("getProjectSettings", serverId=sid, projectId=2)["watch_versions"]["effective"] is True
+    child = lambda: app.rpc("getTree")["servers"][0]["projects"][0]["children"][0]  # noqa: E731
+    # 同期スレッドの取得が終わるのを待つ(このあと同じ処理をテストからも呼ぶので、重ならないように)
+    assert wait_until(lambda: all((x := app.ctx.versions.get(sid, vid)) and x.issues_synced for vid in (5, 6)))
+    time.sleep(0.3)
+    v = {x["versionId"]: x for x in child()["versions"]}
+    assert v[5]["closed"] is False and v[5]["done"] == 1 and v[5]["total"] == 2 and v[5]["changed"] is False
+    assert v[6]["closed"] is True
+    tree = app.rpc("getTree")["servers"][0]
+    assert tree["count"] == 1  # バージョンのチケットは件数に入れない
+    assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [10]
+    assert [i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"]] == [20]
+    app.rpc("setSetting", key="show_closed", value=True)
+    assert sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"]) == [20, 21]
+    assert app.rpc_error("listIssues", serverId=sid, versionId=999)["code"] == "not_found"
+
+    # 変化があれば印が付き、表示したら消える
+    fake.add_issue(22, 2, "追加", assigned_to=7)
+    fake.set_version(22, 5)
+    engine = ServerSync(app.ctx.db, sid, app.sync.client(sid))
+    engine.sync_versions()
+    assert {x["versionId"]: x for x in child()["versions"]}[5]["changed"] is True
+    d = app.rpc("getVersion", serverId=sid, versionId=5, markRead=False)
+    assert [(e["kind"], e["issueId"], e["unread"]) for e in d["events"]] == [("added", 22, True)]
+    assert d["breadcrumb"] == ["A", "A-子"] and d["total"] == 3
+    app.rpc("getVersion", serverId=sid, versionId=5)
+    assert {x["versionId"]: x for x in child()["versions"]}[5]["changed"] is False
+    assert app.rpc("getVersion", serverId=sid, versionId=5)["events"][0]["unread"] is False
+    # 関係ないチケットのコメントは、未読として数えない
+    assert all(i["unread"] == 0 for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"])
+    # ウォッチをやめるとツリーから消える(自分のチケットのない子プロジェクトも出なくなる)
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="watch_versions", value=None)
+
+    def any_versions(nodes):
+        return any(p["versions"] or any_versions(p["children"]) for p in nodes)
+    assert wait_until(lambda: not any_versions(app.rpc("getTree")["servers"][0]["projects"]))
+    assert app.rpc("getTree")["servers"][0]["projects"][0]["children"] == []
+
+
+def test_issue_details_and_update(app, fake):
+    """「詳細」の項目(標準項目とカスタムフィールド)の値・選択肢と、まとめての更新。"""
+    fake.add_project(1, "A")
+    fake.add_version(5, 1, "v1.0")
+    fake.add_version(6, 1, "v0.9", status="closed")
+    fake.categories[1] = [{"id": 3, "name": "画面"}]
+    fake.custom_fields = [
+        {"id": 1, "name": "顧客", "field_format": "string"},
+        {"id": 2, "name": "環境", "field_format": "list", "multiple": True,
+         "possible_values": [{"value": "本番"}, {"value": "検証"}]},
+        {"id": 3, "name": "メモ", "field_format": "text"},
+    ]
+    fake.add_issue(10, 1, "担当", custom_fields=[
+        {"id": 1, "name": "顧客", "value": "A社"}, {"id": 2, "name": "環境", "multiple": True, "value": ["本番"]},
+        {"id": 3, "name": "メモ", "value": "長い文"}])
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10))
+
+    # 管理者でなければ、カスタムフィールドの形式が分からないので表示だけ
+    d = app.rpc("getIssueDetails", serverId=sid, issueId=10)
+    assert d["customFieldsKnown"] is False
+    f = {x["key"]: x for x in d["fields"]}
+    assert [x["key"] for x in d["fields"]][:8] == ["tracker_id", "category_id", "fixed_version_id", "parent_issue_id",
+                                                  "start_date", "due_date", "done_ratio", "estimated_hours"]
+    assert [o["value"] for o in f["fixed_version_id"]["options"]] == [None, 5]  # 終了したバージョンは選べない
+    assert [o["label"] for o in f["category_id"]["options"]] == ["", "画面"]
+    assert f["cf:1"]["editable"] is False and f["cf:1"]["reason"] == "custom_field_unknown"
+    assert f["cf:1"]["display"] == "A社"
+
+    fake.admin = True
+    app.api._custom_fields.clear()
+    f = {x["key"]: x for x in app.rpc("getIssueDetails", serverId=sid, issueId=10)["fields"]}
+    assert f["cf:1"]["editable"] is True and f["cf:1"]["type"] == "text"
+    assert f["cf:2"]["type"] == "multiselect" and f["cf:2"]["value"] == ["本番"]
+    assert [o["value"] for o in f["cf:2"]["options"]] == ["本番", "検証"]
+    assert f["cf:3"]["editable"] is False and f["cf:3"]["reason"] == "custom_field_unsupported"
+
+    changes = {"category_id": 3, "fixed_version_id": 5, "start_date": "2026-12-01", "estimated_hours": 2.5,
+               "done_ratio": 30, "cf:1": "B社", "cf:2": ["本番", "検証"]}
+    app.rpc("postNote", serverId=sid, issueId=10, changes=changes)
+    assert wait_until(lambda: fake.issues[10].get("start_date") == "2026-12-01")
+    issue = fake.issues[10]
+    assert issue["category"]["id"] == 3 and issue["fixed_version"]["id"] == 5 and issue["estimated_hours"] == 2.5
+    assert {cf["id"]: cf["value"] for cf in issue["custom_fields"]}[1] == "B社"
+    assert {cf["id"]: cf["value"] for cf in issue["custom_fields"]}[2] == ["本番", "検証"]
+    # 外す(空にする)
+    app.rpc("postNote", serverId=sid, issueId=10, changes={"fixed_version_id": None, "start_date": None})
+    assert wait_until(lambda: "fixed_version" not in fake.issues[10] and fake.issues[10].get("start_date") is None)
+    # おかしな値は断る
+    for bad in ({"start_date": "12/01"}, {"done_ratio": 150}, {"estimated_hours": "x"}, {"cf:x": "a"},
+                {"tracker_id": "1"}, {"subject": "件名"}):
+        assert app.rpc_error("postNote", serverId=sid, issueId=10, changes=bad)["code"] == "invalid_input"
+
+
+def test_edit_delete_note_and_attachment(app, fake):
+    """コメントの編集・削除と添付の削除。Redmineで消えたものは、取り直したときに手元からも消す。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    j1 = fake.add_journal(10, ME, "自分のコメント")
+    j2 = fake.add_journal(10, ME, "変更つき", details=[
+        {"property": "attr", "name": "priority_id", "old_value": "2", "new_value": "3"}])
+    fake.add_attachment(10, 77, "shot.png", b"png")
+    fake.add_journal(10, 7, details=[{"property": "attachment", "name": "77", "new_value": "shot.png"}])
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10) and app.ctx.issues.attachments(sid, 10))
+    perms = app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]
+    assert perms["editNotes"] == "all"
+
+    notes = lambda: {j.journal_id: (j.notes, j.private_notes) for j in app.ctx.issues.journals(sid, 10)}  # noqa: E731
+    app.rpc("editNote", serverId=sid, issueId=10, journalId=j1["id"], notes="書き直した", private=True)
+    assert wait_until(lambda: notes().get(j1["id"]) == ("書き直した", True))
+    # 本文を空にすると削除。項目の変更もある更新は、本文だけが消える
+    app.rpc("editNote", serverId=sid, issueId=10, journalId=j1["id"], notes="")
+    app.rpc("editNote", serverId=sid, issueId=10, journalId=j2["id"], notes="")
+    assert wait_until(lambda: j1["id"] not in notes() and notes().get(j2["id"]) == ("", False))
+    assert app.rpc_error("editNote", serverId=sid, issueId=10, journalId=99999, notes="x")["code"] == "not_found"
+    fake.notes_editable = False
+    j3 = fake.add_journal(10, ME, "もう1つ")
+    app.rpc("syncNow", serverId=sid, issueId=10)
+    assert wait_until(lambda: j3["id"] in notes())
+    assert app.rpc_error("editNote", serverId=sid, issueId=10, journalId=j3["id"], notes="x")["code"] == "forbidden"
+
+    app.rpc("deleteAttachment", serverId=sid, issueId=10, attachmentId=77)
+    assert 77 not in fake.attachments
+    assert wait_until(lambda: not app.ctx.issues.attachments(sid, 10))
+    assert app.rpc_error("deleteAttachment", serverId=sid, issueId=10, attachmentId=77)["code"] == "not_found"
+
+
+def test_edit_notes_permission_follows_redmine(app, fake):
+    """コメントの編集・削除は、Redmineと同じく edit_issue_notes(すべて)/ edit_own_issue_notes(自分のもの)。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    fake.my_roles = {1: [3]}
+    fake.roles = {3: ["view_issues", "add_issue_notes", "edit_own_issue_notes"]}
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None)
+    assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "own"
+    fake.roles = {3: ["view_issues", "edit_issue_notes"]}
+    app.api._role_perms.clear()
+    assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "all"
+    fake.roles = {3: ["view_issues"]}
+    app.api._role_perms.clear()
+    assert app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]["editNotes"] == "none"

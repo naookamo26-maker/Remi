@@ -11,7 +11,6 @@ from typing import Any
 from remi import APP_NAME
 from remi.context import AppContext
 from remi.i18n import resolve_language, t
-from remi.store.issues import shown_relations
 from remi.system import windows
 
 log = logging.getLogger(__name__)
@@ -168,8 +167,8 @@ class Tray:
 
     def unread_total(self) -> int:
         # ツリー・一覧と同じく、一覧に出すチケット(表示するチケットと絞り込みの選択)の未読だけを数える
-        relations = shown_relations(self.ctx.settings.get("visible_relations"), self.ctx.settings.get("relation_filter"))
-        return sum(sum(self.ctx.issues.unread_by_project(s.server_id, relations).values())
+        scope = self.ctx.relation_scope()
+        return sum(sum(self.ctx.issues.unread_by_project(s.server_id, scope).values())
                    for s in self.ctx.servers.list(enabled_only=True))
 
     def status_text(self) -> str:
@@ -266,7 +265,8 @@ class Tray:
         self._refresh_menu()
 
     def _on_event(self, event: dict[str, Any]) -> None:
-        if event.get("type") in ("dataChanged", "syncState", "serversChanged", "settingsChanged"):
+        if event.get("type") in ("dataChanged", "syncState", "serversChanged", "settingsChanged",
+                                 "projectSettingsChanged"):
             try:
                 self.refresh()
             except Exception:  # noqa: BLE001

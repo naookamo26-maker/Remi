@@ -34,7 +34,7 @@ version = { attr = "remi.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-remi = ["i18n/*.json", "web/**/*"]
+remi = ["i18n/*.json", "web/**/*", "link_schemes.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

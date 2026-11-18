@@ -150,6 +150,18 @@ class RedmineClient:
     def issues(self, **filters: Any) -> list[dict[str, Any]]:
         return list(self.paged("/issues.json", "issues", filters))
 
+    def project(self, project_id: int, include: str | None = None) -> dict[str, Any]:
+        params = {"include": include} if include else None
+        return self.get_json(f"/projects/{project_id}.json", params)["project"]
+
+    def custom_fields(self) -> list[dict[str, Any]]:
+        """カスタムフィールドの定義(形式・選択肢)。管理者だけが取得できる(ほかは 403)。"""
+        return self.get_json("/custom_fields.json").get("custom_fields", [])
+
+    def versions(self, project_id: int) -> list[dict[str, Any]]:
+        """プロジェクトのバージョン(ほかのプロジェクトから共有されたものを含む)。ページングはない。"""
+        return self.get_json(f"/projects/{project_id}/versions.json").get("versions", [])
+
     def issue_count(self, **filters: Any) -> int:
         data = self.get_json("/issues.json", {**filters, "limit": 1})
         return int(data.get("total_count", 0))
@@ -161,8 +173,9 @@ class RedmineClient:
     def add_note(self, issue_id: int, notes: str, private: bool = False) -> None:
         self.update_issue(issue_id, notes=notes, private=private)
 
-    # 変更できる項目(設計書 §6.2)
-    UPDATABLE = ("status_id", "assigned_to_id", "priority_id", "done_ratio")
+    # 変更できる項目(設計書 §6.2)。カスタムフィールドは "cf:<ID>" で渡す
+    UPDATABLE = ("status_id", "assigned_to_id", "priority_id", "done_ratio", "tracker_id", "category_id",
+                 "fixed_version_id", "parent_issue_id", "start_date", "due_date", "estimated_hours")
 
     def update_issue(self, issue_id: int, *, notes: str = "", private: bool = False,
                      changes: dict[str, Any] | None = None, uploads: list[dict[str, Any]] | None = None) -> None:
@@ -171,16 +184,33 @@ class RedmineClient:
         if notes:
             issue["notes"] = notes
             issue["private_notes"] = bool(private)
+        custom = []
         for k, v in (changes or {}).items():
+            if k.startswith("cf:") and k[3:].isdigit():
+                custom.append({"id": int(k[3:]), "value": "" if v is None else v})
+                continue
             if k not in self.UPDATABLE:
                 raise ValueError(k)
-            issue[k] = "" if v is None else v  # 担当者を外すときは空文字を送る
+            issue[k] = "" if v is None else v  # 担当者などを外すときは空文字を送る
+        if custom:
+            issue["custom_fields"] = custom
         if uploads:
             issue["uploads"] = [
                 {"token": u["token"], "filename": u["filename"], "content_type": u.get("content_type")}
                 for u in uploads
             ]
         self.request("PUT", f"/issues/{issue_id}.json", json={"issue": issue})
+
+    def update_journal(self, journal_id: int, notes: str, private: bool | None = None) -> None:
+        """コメント(journal の notes)を書き換える(Redmine 5.0 以降)。notes を空にすると、項目の変更がない
+        journal は削除される(変更があれば、本文だけが消える)。"""
+        journal: dict[str, Any] = {"notes": notes}
+        if private is not None:
+            journal["private_notes"] = bool(private)
+        self.request("PUT", f"/journals/{journal_id}.json", json={"journal": journal})
+
+    def delete_attachment(self, attachment_id: int) -> None:
+        self.request("DELETE", f"/attachments/{attachment_id}.json")
 
     def upload(self, data: bytes, filename: str) -> str:
         """ファイルをアップロードし、添付に使うトークンを返す。"""

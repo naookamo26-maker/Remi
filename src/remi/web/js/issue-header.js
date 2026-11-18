@@ -8,8 +8,20 @@ import { contextMenu } from "./ui.js";
 /** @typedef {import("./types.js").ConversationData} ConversationData */
 /** @typedef {import("./types.js").FieldKey} FieldKey */
 
-/** ヘッダで変更できる項目と、その表示名のキー */
-export const FIELD_LABELS = { status_id: "field.status", assigned_to_id: "field.assignee", priority_id: "field.priority" };
+/** ヘッダで変更できる項目と、その表示名のキー(カスタムフィールドの名前は FieldChange.name に持つ) */
+export const FIELD_LABELS = {
+  status_id: "field.status", assigned_to_id: "field.assignee", priority_id: "field.priority",
+  tracker_id: "field.tracker", category_id: "field.category", fixed_version_id: "field.version",
+  parent_issue_id: "field.parent", start_date: "field.startDate", due_date: "field.dueDate",
+  done_ratio: "field.doneRatio", estimated_hours: "field.estimatedHours",
+};
+
+/** 変更の表示名(チップなど) @param {string} key @param {import("./types.js").FieldChange} [change] */
+export function fieldLabel(key, change) {
+  return change?.name || t(FIELD_LABELS[key] || key);
+}
+
+const sameValue = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 export class IssueHeader {
   /** @param {import("./conversation.js").Conversation} conv 選択肢(editOptions)と送信前の変更(changes)を持つ */
@@ -52,6 +64,11 @@ export class IssueHeader {
     };
     const field = (key) => h("label", {}, t(FIELD_LABELS[key]), this.selects[key]);
     const rel = (d.relations || []).map((r) => t(`list.${r}`)).join(" / ");
+    // 「詳細」: ほかの項目(トラッカー・日付・カスタムフィールドなど)。開いた状態はすべてのチケットで共通に覚える
+    const open = !!app.settings.issue_details_open;
+    this.detailsToggle = h("button", { type: "button", class: "btn details-toggle", "aria-expanded": String(open),
+      onClick: () => this.toggleDetails() }, open ? "▾ " : "▸ ", t("conv.details"));
+    this.detailsBox = h("div", { class: "details-fields", hidden: !open });
     const crumb = [d.serverName, ...d.breadcrumb].join(" › ");
     const el = h("header", { class: "conv-header" },
       h("div", { class: "top" },
@@ -63,9 +80,122 @@ export class IssueHeader {
         field("status_id"), field("assigned_to_id"), field("priority_id"),
         h("span", { class: "static" }, `${t("conv.updated")} `, h("b", {}, formatTime(d.updatedOn))),
         rel ? h("span", { class: "static" }, `${t("conv.yourRelation")} `, h("b", {}, rel)) : null,
-        this.readOnlyNote));
+        this.detailsToggle,
+        this.readOnlyNote),
+      this.detailsBox);
     this.fill();
     return el;
+  }
+
+  // --- 詳細 -----------------------------------------------------------------------
+  toggleDetails() {
+    const app = this.conv.app;
+    const open = !app.settings.issue_details_open;
+    // 保存の完了を待たずに表示へ反映する
+    app.settings = { ...app.settings, issue_details_open: open };
+    app.saveSetting("issue_details_open", open);
+    this.detailsToggle.setAttribute("aria-expanded", String(open));
+    this.detailsToggle.firstChild.textContent = open ? "▾ " : "▸ ";
+    this.detailsBox.hidden = !open;
+    if (open && !this.conv.details) this.conv.loadDetails();
+    else this.fillDetails();
+  }
+
+  showDetailsLoading() {
+    if (this.detailsBox && !this.conv.details) {
+      this.detailsBox.replaceChildren(h("span", { class: "muted" }, t("conv.detailsLoading")));
+    }
+  }
+
+  showDetailsError(code) {
+    this.detailsBox?.replaceChildren(h("span", { class: "muted" }, t("conv.detailsFailed", { reason: t(`errors.${code}`) })));
+  }
+
+  /** 「詳細」の項目を描く。書き込めるか(editOptions)が分かるまでは、操作できないようにしておく */
+  fillDetails() {
+    const det = this.conv.details;
+    if (!this.detailsBox || !det || this.detailsBox.hidden) return;
+    const p = this.conv.editOptions?.permissions;
+    const denied = !p ? t("conv.detailsLoading") : !p.editFields ? this.deniedReason(p) : null;
+    const box = this.detailsBox;
+    box.replaceChildren();
+    for (const f of det.fields) {
+      const label = f.label || t(FIELD_LABELS[f.key]);
+      const reason = denied || (!f.editable ? t(`conv.${f.reason === "custom_field_unknown" ? "cfUnknown" : "cfUnsupported"}`) : null);
+      box.append(h("label", { class: "detail" }, h("span", { class: "name" }, label), this.detailInput(f, label, reason)));
+    }
+    if (!det.customFieldsKnown && det.fields.some((f) => f.key.startsWith("cf:"))) {
+      box.append(h("div", { class: "help" }, t("conv.cfUnknownHelp")));
+    }
+  }
+
+  /** 項目1つの入力欄。reason があれば、今の値だけを表示して操作できないようにする */
+  detailInput(f, label, reason) {
+    const change = this.conv.changes[f.key];
+    const chosen = change ? change.value : f.value;
+    const display = (v) => this.displayValue(f, v);
+    const record = (value) => {
+      const next = sameValue(value, f.value) ? null
+        : { value, label: display(value) || t("conv.none"), from: display(f.value) || t("conv.none"), name: f.label || null };
+      this.conv.setChange(f.key, next, { refill: false });
+      return next;
+    };
+    if (reason) {
+      return h("span", { class: "static", title: reason }, h("b", {}, display(f.value) || "-"));
+    }
+    let el;
+    if (f.type === "select") {
+      el = h("select", { onChange: () => { el.classList.toggle("changed", !!record(f.options[el.selectedIndex].value)); } },
+        f.options.map((o) => h("option", { selected: sameValue(o.value, chosen) }, this.optionLabel(f, o) || t("conv.none"))));
+    } else if (f.type === "multiselect") {
+      // 複数選択: 押すとチェックのメニューを開く
+      let current = [...(chosen || [])];
+      el = h("button", { type: "button", class: "multi", onClick: (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        contextMenu(r.left, r.bottom + 4, f.options.map((o) => ({ label: o.label, checked: current.includes(o.value), keepOpen: true,
+          onClick: () => {
+            current = current.includes(o.value) ? current.filter((x) => x !== o.value)
+              : f.options.map((x) => x.value).filter((x) => x === o.value || current.includes(x));
+            el.textContent = display(current) || t("conv.none");
+            el.classList.toggle("changed", !!record(current));
+            return current.includes(o.value);
+          } })));
+      } }, display(current) || t("conv.none"));
+    } else {
+      const types = { date: "date", issue: "number", int: "number", float: "number", text: "text" };
+      el = h("input", { type: types[f.type] || "text", value: chosen ?? "", "aria-label": label,
+        step: f.type === "float" ? "any" : f.type === "int" || f.type === "issue" ? "1" : null,
+        min: f.type === "issue" ? "1" : null, placeholder: f.type === "issue" ? "#" : null,
+        // 入力のたびに記録する(届いた更新でヘッダが描き直されても、書きかけの値が残るように)
+        onInput: () => { el.classList.toggle("changed", !!record(this.parseInput(f, el.value))); } });
+    }
+    el.setAttribute("aria-label", label);
+    el.classList.toggle("changed", !!change);
+    return el;
+  }
+
+  /** 入力欄の文字を、送る値にする。標準項目の数値は数に、カスタムフィールドは文字列のままにする */
+  parseInput(f, text) {
+    const v = text.trim();
+    if (!v) return null;
+    if (f.key.startsWith("cf:")) return v;
+    if (f.type === "issue") return Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : f.value;
+    if (f.type === "float") return Number.isFinite(Number(v)) ? Number(v) : f.value;
+    return v;
+  }
+
+  optionLabel(f, o) {
+    if (f.format === "bool" && o.value !== null) return o.value === "1" ? t("conv.yes") : t("conv.no");
+    return o.label;
+  }
+
+  /** 値の表示名(選択肢があれば、その名前) */
+  displayValue(f, v) {
+    if (v === null || v === undefined || v === "") return "";
+    if (Array.isArray(v)) return v.map((x) => this.displayValue(f, x)).join(", ");
+    const o = (f.options || []).find((x) => sameValue(x.value, v));
+    if (o) return this.optionLabel(f, o);
+    return f.type === "issue" ? `#${v}` : String(v);
   }
 
   // 選択肢が読み込まれるまでは、今の値だけを表示して操作できないようにしておく
@@ -81,6 +211,7 @@ export class IssueHeader {
   fill() {
     const o = this.conv.editOptions;
     const changes = this.conv.changes;
+    this.fillDetails();
     if (!o || !this.selects) return;
     const lists = {
       status_id: o.statuses.map((x) => [x.id, x.name]),

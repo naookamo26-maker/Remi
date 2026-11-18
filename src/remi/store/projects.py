@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,9 +12,9 @@ PROJECT_STATUS_ACTIVE = 1
 PROJECT_STATUS_CLOSED = 5
 PROJECT_STATUS_ARCHIVED = 9
 
-SETTING_KEYS = ("notify", "watch_authored")
+SETTING_KEYS = ("notify", "watch_authored", "watch_versions")
 # ルートでの既定値(None = サーバー設定に従う)
-ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_authored": False}
+ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_authored": False, "watch_versions": False}
 
 
 @dataclass(frozen=True)
@@ -170,3 +171,43 @@ class ProjectStore:
         """実際の値がオンになっているプロジェクトのID。"""
         parents = self.parent_map(server_id)
         return {pid for pid in parents if self.effective_setting(server_id, pid, key, parents)}
+
+    # --- 表示するチケット(関係のリスト。None=親から継承、最上位の既定はすべて) ------------------
+    def get_visible_relations(self, server_id: int, project_id: int) -> list[str] | None:
+        r = self.db.query_one(
+            "SELECT visible_relations FROM project_settings WHERE server_id = ? AND project_id = ?",
+            (server_id, project_id),
+        )
+        return json.loads(r[0]) if r is not None and r[0] is not None else None
+
+    def set_visible_relations(self, server_id: int, project_id: int, value: list[str] | None) -> None:
+        v = None if value is None else json.dumps(value)
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO project_settings(server_id, project_id, visible_relations) VALUES(?, ?, ?) "
+                "ON CONFLICT(server_id, project_id) DO UPDATE SET visible_relations = excluded.visible_relations",
+                (server_id, project_id, v),
+            )
+
+    def own_visible_relations(self, server_id: int) -> dict[int, list[str]]:
+        """「表示するチケット」を自分で設定している(継承していない)プロジェクトと、その値。"""
+        return {r[0]: json.loads(r[1]) for r in self.db.query(
+            "SELECT project_id, visible_relations FROM project_settings "
+            "WHERE server_id = ? AND visible_relations IS NOT NULL", (server_id,))}
+
+    def visible_relations_map(self, server_id: int) -> dict[int, list[str]]:
+        """プロジェクトごとの、継承を解決した「表示するチケット」。どこにも設定がない(すべて表示)プロジェクトは含めない。
+
+        チケットのプロジェクトがプロジェクト一覧にない場合も、設定があれば含める。
+        """
+        own = self.own_visible_relations(server_id)
+        if not own:
+            return {}
+        parents = self.parent_map(server_id)
+        out: dict[int, list[str]] = {}
+        for pid in set(parents) | set(own):
+            for cur in [pid, *self.ancestors(server_id, pid, parents)]:
+                if cur in own:
+                    out[pid] = own[cur]
+                    break
+        return out

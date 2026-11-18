@@ -562,3 +562,57 @@ def test_versions_api_list_tree_and_read(app, fake):
         return any(p["versions"] or any_versions(p["children"]) for p in nodes)
     assert wait_until(lambda: not any_versions(app.rpc("getTree")["servers"][0]["projects"]))
     assert app.rpc("getTree")["servers"][0]["projects"][0]["children"] == []
+
+
+def test_issue_details_and_update(app, fake):
+    """「詳細」の項目(標準項目とカスタムフィールド)の値・選択肢と、まとめての更新。"""
+    fake.add_project(1, "A")
+    fake.add_version(5, 1, "v1.0")
+    fake.add_version(6, 1, "v0.9", status="closed")
+    fake.categories[1] = [{"id": 3, "name": "画面"}]
+    fake.custom_fields = [
+        {"id": 1, "name": "顧客", "field_format": "string"},
+        {"id": 2, "name": "環境", "field_format": "list", "multiple": True,
+         "possible_values": [{"value": "本番"}, {"value": "検証"}]},
+        {"id": 3, "name": "メモ", "field_format": "text"},
+    ]
+    fake.add_issue(10, 1, "担当", custom_fields=[
+        {"id": 1, "name": "顧客", "value": "A社"}, {"id": 2, "name": "環境", "multiple": True, "value": ["本番"]},
+        {"id": 3, "name": "メモ", "value": "長い文"}])
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10))
+
+    # 管理者でなければ、カスタムフィールドの形式が分からないので表示だけ
+    d = app.rpc("getIssueDetails", serverId=sid, issueId=10)
+    assert d["customFieldsKnown"] is False
+    f = {x["key"]: x for x in d["fields"]}
+    assert [x["key"] for x in d["fields"]][:8] == ["tracker_id", "category_id", "fixed_version_id", "parent_issue_id",
+                                                  "start_date", "due_date", "done_ratio", "estimated_hours"]
+    assert [o["value"] for o in f["fixed_version_id"]["options"]] == [None, 5]  # 終了したバージョンは選べない
+    assert [o["label"] for o in f["category_id"]["options"]] == ["", "画面"]
+    assert f["cf:1"]["editable"] is False and f["cf:1"]["reason"] == "custom_field_unknown"
+    assert f["cf:1"]["display"] == "A社"
+
+    fake.admin = True
+    app.api._custom_fields.clear()
+    f = {x["key"]: x for x in app.rpc("getIssueDetails", serverId=sid, issueId=10)["fields"]}
+    assert f["cf:1"]["editable"] is True and f["cf:1"]["type"] == "text"
+    assert f["cf:2"]["type"] == "multiselect" and f["cf:2"]["value"] == ["本番"]
+    assert [o["value"] for o in f["cf:2"]["options"]] == ["本番", "検証"]
+    assert f["cf:3"]["editable"] is False and f["cf:3"]["reason"] == "custom_field_unsupported"
+
+    changes = {"category_id": 3, "fixed_version_id": 5, "start_date": "2026-12-01", "estimated_hours": 2.5,
+               "done_ratio": 30, "cf:1": "B社", "cf:2": ["本番", "検証"]}
+    app.rpc("postNote", serverId=sid, issueId=10, changes=changes)
+    assert wait_until(lambda: fake.issues[10].get("start_date") == "2026-12-01")
+    issue = fake.issues[10]
+    assert issue["category"]["id"] == 3 and issue["fixed_version"]["id"] == 5 and issue["estimated_hours"] == 2.5
+    assert {cf["id"]: cf["value"] for cf in issue["custom_fields"]}[1] == "B社"
+    assert {cf["id"]: cf["value"] for cf in issue["custom_fields"]}[2] == ["本番", "検証"]
+    # 外す(空にする)
+    app.rpc("postNote", serverId=sid, issueId=10, changes={"fixed_version_id": None, "start_date": None})
+    assert wait_until(lambda: "fixed_version" not in fake.issues[10] and fake.issues[10].get("start_date") is None)
+    # おかしな値は断る
+    for bad in ({"start_date": "12/01"}, {"done_ratio": 150}, {"estimated_hours": "x"}, {"cf:x": "a"},
+                {"tracker_id": "1"}, {"subject": "件名"}):
+        assert app.rpc_error("postNote", serverId=sid, issueId=10, changes=bad)["code"] == "invalid_input"

@@ -22,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
     "splitter_state": None,
     "tree_collapsed": [],
     "redmine_open_in": "app",  # app / browser(設計書 §5.4)
+    "issue_details_open": False,  # 会話ビューのヘッダで「詳細」(ほかの項目)を開いているか
     "relation_filter": "all",  # 一覧の絞り込み: all / assigned / watching / authored
     # 「すべてのプロジェクトを表示」はサーバーごと(servers.show_all_projects)、
     # 「表示するチケット」はプロジェクトごと(project_settings.visible_relations)の設定

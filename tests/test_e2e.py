@@ -612,3 +612,35 @@ def test_roadmap_versions(page, remi, fake):
     remi.sync.sync_now()
     playwright_api.expect(roadmap.locator(".dot.changed")).to_be_visible(timeout=20000)
     assert not page.errors, page.errors
+
+
+def test_issue_details_fields(page, remi, fake):
+    seed(fake)
+    fake.categories[2] = [{"id": 3, "name": "帳票"}]
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    # 既定では閉じている(ヘッダは3項目だけ)
+    playwright_api.expect(conv.locator(".details-fields")).to_be_hidden()
+    conv.get_by_role("button", name="詳細").click()
+    category = conv.get_by_label("カテゴリ")
+    playwright_api.expect(category).to_be_enabled(timeout=15000)
+    category.select_option(label="帳票")
+    conv.get_by_label("期日").fill("2026-11-30")
+    chips = conv.locator(".chip")
+    playwright_api.expect(chips).to_have_count(2)
+    playwright_api.expect(chips.first).to_contain_text("カテゴリ")
+    conv.get_by_role("button", name="送信").click()
+    end = time.monotonic() + 15
+    while time.monotonic() < end and fake.issues[10].get("due_date") != "2026-11-30":
+        time.sleep(0.1)
+    assert fake.issues[10]["category"]["id"] == 3 and fake.issues[10]["due_date"] == "2026-11-30"
+    playwright_api.expect(chips).to_have_count(0)
+    # 開いた状態は覚えておく(別のチケットを開いても開いたまま)
+    assert remi.ctx.settings.get("issue_details_open") is True
+    page.locator(".issue", has_text="メールの宛先").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("メールの宛先", timeout=15000)
+    playwright_api.expect(conv.locator(".details-fields")).to_be_visible()
+    assert not page.errors, page.errors

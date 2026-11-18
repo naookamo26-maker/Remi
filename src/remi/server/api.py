@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import threading
 import time
@@ -18,7 +19,7 @@ from typing import Any, Protocol
 
 from remi import __version__
 from remi.api.client import RedmineClient, normalize_url
-from remi.api.errors import RedmineError
+from remi.api.errors import ErrorCode, RedmineError
 from remi.api.probe import probe_server
 from remi.context import AppContext
 from remi.i18n import SUPPORTED_LANGUAGES, catalog, resolve_language
@@ -48,11 +49,20 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "tree_collapsed": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
     "redmine_open_in": lambda v: v in ("app", "browser"),
     "relation_filter": lambda v: v in RELATION_FILTERS,
+    "issue_details_open": lambda v: isinstance(v, bool),
 }
 # 一覧の絞り込み(設計書 §5.1)
 RELATION_FILTERS = {"all": 0, "assigned": REL_ASSIGNED, "watching": REL_WATCHING, "authored": REL_AUTHORED}
-# 画面から変更できる項目(設計書 §6.2)
-EDITABLE = ("status_id", "assigned_to_id", "priority_id")
+# 画面から変更できる項目(設計書 §6.2)。ヘッダの3項目と、「詳細」で出す項目。カスタムフィールドは "cf:<ID>"
+EDITABLE = ("status_id", "assigned_to_id", "priority_id", "tracker_id", "category_id", "fixed_version_id",
+            "parent_issue_id", "start_date", "due_date", "done_ratio", "estimated_hours")
+_ID_FIELDS = ("status_id", "assigned_to_id", "priority_id", "tracker_id", "category_id", "fixed_version_id",
+              "parent_issue_id")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# カスタムフィールドの定義を覚えておく時間
+CUSTOM_FIELDS_TTL = 600
+# 「詳細」で編集できるカスタムフィールドの形式。ほか(長文・リンク・添付など)は表示だけにする
+CF_EDITABLE_FORMATS = ("string", "int", "float", "date", "bool", "list", "enumeration", "user", "version")
 MEMBERS_TTL = 600
 # 自分のロールと、ロールの権限を覚えておく時間(書き込みできるかの判定に使う)
 PERMISSIONS_TTL = 600
@@ -62,6 +72,24 @@ SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "draft
                        "versions", "version_issues", "version_events")
 # 初期化の前に同期スレッドを止めるときの待ち時間。通信中でも読み取りのタイムアウト(30秒)で終わる
 SYNC_STOP_TIMEOUT = 40.0
+
+
+def _valid_change(key: str, v: Any) -> bool:
+    """送信前の変更の値を確かめる(Redmineでも検証されるが、明らかにおかしいものはここで断る)。"""
+    if key.startswith("cf:"):
+        return key[3:].isdigit() and (v is None or isinstance(v, str)
+                                      or (isinstance(v, list) and all(isinstance(x, str) for x in v)))
+    if key not in EDITABLE:
+        return False
+    if key in _ID_FIELDS:
+        return v is None or (isinstance(v, int) and not isinstance(v, bool) and v > 0)
+    if key in ("start_date", "due_date"):
+        return v is None or (isinstance(v, str) and bool(_DATE.match(v)))
+    if key == "done_ratio":
+        return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100
+    if key == "estimated_hours":
+        return v is None or (isinstance(v, int | float) and not isinstance(v, bool) and 0 <= v < 100000)
+    return False
 
 
 def _valid_relations(v: Any) -> bool:
@@ -135,6 +163,8 @@ class RemiApi:
         # (server_id, role_id) → (取得した時刻, 権限)
         self._role_perms: dict[tuple[int, int], tuple[float, set[str]]] = {}
         self._members_lock = threading.Lock()
+        # server_id → (取得した時刻, カスタムフィールドの定義。管理者でなく取得できなければ None)
+        self._custom_fields: dict[int, tuple[float, list[dict[str, Any]] | None]] = {}
 
     def methods(self) -> dict[str, Callable]:
         return {name: getattr(self, name) for name in dir(self)
@@ -578,7 +608,7 @@ class RemiApi:
         失敗してもコメントは下書きとして残る(設計書 §6)。
         """
         changes = dict(changes or {})
-        if any(k not in EDITABLE for k in changes):
+        if any(not _valid_change(k, v) for k, v in changes.items()):
             raise RpcError("invalid_input", "changes")
         ups = []
         for u in uploads or []:
@@ -733,6 +763,126 @@ class RemiApi:
                         "priority_id": row.priority_id},
             "permissions": permissions,
         }
+
+    def _custom_field_defs(self, server_id: int) -> dict[int, dict[str, Any]] | None:
+        """カスタムフィールドの定義(ID → 定義)。管理者でなければ取得できないので None。"""
+        with self._members_lock:
+            cached = self._custom_fields.get(server_id)
+        if cached and time.monotonic() - cached[0] < CUSTOM_FIELDS_TTL:
+            defs = cached[1]
+        else:
+            try:
+                defs = self._client(server_id).custom_fields()
+            except RedmineError as e:
+                if e.code not in (ErrorCode.FORBIDDEN, ErrorCode.NOT_FOUND):
+                    raise
+                defs = None
+            with self._members_lock:
+                self._custom_fields[server_id] = (time.monotonic(), defs)
+        return None if defs is None else {int(d["id"]): d for d in defs}
+
+    @rpc
+    def getIssueDetails(self, serverId: int, issueId: int) -> dict[str, Any]:  # noqa: N802,N803
+        """「詳細」で表示・編集する項目(トラッカー・カテゴリ・対象バージョン・日付・工数・カスタムフィールドなど)の
+        今の値と選択肢。書き込めるかは getEditOptions の permissions で判断する。
+        """
+        row = self.ctx.issues.get(serverId, issueId)
+        server = self.ctx.servers.get(serverId)
+        if row is None or server is None:
+            raise RpcError("not_found")
+        client = self._client(serverId)
+        try:
+            data = client.issue(issueId)
+            pid = int(data["project"]["id"])
+            project = client.project(pid, include="trackers,issue_categories")
+            versions = client.versions(pid)
+            members = self._members_of(serverId, pid)
+            defs = self._custom_field_defs(serverId)
+        except RedmineError as e:
+            raise RpcError(e.code.value, e.detail) from e
+
+        def ref(key: str) -> tuple[int | None, str]:
+            r = data.get(key) or {}
+            return (int(r["id"]) if r.get("id") is not None else None), r.get("name") or ""
+
+        def options(items, current: tuple[int | None, str], none: bool) -> list[dict[str, Any]]:
+            out = [{"value": None, "label": ""}] if none else []
+            out += [{"value": int(x["id"]), "label": x.get("name", "")} for x in items]
+            if current[0] is not None and all(o["value"] != current[0] for o in out):
+                out.insert(1 if none else 0, {"value": current[0], "label": current[1] or f"#{current[0]}"})
+            return out
+
+        tracker, category, version = ref("tracker"), ref("category"), ref("fixed_version")
+        parent = (data.get("parent") or {}).get("id")
+        # 対象バージョンに選べるのは、未完了(ロックされていない)のもの
+        open_versions = [v for v in versions if (v.get("status") or "open") == "open"]
+        fields: list[dict[str, Any]] = [
+            {"key": "tracker_id", "type": "select", "value": tracker[0], "display": tracker[1],
+             "options": options(project.get("trackers") or [], tracker, False), "editable": True},
+            {"key": "category_id", "type": "select", "value": category[0], "display": category[1],
+             "options": options(project.get("issue_categories") or [], category, True), "editable": True},
+            {"key": "fixed_version_id", "type": "select", "value": version[0], "display": version[1],
+             "options": options(open_versions, version, True), "editable": True},
+            {"key": "parent_issue_id", "type": "issue", "value": parent,
+             "display": f"#{parent}" if parent else "", "editable": True},
+            {"key": "start_date", "type": "date", "value": data.get("start_date"),
+             "display": data.get("start_date") or "", "editable": True},
+            {"key": "due_date", "type": "date", "value": data.get("due_date"),
+             "display": data.get("due_date") or "", "editable": True},
+            {"key": "done_ratio", "type": "select", "value": int(data.get("done_ratio") or 0),
+             "display": f"{int(data.get('done_ratio') or 0)}%",
+             "options": [{"value": n, "label": f"{n}%"} for n in range(0, 101, 10)], "editable": True},
+            {"key": "estimated_hours", "type": "float", "value": data.get("estimated_hours"),
+             "display": "" if data.get("estimated_hours") is None else str(data["estimated_hours"]),
+             "editable": True},
+        ]
+        for cf in data.get("custom_fields") or []:
+            fields.append(self._custom_field(cf, (defs or {}).get(int(cf["id"])), defs is not None,
+                                             members, versions))
+        return {"fields": fields, "customFieldsKnown": defs is not None}
+
+    @staticmethod
+    def _custom_field(cf: dict[str, Any], d: dict[str, Any] | None, known: bool,
+                      members: list[dict[str, Any]], versions: list[dict[str, Any]]) -> dict[str, Any]:
+        """カスタムフィールド1つ。値は文字列(複数選択なら文字列のリスト)で扱う。"""
+        multiple = bool(cf.get("multiple") or (d or {}).get("multiple"))
+        raw = cf.get("value")
+        value: Any = ([str(x) for x in raw] if isinstance(raw, list) else ([str(raw)] if raw not in (None, "") else [])) \
+            if multiple else (None if raw in (None, "") else str(raw))
+        fmt = (d or {}).get("field_format")
+        out: dict[str, Any] = {"key": f"cf:{int(cf['id'])}", "label": cf.get("name", ""), "multiple": multiple,
+                               "value": value, "editable": False, "type": "text"}
+        opts: list[dict[str, Any]] | None = None
+        if fmt in ("list", "enumeration"):
+            opts = [{"value": str(pv.get("value")), "label": str(pv.get("label") or pv.get("value"))}
+                    for pv in (d or {}).get("possible_values") or []]
+        elif fmt == "user":
+            opts = [{"value": str(m["id"]), "label": m["name"]} for m in members if not m.get("group")]
+        elif fmt == "version":
+            opts = [{"value": str(v["id"]), "label": v.get("name", "")} for v in versions]
+        elif fmt == "bool":
+            opts = [{"value": "1", "label": "1"}, {"value": "0", "label": "0"}]  # 表示名は画面で翻訳する
+        if opts is not None:
+            out["type"] = "multiselect" if multiple else "select"
+            known_values = {o["value"] for o in opts}
+            for v in (value if multiple else [value] if value is not None else []):
+                if v not in known_values:
+                    opts.append({"value": v, "label": v})
+            if not multiple:
+                opts.insert(0, {"value": None, "label": ""})
+            out["options"] = opts
+        elif fmt in ("int", "float", "date", "string"):
+            out["type"] = {"int": "int", "float": "float", "date": "date", "string": "text"}[fmt]
+        labels = {o["value"]: o["label"] for o in opts or []}
+        shown = value if multiple else ([value] if value is not None else [])
+        out["display"] = ", ".join(labels.get(v, v) for v in shown)
+        out["format"] = fmt
+        if fmt in CF_EDITABLE_FORMATS:
+            out["editable"] = True
+        else:
+            # 形式が分からない(管理者でない)・長文などは、表示だけにする。理由は画面で示す
+            out["reason"] = "custom_field_unknown" if not known or d is None else "custom_field_unsupported"
+        return out
 
     @rpc
     def setWatching(self, serverId: int, issueId: int, watching: bool) -> None:  # noqa: N802,N803

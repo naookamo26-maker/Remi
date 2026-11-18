@@ -64,7 +64,7 @@ def test_types_js_parses():
     names = documented()
     for name in ("TreeData", "TreeServer", "TreeProject", "IssueSummary", "ConversationData", "Journal",
                  "JournalDetail", "EditOptions", "WritePermissions", "FieldChange", "Upload", "TreeVersion",
-                 "VersionData", "VersionEvent"):
+                 "VersionData", "VersionEvent", "IssueDetails", "DetailField"):
         assert names.get(name, (set(), set()))[0] | names.get(name, (set(), set()))[1], name
 
 
@@ -88,6 +88,11 @@ def test_types_match_api_results(api):
     opts = api.getEditOptions(serverId=1, issueId=10)
     check("EditOptions", opts)
     check("WritePermissions", opts["permissions"])
+
+    details = api.getIssueDetails(serverId=1, issueId=10)
+    check("IssueDetails", details)
+    for f in details["fields"]:
+        check("DetailField", f)
 
 
 def test_version_types_match_api_results(api, fake):

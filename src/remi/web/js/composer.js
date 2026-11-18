@@ -3,7 +3,7 @@ import { call } from "./api.js";
 import { clear, debounce, h, html } from "./dom.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
-import { FIELD_LABELS } from "./issue-header.js";
+import { fieldLabel } from "./issue-header.js";
 
 /** @typedef {import("./types.js").ConversationData} ConversationData */
 /** @typedef {import("./types.js").Upload} Upload */
@@ -143,7 +143,7 @@ export class Composer {
   renderChips() {
     clear(this.chips);
     for (const [key, c] of Object.entries(this.conv.changes)) {
-      this.chips.append(h("span", { class: "chip" }, `${t(FIELD_LABELS[key])}: ${c.from} → ${c.label}`,
+      this.chips.append(h("span", { class: "chip" }, `${fieldLabel(key, c)}: ${c.from} → ${c.label}`,
         h("button", { type: "button", "aria-label": t("conv.undoChange"), onClick: () => this.conv.setChange(key, null) }, "×")));
     }
     for (const u of this.uploads) {

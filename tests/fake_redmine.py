@@ -43,6 +43,9 @@ class FakeRedmine:
         self.priorities = [{"id": 2, "name": "通常"}, {"id": 3, "name": "高め"}]
         self.issues: dict[int, dict] = {}
         self.versions: dict[int, dict] = {}
+        # カスタムフィールドの定義(/custom_fields.json は管理者だけ)と、プロジェクトのカテゴリ
+        self.custom_fields: list[dict] = []
+        self.categories: dict[int, list[dict]] = {}
         self.journals: dict[int, list[dict]] = {}
         self.attachments: dict[int, dict] = {}  # id -> {..., "content": bytes}
         self.watchers: dict[int, set[int]] = {}
@@ -98,7 +101,8 @@ class FakeRedmine:
 
     def add_issue(self, iid: int, project_id: int, subject: str, *, assigned_to: int | None = ME,
                   author: int = 7, watchers: set[int] | None = None, status_id: int = 1,
-                  description: str = "", updated_on: str | None = None, version: int | None = None) -> dict:
+                  description: str = "", updated_on: str | None = None, version: int | None = None,
+                  custom_fields: list[dict] | None = None) -> dict:
         with self._lock:
             ts = updated_on or now()
             proj = next((p for p in self.projects if p["id"] == project_id), {"id": project_id, "name": "?"})
@@ -119,6 +123,8 @@ class FakeRedmine:
                 issue["assigned_to"] = self._user_ref(assigned_to)
             if version is not None:
                 issue["fixed_version"] = {"id": version, "name": self.versions[version]["name"]}
+            if custom_fields is not None:
+                issue["custom_fields"] = [dict(cf) for cf in custom_fields]
             self.issues[iid] = issue
             self.journals[iid] = []
             self.watchers[iid] = set(watchers or set())
@@ -189,6 +195,39 @@ class FakeRedmine:
             details.append({"property": "attr", "name": "done_ratio", "old_value": str(issue.get("done_ratio", 0)),
                             "new_value": str(data["done_ratio"])})
             issue["done_ratio"] = int(data["done_ratio"])
+        # 名前で参照する項目(トラッカー・カテゴリ・対象バージョン・親チケット)と、値をそのまま持つ項目
+        refs = {
+            "tracker_id": ("tracker", lambda v: next(t for t in self.trackers if t["id"] == v)),
+            "category_id": ("category", lambda v: next(c for cs in self.categories.values() for c in cs if c["id"] == v)),
+            "fixed_version_id": ("fixed_version", lambda v: {"id": v, "name": self.versions[v]["name"]}),
+            "parent_issue_id": ("parent", lambda v: {"id": v} if v in self.issues else None),
+        }
+        for key, (attr, ref) in refs.items():
+            if key not in data:
+                continue
+            old = (issue.get(attr) or {}).get("id")
+            v = None if data[key] in ("", None) else int(data[key])
+            if v is None:
+                issue.pop(attr, None)
+            else:
+                r = ref(v)
+                if r is None:
+                    return 422, {"errors": [f"{key} is invalid"]}
+                issue[attr] = r
+            details.append({"property": "attr", "name": key, "old_value": None if old is None else str(old),
+                            "new_value": None if v is None else str(v)})
+        for key in ("start_date", "due_date", "estimated_hours"):
+            if key in data:
+                v = None if data[key] in ("", None) else data[key]
+                details.append({"property": "attr", "name": key, "old_value": issue.get(key), "new_value": v})
+                issue[key] = v
+        for cf in data.get("custom_fields") or []:
+            cur = next((x for x in issue.setdefault("custom_fields", []) if x["id"] == int(cf["id"])), None)
+            if cur is None:
+                return 422, {"errors": [f"custom field {cf['id']} is invalid"]}
+            details.append({"property": "cf", "name": str(cf["id"]), "old_value": cur.get("value"),
+                            "new_value": cf["value"]})
+            cur["value"] = cf["value"]
         for up in data.get("uploads") or []:
             filename, content = self.uploads.pop(up["token"])
             aid = 9000 + len(self.attachments)
@@ -275,6 +314,22 @@ class FakeRedmine:
                 return 200, {"role": {"id": rid, "name": f"role{rid}", "permissions": self.roles[rid]}}
             if path == "/projects.json":
                 return 200, self._page(self.projects, query, "projects")
+            m = re.match(r"^/projects/(\d+)\.json$", path)
+            if m:
+                p = next((x for x in self.projects if x["id"] == int(m.group(1))), None)
+                if p is None:
+                    return 404, {}
+                p = dict(p)
+                inc = query.get("include", "").split(",")
+                if "trackers" in inc:
+                    p["trackers"] = [{"id": t["id"], "name": t["name"]} for t in self.trackers]
+                if "issue_categories" in inc:
+                    p["issue_categories"] = self.categories.get(p["id"], [])
+                return 200, {"project": p}
+            if path == "/custom_fields.json":
+                if not self.admin:
+                    return 403, {}
+                return 200, {"custom_fields": self.custom_fields}
             m = re.match(r"^/projects/(\d+)/versions\.json$", path)
             if m:
                 pid = int(m.group(1))

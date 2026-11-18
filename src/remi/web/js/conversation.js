@@ -37,6 +37,8 @@ export class Conversation {
      * 選択肢を読み直す間も、同じチケットのあいだは前の値を使う(入力欄が一瞬有効になるのを避ける)
      */
     this.permissions = null;
+    /** @type {import("./types.js").IssueDetails|null} 「詳細」の項目(開いたときに読み込む) */
+    this.details = null;
     this.header = new IssueHeader(this);
     /** @type {Composer|null} */
     this.composer = null;
@@ -110,6 +112,7 @@ export class Conversation {
       this.changes = {};
       this.editOptions = null;
       this.permissions = null;
+      this.details = null;
     }
     const prev = this.timeline;
     const atBottom = this.isNearBottom();
@@ -130,6 +133,24 @@ export class Conversation {
     }
     this.stickBottom = this.isNearBottom();
     if (!this.editOptions) this.loadEditOptions(serverId, issueId);
+    if (!this.details && this.app.settings.issue_details_open) this.loadDetails();
+  }
+
+  /** 「詳細」の項目(今の値と選択肢)を読み込む。開いたとき・開いたままチケットを開いたときに呼ぶ */
+  async loadDetails() {
+    const d = this.data;
+    if (!d) return;
+    const token = Symbol();
+    this._detailsToken = token;
+    this.header.showDetailsLoading();
+    try {
+      const details = await call("getIssueDetails", { serverId: d.serverId, issueId: d.issueId });
+      if (this._detailsToken !== token || issueKey(this.data) !== issueKey(d)) return;
+      this.details = details;
+      this.header.fillDetails();
+    } catch (e) {
+      if (this._detailsToken === token) this.header.showDetailsError(e.code);
+    }
   }
 
   // ヘッダで変更できる項目の選択肢を、表示とは別に読み込む(Redmineへの問い合わせを伴うため)
@@ -260,6 +281,7 @@ export class Conversation {
       c.finishSent(sent);
       this.changes = {};
       this.editOptions = null; // ステータスが変わると遷移できる先も変わるので読み直す
+      this.details = null; // 「詳細」の値も読み直す(開いていれば、次に描くときに読み込む)
       c.renderChips();
     }
     c.update();

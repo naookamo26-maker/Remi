@@ -187,14 +187,40 @@
  * @property {"project_closed"|"no_permission"|null} reason  何も書き込めない理由
  */
 
-/** @typedef {"status_id"|"assigned_to_id"|"priority_id"} FieldKey ヘッダで変更できる項目 */
+/**
+ * ヘッダ・「詳細」で変更できる項目。カスタムフィールドは `cf:<ID>`
+ * @typedef {"status_id"|"assigned_to_id"|"priority_id"|"tracker_id"|"category_id"|"fixed_version_id"|"parent_issue_id"|"start_date"|"due_date"|"done_ratio"|"estimated_hours"|string} FieldKey
+ */
 
 /**
  * ヘッダで選んだ、送信前の変更(画面の中だけで使う)。
  * @typedef {object} FieldChange
- * @property {number|null} value
+ * @property {number|string|string[]|null} value
  * @property {string} label                選んだ値の表示名
  * @property {string} from                 元の値の表示名
+ * @property {string|null} [name]          項目名(カスタムフィールドのとき)
+ */
+
+/**
+ * getIssueDetails の戻り値(「詳細」の項目)。
+ * @typedef {object} IssueDetails
+ * @property {DetailField[]} fields
+ * @property {boolean} customFieldsKnown   カスタムフィールドの形式が分かるか(管理者でなければ false)
+ */
+
+/**
+ * 「詳細」の項目1つ。
+ * @typedef {object} DetailField
+ * @property {FieldKey} key
+ * @property {"select"|"multiselect"|"date"|"issue"|"int"|"float"|"text"} type
+ * @property {number|string|string[]|null} value  今の値(カスタムフィールドは文字列、複数選択は文字列のリスト)
+ * @property {string} display              今の値の表示名
+ * @property {{value: number|string|null, label: string}[]} [options]  選択肢(select・multiselect)
+ * @property {boolean} editable            ここで変更できる形式か(書き込めるかは permissions で判断する)
+ * @property {string} [label]              項目名(カスタムフィールド)
+ * @property {boolean} [multiple]          複数選択のカスタムフィールド
+ * @property {string|null} [format]        カスタムフィールドの形式(Redmineの field_format)
+ * @property {string} [reason]             変更できない理由(custom_field_unknown / custom_field_unsupported)
  */
 
 /**

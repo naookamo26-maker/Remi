@@ -34,8 +34,19 @@ def seed(fake) -> None:
     fake.add_project(4, "社内ポータル")
     for pid in (1, 2, 3, 4):
         fake.members[pid] = [ME, 7, 8, 100]
+    # カテゴリとカスタムフィールド(「詳細」で表示・編集する)
+    fake.categories[2] = [{"id": 1, "name": "画面"}, {"id": 2, "name": "帳票"}, {"id": 3, "name": "バッチ"}]
+    fake.custom_fields = [
+        {"id": 1, "name": "顧客", "field_format": "string"},
+        {"id": 2, "name": "発生環境", "field_format": "list", "multiple": True,
+         "possible_values": [{"value": "本番"}, {"value": "検証"}, {"value": "開発"}]},
+        {"id": 3, "name": "要リリース", "field_format": "bool"},
+    ]
     fake.add_issue(1234, 2, "受注一覧のCSV出力で文字化けする", watchers={ME}, updated_on=ts(3000),
-                   description="受注一覧からCSVを出力すると、Excelで開いたときに文字化けします。")
+                   description="受注一覧からCSVを出力すると、Excelで開いたときに文字化けします。",
+                   custom_fields=[{"id": 1, "name": "顧客", "value": "山田商事"},
+                                  {"id": 2, "name": "発生環境", "multiple": True, "value": ["本番"]},
+                                  {"id": 3, "name": "要リリース", "value": "1"}])
     fake.set_status(1234, 2)
     fake.add_journal(1234, 7, "再現手順です。\n\n1. 受注一覧で `得意先名` に「髙橋」を含む行を表示\n2. 「CSV出力」を押す\n"
                      "3. Excelで開くと **文字化け** する\n\n出力処理はこのあたりです。\n\n```python\n# export.py\n"
@@ -96,6 +107,7 @@ def main() -> None:
     p.add_argument("--theme", default="system")
     p.add_argument("--unread", action="store_true", help="2件のコメントを未読にしておく")
     p.add_argument("--versions", action="store_true", help="基幹システムのバージョンをウォッチし、変化を記録しておく")
+    p.add_argument("--admin", action="store_true", help="管理者として接続する(カスタムフィールドの形式が分かる)")
     args = p.parse_args()
 
     tmp = tempfile.mkdtemp(prefix="remi-demo-")
@@ -120,6 +132,7 @@ def main() -> None:
     fake = FakeRedmine()
     fake.start()
     seed(fake)
+    fake.admin = args.admin
     db = open_database(Path(tmp) / "remi.db")
     ctx = AppContext(db)
     ctx.settings.set("language", args.lang)

@@ -284,6 +284,19 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .fields select.changed { border-color: var(--accent); background: var(--selection); }
 .fields .static b { color: var(--text); font-weight: 500; }
 .fields select:disabled { opacity: .7; cursor: default; }
+/* 「詳細」: ほかの項目を、名前と値の組で折り返して並べる */
+.details-toggle { min-height: 26px; padding: 0 8px; font-size: 12px; }
+.details-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; align-items: center;
+  font-size: 12px; color: var(--text-muted); padding-top: 4px; }
+.details-fields .detail { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.details-fields .detail .name { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-fields select, .details-fields input, .details-fields .multi { flex: 1; min-width: 0; height: 28px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--window); color: var(--text); font-size: 12px; }
+.details-fields .multi { text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-fields .changed { border-color: var(--accent); background: var(--selection); }
+.details-fields .static { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-fields .static b { color: var(--text); font-weight: 500; }
+.details-fields .help { grid-column: 1 / -1; font-size: 11px; }
 .fields .read-only-note { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 4px;
   background: var(--warning-bg); color: var(--warning-fg); }
 .composer textarea:disabled { background: var(--surface); color: var(--text-muted); cursor: not-allowed; }

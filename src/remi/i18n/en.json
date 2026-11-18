@@ -57,7 +57,6 @@
   "conv.unreadFrom": "Unread from here",
   "conv.unwatchHint": "Stop watching",
   "conv.updated": "Issue last updated:",
-  "conv.updatedHint": "When this issue was last updated in Redmine (not when this app fetched it)",
   "conv.uploadFailed": "Could not upload {name}: {reason}",
   "conv.uploading": "Uploading {name}…",
   "conv.watch": "Watch",
@@ -241,7 +240,7 @@
   "tree.unreadOnly": "Unread only",
   "tree.visibleRelations": "Issues to show",
   "tree.visibleRelationsAtLeastOne": "Choose at least one",
-  "tree.visibleRelationsHint": "Applies to the counts and unread numbers in the tree and to the list (not to notifications)",
+  "tree.visibleRelationsHint": "Applies to the counts and unread numbers in the tree, the list and the tray (not to notifications)",
   "welcome.addServer": "Add a Redmine server",
   "welcome.body": "Register your Redmine server to start following your issues.",
   "welcome.title": "Welcome to Remi"

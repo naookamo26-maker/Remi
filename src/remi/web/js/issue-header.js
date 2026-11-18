@@ -61,8 +61,7 @@ export class IssueHeader {
         h("div", { class: "actions" }, watchBtn, h("span", { class: "split" }, openBtn, moreBtn))),
       h("div", { class: "fields" },
         field("status_id"), field("assigned_to_id"), field("priority_id"),
-        // Redmine上でチケットが最後に更新された日時(このアプリが情報を取得した日時ではない)
-        h("span", { class: "static", title: t("conv.updatedHint") }, `${t("conv.updated")} `, h("b", {}, formatTime(d.updatedOn))),
+        h("span", { class: "static" }, `${t("conv.updated")} `, h("b", {}, formatTime(d.updatedOn))),
         rel ? h("span", { class: "static" }, `${t("conv.yourRelation")} `, h("b", {}, rel)) : null,
         this.readOnlyNote));
     this.fill();

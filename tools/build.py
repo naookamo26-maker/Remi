@@ -83,7 +83,6 @@ def main() -> None:
     subprocess.run(cmd, check=True, cwd=ROOT)
     out = DIST / APP_NAME
     shutil.copy(ROOT / "README.md", out / "README.md")
-    shutil.copy(ROOT / "CHANGELOG.md", out / "CHANGELOG.md")
     shutil.copy(ROOT / "LICENSE", out / "LICENSE.txt")
     archive = DIST / f"{APP_NAME}-{__version__}-win64.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:

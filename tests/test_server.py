@@ -237,6 +237,22 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     [server] = tree["servers"]
     assert server["count"] == 2 and server["unread"] == 0 and tree["unread"] == 0
     assert server["projects"][0]["count"] == 2
+    # 絞り込みボタンで絞ると、ツリーの件数・未読数とトレイの未読数も一覧と一致する
+    from remi.system.tray import Tray
+
+    tray = Tray(app.ctx, on_open=lambda: None, on_settings=lambda: None, on_sync=lambda: None, on_quit=lambda: None)
+    app.rpc("setSetting", key="visible_relations", value=["assigned", "group", "watching", "authored"])
+    app.rpc("setSetting", key="relation_filter", value="watching")
+    assert sorted(i["issueId"] for i in app.rpc("listIssues", relation="watching")["issues"]) == [11]
+    server = app.rpc("getTree")["servers"][0]
+    assert server["count"] == 1 and server["unread"] == 1 and tray.unread_total() == 1
+    app.rpc("setSetting", key="relation_filter", value="assigned")
+    server = app.rpc("getTree")["servers"][0]
+    assert server["count"] == 2 and server["unread"] == 0 and tray.unread_total() == 0
+    # 表示しないことにした関係で絞り込んでいたら「すべて」として扱う(画面ではボタンが隠れる)
+    app.rpc("setSetting", key="visible_relations", value=["watching"])
+    assert app.rpc("getTree")["servers"][0]["count"] == 1 and tray.unread_total() == 1
+    app.rpc("setSetting", key="relation_filter", value="all")
     # 自分の担当だけ: グループ経由の担当は外れる
     app.rpc("setSetting", key="visible_relations", value=["assigned"])
     assert ids() == [10]

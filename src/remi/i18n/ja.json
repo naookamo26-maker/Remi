@@ -57,7 +57,6 @@
   "conv.unreadFrom": "ここから未読",
   "conv.unwatchHint": "ウォッチをやめます",
   "conv.updated": "チケットの最終更新:",
-  "conv.updatedHint": "Redmine上でこのチケットが最後に更新された日時です(このアプリが情報を取得した日時ではありません)",
   "conv.uploadFailed": "{name} をアップロードできません: {reason}",
   "conv.uploading": "{name} をアップロード中…",
   "conv.watch": "ウォッチする",
@@ -236,7 +235,7 @@
   "tree.unreadOnly": "未読のみ",
   "tree.visibleRelations": "表示するチケット",
   "tree.visibleRelationsAtLeastOne": "少なくとも1つは選んでください",
-  "tree.visibleRelationsHint": "ツリーの件数・未読数と一覧に反映されます(通知には影響しません)",
+  "tree.visibleRelationsHint": "ツリーの件数・未読数、一覧、トレイの未読数に反映されます(通知には影響しません)",
   "welcome.addServer": "Redmineサーバーを登録",
   "welcome.body": "Redmineサーバーを登録すると、担当・ウォッチ中のチケットを監視できます。",
   "welcome.title": "Remiへようこそ"

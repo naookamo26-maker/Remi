@@ -26,7 +26,7 @@ from remi.paths import attachment_cache_dir
 from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
 from remi.server.tree import build_tree
-from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
+from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS, shown_relations
 from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
 from remi.store.servers import POLL_INTERVALS, Server
 
@@ -333,17 +333,15 @@ class RemiApi:
         if serverId and projectId:
             project_ids = {projectId} | self.ctx.projects.descendants(serverId, projectId)
         show_closed = bool(self.ctx.settings.get("show_closed"))
-        rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
-                                           unread_only=unreadOnly, search=search,
-                                           relations=self.ctx.settings.get("visible_relations"))
         if relation not in RELATION_FILTERS:
             raise RpcError("invalid_input", "relation")
-        want = RELATION_FILTERS[relation]
+        # 表示するチケットと絞り込みボタンの選択。ツリーの件数・未読数とトレイの未読数も同じもので数える
+        relations = shown_relations(self.ctx.settings.get("visible_relations"), relation)
+        rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
+                                           unread_only=unreadOnly, search=search, relations=relations)
         names: dict[int, dict[str, Any]] = {}
         out = []
         for r in rows:
-            if want and not r.relation_flags & want:
-                continue
             n = names.get(r.server_id)
             if n is None:
                 n = names[r.server_id] = {

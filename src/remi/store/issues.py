@@ -25,6 +25,25 @@ _RELATION_SQL = {
 }
 
 
+# 一覧の絞り込みボタン(設定 relation_filter)が選ぶ関係。グループ経由の担当は「担当」に含める
+FILTER_RELATIONS: dict[str, tuple[str, ...] | None] = {
+    "all": None, "assigned": ("assigned", "group"), "watching": ("watching",), "authored": ("authored",),
+}
+
+
+def shown_relations(visible: list[str] | None, relation_filter: str | None) -> list[str]:
+    """一覧に出す関係: 表示するチケット(visible)を、絞り込みボタン(relation_filter)でさらに絞ったもの。
+
+    一覧・ツリーの件数と未読数・トレイの未読数で同じものを使い、数を一致させる。
+    表示しないことにした関係で絞り込んでいたら(画面ではボタンが隠れる)「すべて」として扱う。
+    """
+    vis = [r for r in RELATIONS if visible is None or r in visible] or list(RELATIONS)
+    want = FILTER_RELATIONS.get(relation_filter or "all")
+    if want is None:
+        return vis
+    return [r for r in vis if r in want] or vis
+
+
 def relation_condition(include: list[str] | tuple[str, ...] | set[str] | None) -> str:
     """表示する関係(include)のどれかを持つチケットに絞るSQLの条件。None やすべての関係なら絞らない。"""
     if include is None or set(RELATIONS) <= set(include):

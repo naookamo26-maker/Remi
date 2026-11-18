@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from remi.context import AppContext
+from remi.store.issues import shown_relations
 from remi.store.projects import PROJECT_STATUS_ACTIVE, Project
 
 
@@ -24,8 +25,8 @@ def visible_projects(projects: list[Project], monitored_project_ids: set[int], s
 
 def build_tree(ctx: AppContext) -> dict[str, Any]:
     show_all = bool(ctx.settings.get("show_all_projects"))
-    # 件数・未読数は、表示するチケット(一覧と同じ選択)だけを数える
-    relations = ctx.settings.get("visible_relations")
+    # 件数・未読数は、一覧に出すチケット(表示するチケットと絞り込みボタンの選択)だけを数える
+    relations = shown_relations(ctx.settings.get("visible_relations"), ctx.settings.get("relation_filter"))
     servers_out = []
     total_unread = 0
     for s in ctx.servers.list(enabled_only=True):

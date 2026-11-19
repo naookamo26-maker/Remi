@@ -53,7 +53,11 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 "dueDate": v.due_date, "done": done, "total": total,
                 "changed": version_unread.get(v.version_id, 0) > 0, "synced": v.issues_synced,
             })
-        visible = visible_projects(projects, monitored | (set(versions) & set(by_id)), s.show_all_projects)
+        shown = monitored | (set(versions) & set(by_id))
+        visible = visible_projects(projects, shown, s.show_all_projects)
+        # 表示するものがなくて、ふだんは隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
+        hidden = len({p.project_id for p in projects if p.accessible and p.status == PROJECT_STATUS_ACTIVE}
+                     - visible_projects(projects, shown, False))
         children: dict[int | None, list[Project]] = {}
         for pid in visible:
             p = by_id[pid]
@@ -89,6 +93,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             "unread": s_unread,
             "count": sum(counts.values()),
             "showAllProjects": s.show_all_projects,
+            "hiddenProjects": hidden,
             # 表示するチケットの既定(プロジェクトで設定していなければこれを使う)と、既定から変えているか
             "relations": [r for r in RELATIONS if r in server_relations],
             "relationsOwn": s.visible_relations is not None,

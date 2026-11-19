@@ -63,8 +63,8 @@ export class Tree {
         style: { paddingLeft: `${8 + (opts.depth || 0) * 16}px` },
         title: opts.title || null,
         // 見出しだけの行(ロードマップ・終了したバージョン)は、押すと開閉する
-        onClick: () => (opts.toggleOnly ? this.toggle(token) : this.app.select(sel_)),
-        onContextmenu: (e) => { e.preventDefault(); if (!opts.toggleOnly) this.menu(e, sel_); },
+        onClick: () => (opts.onClick ? opts.onClick() : opts.toggleOnly ? this.toggle(token) : this.app.select(sel_)),
+        onContextmenu: (e) => { e.preventDefault(); if (!opts.toggleOnly && !opts.onClick) this.menu(e, sel_); },
       },
         // 開閉の ▼ ▶ の場所には、開閉できない行ではアイコン(バージョンの旗)を置く
         h("span", { class: "twisty", onClick: hasKids ? (e) => { e.stopPropagation(); this.toggle(token); } : null },
@@ -151,6 +151,15 @@ export class Tree {
           dot: s.unread ? { kind: "changed", label: t("tree.unreadCount", { count: s.unread }) } : null }),
         ...s.projects.map((p) => project(p, 1)),
       ] : [];
+      // Teams の「非表示のチャネル」のように、プロジェクトの下に、隠れているプロジェクトを出す・隠すリンクを置く
+      if (s.showAllProjects || s.hiddenProjects) {
+        kids.push(node(s.showAllProjects ? t("tree.hideEmptyProjects") : t("tree.showAllProjects"),
+          { kind: "toggleProjects", serverId: s.serverId }, {
+            depth: 1, header: true, noTools: true, cls: "link-row", count: s.showAllProjects ? null : s.hiddenProjects,
+            title: t("tree.showAllProjectsHint"),
+            onClick: () => call("setServerSetting", { serverId: s.serverId, key: "show_all_projects",
+              value: !s.showAllProjects }).then(() => this.refresh()) }));
+      }
       const dotLabel = s.status === "error" ? t("tree.statusError") : s.status === "ok" ? t("tree.statusOk") : null;
       const server = node(s.name, { kind: "server", serverId: s.serverId }, {
         icon: "server", cls: "server", header: true, token: `s:${s.serverId}`, children: kids,
@@ -336,8 +345,8 @@ export class Tree {
         onClick: () => {
           const next = target.relations.includes(rel) ? target.relations.filter((r) => r !== rel)
             : RELATIONS.filter((r) => r === rel || target.relations.includes(r));
-          // すべて外してもよい(そのプロジェクトはツリーから消える)。消える前に、戻し方を伝える
-          if (!next.length) toast(t("tree.visibleRelationsNoneToast"));
+          // すべて外してもよい(表示するものがないプロジェクトはツリーから消える。戻すには、サーバーの下の
+          // 「すべてのプロジェクトを表示」のリンクを使う)
           save(next, label);
         },
       });

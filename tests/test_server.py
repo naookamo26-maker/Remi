@@ -308,9 +308,12 @@ def test_show_all_projects_per_server(app, fake):
     names = lambda i: [p["name"] for p in app.rpc("getTree")["servers"][i]["projects"]]  # noqa: E731
     assert wait_until(lambda: names(0) == ["チケットあり"] and names(1) == ["チケットあり"])
     assert app.rpc("getTree")["servers"][0]["showAllProjects"] is False
+    # 隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
+    assert app.rpc("getTree")["servers"][0]["hiddenProjects"] == 1
     app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=True)
     tree = app.rpc("getTree")
     assert tree["servers"][0]["showAllProjects"] is True
+    assert tree["servers"][0]["hiddenProjects"] == 1  # 表示していても、「隠す」リンクのために数える
     assert names(0) == ["チケットあり", "チケットなし"]
     assert names(1) == ["チケットあり"]  # ほかのサーバーには効かない
     assert app.ctx.servers.get(other).show_all_projects is False
@@ -341,9 +344,11 @@ def test_empty_relations_hide_project_from_tree(app, fake):
     app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=True)
     assert names() == ["A", "B"]
     app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=False)
+    assert app.rpc("getTree")["servers"][0]["hiddenProjects"] == 1
     # サーバーの既定もすべて外せる。独自の設定があるプロジェクトだけが残る
     app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=[])
     assert names() == []
+    assert app.rpc("getTree")["servers"][0]["hiddenProjects"] == 2
     app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=["assigned"])
     assert names() == ["A"]
     tree = app.rpc("getTree")["servers"][0]

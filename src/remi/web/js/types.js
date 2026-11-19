@@ -22,6 +22,7 @@
  * @property {number} unread
  * @property {number} count
  * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか(サーバーごと)
+ * @property {number} hiddenProjects      表示するものがなくて、ふだんは隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
  * @property {Relation[]} relations        表示するチケットの既定(プロジェクトで設定していなければこれを使う)
  * @property {boolean} relationsOwn        表示するチケットの既定を、すべてから変えているか
  * @property {TreeProject[]} projects

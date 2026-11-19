@@ -26,6 +26,7 @@ def visible_projects(projects: list[Project], monitored_project_ids: set[int], s
 def build_tree(ctx: AppContext) -> dict[str, Any]:
     # 件数・未読数は、一覧に出すチケット(プロジェクトごとの表示するチケットと絞り込みボタンの選択)だけを数える
     scope = ctx.relation_scope()
+    scope_all = ctx.relation_scope("all")
     servers_out = []
     total_unread = 0
     for s in ctx.servers.list(enabled_only=True):
@@ -35,11 +36,12 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
         unread = ctx.issues.unread_by_project(sid, scope)
         counts = ctx.issues.count_by_project(sid, scope)
         relations = ctx.projects.visible_relations_map(sid)
-        server_relations = s.visible_relations or list(RELATIONS)  # サーバーの既定
+        server_relations = list(RELATIONS) if s.visible_relations is None else s.visible_relations  # サーバーの既定
         own = ctx.projects.own_visible_relations(sid)
-        # 表示するプロジェクトは、表示の選択で隠したチケットも含めて決める(選択を変えるたびに
-        # ツリーの形が変わらないように)
-        monitored = set(ctx.issues.count_by_project(sid))
+        # 表示するプロジェクトは、プロジェクトごとの「表示するチケット」に合うチケットがあるものと、ロードマップ
+        # (バージョン)があるもの。一覧の絞り込みボタンでは変わらない(ボタンを押すたびにツリーの形が変わらないように)。
+        # すべての関係を外したプロジェクトは、ここで消える
+        monitored = set(ctx.issues.count_by_project(sid, scope_all))
         # ウォッチしているバージョンは、それを持つプロジェクトの下に出す(チケットがなくてもプロジェクトを出す)
         versions: dict[int, list[dict[str, Any]]] = {}
         progress = ctx.versions.progress(sid)

@@ -101,11 +101,11 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .node-error { margin: 2px 8px 4px 34px; padding: 6px 8px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-fg); font-size: 11px; }
 .tree-footer { padding: 6px 10px; border-top: 1px solid var(--border); }
 .tree-footer:has(.sync-status:empty) { display: none; }
-/* 行の右端は「件数 | フィルタ | 歯車」の決まった幅の列。件数の桁が違っても、ボタンが縦にそろう */
+/* 行の右端は「歯車 | フィルタ | 件数」の決まった幅の列(件数が一番右)。件数の桁が違っても、ボタンが縦にそろう */
 .node-count { flex: none; min-width: 34px; display: flex; justify-content: flex-end; }
 .node-tool-slot { flex: none; width: 20px; }
-/* 件数・フィルタ・歯車は1組として詰めて並べる(行の gap 6px を打ち消す。件数との間は 2px、ボタンの間は 0) */
-.node .node-count + :is(.node-tool, .node-tool-slot) { margin-left: -4px; }
+/* 歯車・フィルタ・件数は1組として詰めて並べる(行の gap 6px を打ち消す。フィルタと件数の間は 2px、ボタンの間は 0) */
+.node :is(.node-tool, .node-tool-slot) + .node-count { margin-left: -4px; }
 .node :is(.node-tool, .node-tool-slot) + :is(.node-tool, .node-tool-slot) { margin-left: -6px; }
 /* プロジェクトの横の「表示するチケット」・設定のボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
    フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ。場所は空けておく) */
@@ -278,11 +278,12 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
   color: var(--text-muted); font-size: 12px; cursor: pointer; white-space: nowrap; padding: 0 6px; }
 .segmented button:last-child { border-right: 0; }
 .segmented button[aria-pressed=true] { background: var(--selection); color: var(--text); font-weight: 600; }
-.conv-header .actions { display: flex; gap: 6px; flex: none; }
-.split { display: inline-flex; }
-.split .btn:first-child { border-radius: 6px 0 0 6px; }
-.split .btn:last-child { border-radius: 0 6px 6px 0; border-left: 0; padding: 0 8px; }
+/* ウォッチ(星)と「Redmineで開く」は、アイコンだけのボタンを縦に並べて、件名の幅を広く使う */
+.conv-header .actions { display: flex; flex-direction: column; gap: 4px; flex: none; }
+.conv-header .actions .btn.icon-only { width: 30px; min-height: 30px; }
+.conv-header .actions svg.icon { width: 16px; height: 16px; }
 .btn.on { border-color: var(--accent); color: var(--accent); }
+.btn.watch.on svg.icon { fill: currentColor; }
 .fields { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12px; color: var(--text-muted); }
 .fields label { display: inline-flex; align-items: center; gap: 6px; }
 .fields select { height: 28px; max-width: 220px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px;
@@ -333,7 +334,7 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 /* ---- コメントの編集・削除、添付の削除 ---- */
 .msg-menu { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 6px; border-radius: 4px;
   font-size: 14px; line-height: 18px; opacity: 0; }
-.msg:hover .msg-menu, .msg-menu:focus-visible { opacity: 1; }
+.msg:hover .msg-menu, .change-list li:hover .msg-menu, .system:hover > .msg-menu, .msg-menu:focus-visible { opacity: 1; }
 .msg-menu:hover { background: var(--surface); color: var(--text); }
 .note-editor { display: flex; flex-direction: column; gap: 8px; width: min(640px, 70vw); }
 .note-editor textarea { min-height: 90px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
@@ -341,5 +342,3 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .note-editor .actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .note-editor .actions .spacer { flex: 1; }
 .note-editor .actions label { display: flex; align-items: center; gap: 4px; }
-.link-button { border: 0; background: transparent; padding: 0 2px; font-size: 11px; cursor: pointer; color: var(--link); text-decoration: underline; }
-.link-button.danger { color: var(--danger); }

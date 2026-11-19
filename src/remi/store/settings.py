@@ -13,6 +13,7 @@ DEFAULTS: dict[str, Any] = {
     "notify_enabled": True,
     "autostart": False,
     "show_closed": False,
+    "version_show_closed": True,  # マイルストーン(バージョン)を開いたときの「クローズ済みも表示」。一覧とは別
     "closed_retention_days": 7,
     "unread_first": True,
     "allow_external_images": False,

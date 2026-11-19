@@ -530,12 +530,13 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("1")
     assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
-    # 子プロジェクトは親の設定を継承していることを示す
-    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
+    # 子プロジェクトは、ウォッチだけのチケットが外れて表示するものがなくなるので、ツリーから消える
+    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_count(0)
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 基幹システム")).to_have_class(re.compile("own"))
-    # サーバーと同じに戻すと、独自の設定は消える
+    # サーバーと同じに戻すと、独自の設定は消え、子プロジェクトも戻る
     menu.get_by_role("button", name="サーバーと同じ").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_count(1)
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("2")
     page.keyboard.press("Escape")
     assert remi.ctx.projects.own_visible_relations(1) == {}

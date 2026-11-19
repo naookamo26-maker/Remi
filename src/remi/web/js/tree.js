@@ -1,6 +1,6 @@
 // 左ペイン: サーバー / プロジェクトのツリー(設計書 §3.2、モック「メインウィンドウ」左)
 import { call } from "./api.js";
-import { clear, countText, h, toast } from "./dom.js";
+import { clear, h, toast } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
@@ -55,6 +55,9 @@ export class Tree {
       const token = opts.token;
       // 既定で畳んでおく項目(終了したバージョン)は、開いたときだけ token を覚える
       const isCollapsed = token && (opts.collapsedByDefault ? !collapsed.has(token) : collapsed.has(token));
+      // 変化の印(青い丸)。dotCollapsed / dotExpanded は、畳んでいるとき・開いているときに出すか
+      const dot = opts.dot ? opts.dot
+        : (hasKids && isCollapsed ? opts.dotCollapsed : opts.dotExpanded) || null;
       const row = h("div", {
         class: ["node", opts.cls, key === sel && !opts.header ? "selected" : ""].filter(Boolean).join(" "),
         style: { paddingLeft: `${8 + (opts.depth || 0) * 16}px` },
@@ -63,19 +66,17 @@ export class Tree {
         onClick: () => (opts.toggleOnly ? this.toggle(token) : this.app.select(sel_)),
         onContextmenu: (e) => { e.preventDefault(); if (!opts.toggleOnly) this.menu(e, sel_); },
       },
+        // 開閉の ▼ ▶ の場所には、開閉できない行ではアイコン(バージョンの旗)を置く
         h("span", { class: "twisty", onClick: hasKids ? (e) => { e.stopPropagation(); this.toggle(token); } : null },
-          hasKids ? (isCollapsed ? "▶" : "▼") : ""),
+          hasKids ? (isCollapsed ? "▶" : "▼") : opts.twistyIcon ? icon(opts.twistyIcon) : ""),
         opts.icon ? icon(opts.icon) : null,
         h("span", { class: "name" }, label),
-        opts.dot ? h("span", { class: `dot ${opts.dot}`, title: opts.dotLabel, "aria-label": opts.dotLabel }) : null,
-        // 右端は「歯車 | フィルタ | 件数」の決まった幅の列にして、件数の桁が違っても縦にそろえる(件数が一番右)。
-        // ボタンのない行も同じ幅を空けておく(ロードマップ・バージョンの行は、名前を広く出すため空けない)
-        opts.noTools ? null : opts.gear || h("span", { class: "node-tool-slot", "aria-hidden": "true" }),
-        opts.noTools ? null : opts.filter || h("span", { class: "node-tool-slot", "aria-hidden": "true" }),
-        h("span", { class: "node-count" },
-          opts.progress ? h("span", { class: "count" }, opts.progress) : null,
-          opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
-            : (opts.count ? h("span", { class: "count" }, opts.count) : null)));
+        // 件数は名前のすぐ右に、(5) のように控えめに出す(バージョンは 完了/全体)
+        opts.count ? h("span", { class: "count-inline" }, `(${opts.count})`) : null,
+        // 変化の印は青い丸だけ。親(畳んでいる行)では、中の変化も拾う。開いている行は、自分の分だけ
+        dot ? h("span", { class: `dot ${dot.kind}`, title: dot.label, "aria-label": dot.label }) : null,
+        // 右端は、歯車とフィルタだけ(ふだんは行にマウスを乗せたときだけ見える)
+        opts.gear || opts.filter ? h("span", { class: "node-tools" }, opts.gear, opts.filter) : null);
       const li = h("li", { role: "treeitem", "aria-selected": String(key === sel && !opts.header),
         dataset: { key: opts.header ? "" : key, token: hasKids ? token : "" },
         "aria-expanded": hasKids ? String(!isCollapsed) : null }, row);
@@ -84,49 +85,70 @@ export class Tree {
     };
 
     if (data.servers.length !== 1) {
-      this.el.append(node(t("tree.allServers"), { kind: "all" }, { unread: data.unread, icon: "menu", cls: "all" }));
+      this.el.append(node(t("tree.allServers"), { kind: "all" }, { icon: "menu", cls: "all",
+        dot: data.unread ? { kind: "changed", label: t("tree.unreadCount", { count: data.unread }) } : null }));
     }
     for (const s of data.servers) {
-      // バージョン: 変化があれば印を付け、完了数/全体を出す。終了したものは、畳んだ「終了したバージョン」の下に出す
+      // バージョン: 変化があれば青い丸を付け、(完了数/全体) を名前の右に出す。旗は ▼ の場所に置く。
+      // 終了したものは、畳んだ「終了したバージョン」の下に出す
       const version = (p, v, depth) => node(v.name, { kind: "version", serverId: s.serverId, versionId: v.versionId }, {
-        depth, noTools: true, icon: "flag", cls: ["version", v.changed ? "changed" : "", v.closed ? "closed" : ""].join(" "),
+        depth, noTools: true, twistyIcon: "flag", cls: ["version", v.closed ? "closed" : ""].filter(Boolean).join(" "),
         title: [v.dueDate ? t("tree.versionDue", { date: v.dueDate }) : "",
           v.synced ? "" : t(v.closed ? "tree.versionNotFetched" : "tree.versionLoading")]
           .filter(Boolean).join("\n") || null,
-        dot: v.changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
+        dot: v.changed ? { kind: "changed", label: t("tree.versionChanged") } : null,
         // チケットをまだ取得していないバージョンは 0/0 ではなく「…」にする(空のバージョンと見分ける)
-        progress: v.synced ? `${v.done}/${v.total}` : "…",
+        count: v.synced ? `${v.done}/${v.total}` : "…",
       });
-      // プロジェクトの下に「ロードマップ」を置き、その中にバージョンを並べる
-      const roadmap = (p, depth) => {
-        if (!p.versions.length) return [];
-        const kids = p.versions.filter((v) => !v.closed).map((v) => version(p, v, depth + 1));
+      // バージョンの並び(終了したものは、畳んだ「終了したバージョン」にまとめる)。depth は並べる階層
+      const versionNodes = (p, depth) => {
+        const kids = p.versions.filter((v) => !v.closed).map((v) => version(p, v, depth));
         const closed = p.versions.filter((v) => v.closed);
         if (closed.length) {
+          const closedChanged = closed.some((v) => v.changed);
           kids.push(node(t("tree.closedVersions", { count: closed.length }), { kind: "closedVersions", serverId: s.serverId,
-            projectId: p.projectId }, { depth: depth + 1, header: true, toggleOnly: true, collapsedByDefault: true, noTools: true,
+            projectId: p.projectId }, { depth, header: true, toggleOnly: true, collapsedByDefault: true, noTools: true,
             cls: "version-group", token: `vc:${s.serverId}:${p.projectId}`,
-            children: closed.map((v) => version(p, v, depth + 2)) }));
+            dotCollapsed: closedChanged ? { kind: "changed", label: t("tree.versionChanged") } : null,
+            children: closed.map((v) => version(p, v, depth + 1)) }));
         }
+        return kids;
+      };
+      // 子プロジェクトがあるプロジェクトだけ、「ロードマップ」の見出しでバージョンをまとめる
+      // (子プロジェクトと並んで混ざらないように)。子がなければ、バージョンをプロジェクトの直下に並べる
+      const roadmap = (p, depth) => {
+        if (!p.versions.length) return [];
+        if (!p.children.length) return versionNodes(p, depth);
         // 畳んでいても気づけるよう、中のバージョンに変化があればロードマップにも印を付ける
         const changed = p.versions.some((v) => v.changed);
         return [node(t("tree.roadmap"), { kind: "roadmap", serverId: s.serverId, projectId: p.projectId }, {
-          depth, header: true, toggleOnly: true, noTools: true, icon: "flag", cls: `roadmap${changed ? " changed" : ""}`,
-          token: `rm:${s.serverId}:${p.projectId}`, dot: changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
-          children: kids })];
+          depth, header: true, toggleOnly: true, noTools: true, cls: "roadmap",
+          token: `rm:${s.serverId}:${p.projectId}`,
+          dotCollapsed: changed ? { kind: "changed", label: t("tree.versionChanged") } : null,
+          children: versionNodes(p, depth + 1) })];
       };
-      const project = (p, depth) => node(p.name, { kind: "project", serverId: s.serverId, projectId: p.projectId }, {
-        depth, unread: p.unread, count: p.unread ? 0 : p.count, token: `p:${s.serverId}:${p.projectId}`,
-        cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : ""].join(" "),
-        title: !p.accessible ? t("tree.noAccess") : null,
-        filter: this.relationsButton(s, p, depth),
-        gear: this.settingsButton(s, p),
-        children: [...roadmap(p, depth + 1), ...p.children.map((c) => project(c, depth + 1))],
-      });
+      // 中(子プロジェクト・バージョン)に、未読のコメントやバージョンの変化があるか
+      const changedBelow = (p) => p.unread > 0 || p.versions.some((v) => v.changed) || p.children.some(changedBelow);
+      const project = (p, depth) => {
+        // 開いているときは自分の未読だけ(子の分は、子の行に出る)。畳んでいるときは中の変化も含める
+        const own = p.unread - p.children.reduce((sum, c) => sum + c.unread, 0);
+        return node(p.name, { kind: "project", serverId: s.serverId, projectId: p.projectId }, {
+          depth, count: p.count || null, token: `p:${s.serverId}:${p.projectId}`,
+          cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : ""].join(" "),
+          title: !p.accessible ? t("tree.noAccess") : null,
+          dotExpanded: own > 0 ? { kind: "changed", label: t("tree.unreadCount", { count: own }) } : null,
+          dotCollapsed: changedBelow(p) ? { kind: "changed", label: p.unread > 0 && !p.versions.some((v) => v.changed)
+            ? t("tree.unreadCount", { count: p.unread }) : t("tree.changedInside") } : null,
+          filter: this.relationsButton(s, p, depth),
+          gear: this.settingsButton(s, p),
+          children: [...roadmap(p, depth + 1), ...p.children.map((c) => project(c, depth + 1))],
+        });
+      };
       // 表示するものがない(プロジェクトが1つもない)サーバーには、「すべて」「未読のみ」も出さない
       const kids = s.projects.length ? [
-        node(t("tree.all"), { kind: "server", serverId: s.serverId }, { depth: 1, count: s.count }),
-        node(t("tree.unreadOnly"), { kind: "unread", serverId: s.serverId }, { depth: 1, unread: s.unread }),
+        node(t("tree.all"), { kind: "server", serverId: s.serverId }, { depth: 1, count: s.count || null }),
+        node(t("tree.unreadOnly"), { kind: "unread", serverId: s.serverId }, { depth: 1, count: s.unread || null,
+          dot: s.unread ? { kind: "changed", label: t("tree.unreadCount", { count: s.unread }) } : null }),
         ...s.projects.map((p) => project(p, 1)),
       ] : [];
       const dotLabel = s.status === "error" ? t("tree.statusError") : s.status === "ok" ? t("tree.statusOk") : null;

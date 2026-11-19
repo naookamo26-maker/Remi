@@ -246,6 +246,7 @@
   "tree.all": "すべて",
   "tree.allServers": "すべてのサーバー",
   "tree.cannotSync": "同期できません。",
+  "tree.changedInside": "中に未読のコメントやバージョンの変化があります",
   "tree.closedVersions": "終了したバージョン ({count})",
   "tree.label": "サーバーとプロジェクト",
   "tree.lastSynced": "最終同期 {time}",

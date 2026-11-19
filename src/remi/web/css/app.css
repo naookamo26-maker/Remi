@@ -86,29 +86,26 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
   user-select: none; white-space: nowrap; }
 .node:hover { background: color-mix(in srgb, var(--selection) 60%, transparent); }
 .node.selected { background: var(--selection); font-weight: 600; }
-.node .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.node .twisty { width: 14px; flex: none; color: var(--text-muted); font-size: 10px; text-align: center; }
+.node .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.node .twisty { width: 14px; flex: none; color: var(--text-muted); font-size: 10px; text-align: center; display: grid; place-items: center; }
+.node .twisty svg.icon { width: 14px; height: 14px; }
+/* 件数は名前のすぐ右に、グレーの (5) で出す。名前が長いときは名前を省略して、件数と丸は残す */
+.node .count-inline { flex: none; margin-left: -2px; color: var(--text-muted); font-size: 12px; font-weight: 400; }
 .node.server { font-weight: 700; margin-top: 8px; }
 .node.inaccessible .name, .node.inactive .name { color: var(--text-muted); }
-/* バージョン: 変化があるものは太字と点で示す。終了したものは控えめに */
+/* バージョン: 変化の印は青い丸だけ(太字にはしない)。終了したものは控えめに */
 .node.version .name { font-size: 12px; }
-.node.version.changed .name { font-weight: 700; }
+.node.version .twisty { color: var(--text-muted); }
 .node.version.closed .name { color: var(--text-muted); }
 .node.version-group .name { font-size: 12px; color: var(--text-muted); }
 .node.roadmap .name { font-size: 12px; color: var(--text-muted); }
-.node.roadmap svg.icon { width: 14px; height: 14px; color: var(--text-muted); }
-.node.roadmap.changed .name { color: var(--text); font-weight: 700; }
 .node-error { margin: 2px 8px 4px 34px; padding: 6px 8px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-fg); font-size: 11px; }
 .tree-footer { padding: 6px 10px; border-top: 1px solid var(--border); }
 .tree-footer:has(.sync-status:empty) { display: none; }
-/* 行の右端は「歯車 | フィルタ | 件数」の決まった幅の列(件数が一番右)。件数の桁が違っても、ボタンが縦にそろう */
-.node-count { flex: none; min-width: 34px; display: flex; justify-content: flex-end; }
-.node-tool-slot { flex: none; width: 20px; }
-/* 歯車・フィルタ・件数は1組として詰めて並べる(行の gap 6px を打ち消す。フィルタと件数の間は 2px、ボタンの間は 0) */
-.node :is(.node-tool, .node-tool-slot) + .node-count { margin-left: -4px; }
-.node :is(.node-tool, .node-tool-slot) + :is(.node-tool, .node-tool-slot) { margin-left: -6px; }
-/* プロジェクトの横の「表示するチケット」・設定のボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
-   フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ。場所は空けておく) */
+/* 行の右端は、歯車とフィルタだけ。右端にそろえるので、どの行でも縦にそろう */
+.node-tools { flex: none; display: flex; margin-left: auto; }
+/* プロジェクトの横の設定・「表示するチケット」のボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
+   フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ) */
 .node-tool { flex: none; display: grid; place-items: center; width: 20px; height: 22px; padding: 0; border: 0; border-radius: 4px;
   background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
 .node-tool svg.icon { width: 13px; height: 13px; }

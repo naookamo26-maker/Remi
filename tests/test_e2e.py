@@ -155,7 +155,9 @@ def test_conversation_post_and_live_update(page, remi, fake):
     remi.sync.sync_now()
     row = page.locator(".issue", has_text="メールの宛先")
     playwright_api.expect(row.locator(".badge")).to_have_text("1", timeout=30000)
-    playwright_api.expect(page.locator(".node", has_text="未読のみ").locator(".badge")).to_have_text("1")
+    unread_row = page.locator(".node", has_text="未読のみ")
+    playwright_api.expect(unread_row.locator(".count-inline")).to_have_text("(1)")
+    playwright_api.expect(unread_row.locator(".dot.changed")).to_have_count(1)
     row.click()
     playwright_api.expect(row.locator(".badge")).to_have_count(0, timeout=10000)
     assert not page.errors, page.errors
@@ -528,7 +530,7 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     playwright_api.expect(page.locator(".issue")).to_have_count(1)
     menu = page.get_by_role("menu")
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
-    playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("1")
+    playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count-inline")).to_have_text("(1)")
     assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
     # 子プロジェクトは親の設定を継承していることを示す(担当のチケットが残るので、ツリーにも残る)
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
@@ -536,7 +538,7 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     # サーバーと同じに戻すと、独自の設定は消える
     menu.get_by_role("button", name="サーバーと同じ").click()
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
-    playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count")).to_have_text("2")
+    playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count-inline")).to_have_text("(2)")
     page.keyboard.press("Escape")
     assert remi.ctx.projects.own_visible_relations(1) == {}
     # 「すべてのプロジェクトを表示」は、サーバーの右クリックメニューで、サーバーごとに切り替える
@@ -588,19 +590,21 @@ def test_roadmap_versions(page, remi, fake):
     row.hover()
     row.locator(".node-gear").click()
     page.get_by_role("group", name="未完了のバージョンをウォッチ").get_by_role("button", name="オン").click()
-    roadmap = page.locator(".tree .node.roadmap").first
-    playwright_api.expect(roadmap).to_be_visible(timeout=20000)
     version = page.locator(".tree .node.version", has_text="v1.0")
-    playwright_api.expect(version).to_be_visible()
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    # 子プロジェクトのないプロジェクトでは、「ロードマップ」の行を出さず、バージョンを直下に並べる
+    playwright_api.expect(page.locator(".tree .node.roadmap")).to_have_count(0)
+    # 旗は、開閉の ▼ と同じ場所に出す
+    playwright_api.expect(version.locator(".twisty svg")).to_have_count(1)
     # 終了したバージョンは畳んでおく
     playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_have_count(0)
     page.locator(".tree .node.version-group").click()
     closed = page.locator(".tree .node.version", has_text="v0.9")
     playwright_api.expect(closed).to_be_visible()
     # 終了したバージョンのチケットは、開いたときに初めて取得する(それまでは件数を「…」で出す)
-    playwright_api.expect(closed.locator(".node-count")).to_have_text("…")
+    playwright_api.expect(closed.locator(".count-inline")).to_have_text("(…)")
     closed.click()
-    playwright_api.expect(closed.locator(".node-count")).to_have_text("0/0", timeout=20000)
+    playwright_api.expect(closed.locator(".count-inline")).to_have_text("(0/0)", timeout=20000)
     # バージョンを選ぶと、関係ないチケットも一覧に出て、右に概要が出る(ほかの一覧の件数は変わらない)
     version.click()
     playwright_api.expect(page.locator(".issue")).to_have_count(1)
@@ -618,14 +622,19 @@ def test_roadmap_versions(page, remi, fake):
     playwright_api.expect(conv.locator("h1")).to_contain_text("関係ないチケット", timeout=15000)
     version.click()
     playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
-    # 別の項目を選ぶと閉じる。ロードマップを畳んでも、変化があれば印が出る
+    # 別の項目を選ぶと閉じる。プロジェクトを畳んでも、中のバージョンに変化があれば、親に青い丸が出る
     page.locator(".tree .node", has_text="すべて").first.click()
     playwright_api.expect(conv.locator("h1")).to_have_count(0)
-    roadmap.click()
+    project = page.locator(".tree .node", has_text="受注管理").first
+    project.locator(".twisty").click()
     playwright_api.expect(version).to_have_count(0)
     fake.set_version(20, None)
     remi.sync.sync_now()
-    playwright_api.expect(roadmap.locator(".dot.changed")).to_be_visible(timeout=20000)
+    playwright_api.expect(project.locator(".dot.changed")).to_be_visible(timeout=20000)
+    # 開くと、丸は実際の場所(バージョン)に移る
+    project.locator(".twisty").click()
+    playwright_api.expect(project.locator(".dot.changed")).to_have_count(0)
+    playwright_api.expect(version.locator(".dot.changed")).to_be_visible()
     assert not page.errors, page.errors
 
 

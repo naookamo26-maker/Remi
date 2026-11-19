@@ -250,6 +250,7 @@
   "tree.all": "All",
   "tree.allServers": "All servers",
   "tree.cannotSync": "Cannot sync.",
+  "tree.changedInside": "Unread comments or version changes inside",
   "tree.closedVersions": "Closed versions ({count})",
   "tree.label": "Servers and projects",
   "tree.lastSynced": "Last synced {time}",

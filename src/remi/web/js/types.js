@@ -52,7 +52,7 @@
  * @property {number} done                 完了したチケットの数
  * @property {number} total                チケットの数
  * @property {boolean} changed             まだ見ていない変化があるか
- * @property {boolean} synced              チケットの一覧を取得済みか(まだなら件数を「…」で出す)
+ * @property {boolean} synced              チケットの一覧を取得済みか(まだなら件数を「…」で出す。終了したものは開いたときに取得する)
  */
 
 /**
@@ -70,6 +70,7 @@
  * @property {number} total
  * @property {string} url                  Redmineのバージョンのページ
  * @property {VersionEvent[]} events       古い順
+ * @property {boolean} synced              チケットの一覧を取得済みか(終了したバージョンは開いたときに取得する)
  */
 
 /**

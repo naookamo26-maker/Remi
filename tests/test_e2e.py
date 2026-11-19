@@ -195,13 +195,13 @@ def test_theme_and_language_switch(page, remi, fake):
     seed(fake)
     add_server(remi, fake)
     page.goto(remi.server.start_url)
-    page.get_by_role("button", name="設定").first.click()
+    page.get_by_role("button", name="設定", exact=True).click()
     dialog = page.get_by_role("dialog", name="設定")
     dialog.get_by_label("外観").select_option("dark")
     playwright_api.expect(page.locator("html")).to_have_class("theme-dark")
     dialog.get_by_label("言語").select_option("en")
     page.wait_for_load_state()
-    playwright_api.expect(page.get_by_role("button", name="Settings")).to_be_visible(timeout=10000)
+    playwright_api.expect(page.get_by_role("button", name="Settings", exact=True)).to_be_visible(timeout=10000)
     playwright_api.expect(page.locator(".tree")).to_contain_text("Unread only")
 
 
@@ -209,7 +209,15 @@ def test_project_menu_sets_watch_authored(page, remi, fake):
     seed(fake)
     add_server(remi, fake)
     page.goto(remi.server.start_url)
-    page.locator(".node", has_text="基幹システム").click(button="right")
+    # 設定は行の右端の歯車から開く(右クリックのメニューには出さない)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.click(button="right")
+    playwright_api.expect(page.get_by_role("menu")).to_contain_text("すべて既読にする")
+    playwright_api.expect(page.get_by_role("menu").get_by_role("group", name="作成したチケットを監視")).to_have_count(0)
+    page.keyboard.press("Escape")
+    playwright_api.expect(page.get_by_role("menu")).to_have_count(0)
+    row.hover()
+    row.locator(".node-gear").click()
     menu = page.get_by_role("menu")
     group = menu.get_by_role("group", name="作成したチケットを監視")
     group.get_by_role("button", name="オン").click()
@@ -372,7 +380,7 @@ def test_tree_toggle_and_settings_tabs(page, remi, fake):
     assert remi.ctx.settings.get("tree_collapsed") == []
 
     # 設定ダイアログ: タブを切り替えても、変更後の値が表示される
-    page.get_by_role("button", name="設定").click()
+    page.get_by_role("button", name="設定", exact=True).click()
     dialog = page.get_by_role("dialog")
     dialog.get_by_label("外観").select_option("dark")
     playwright_api.expect(page.locator("html")).to_have_class("theme-dark")
@@ -575,8 +583,10 @@ def test_roadmap_versions(page, remi, fake):
     add_server(remi, fake)
     page.goto(remi.server.start_url)
     playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
-    # プロジェクトの右クリックメニューで「未完了のバージョンをウォッチ」をオンにする
-    page.locator(".tree .node", has_text="基幹システム").click(button="right")
+    # プロジェクトの歯車のメニューで「未完了のバージョンをウォッチ」をオンにする
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
     page.get_by_role("group", name="未完了のバージョンをウォッチ").get_by_role("button", name="オン").click()
     roadmap = page.locator(".tree .node.roadmap").first
     playwright_api.expect(roadmap).to_be_visible(timeout=20000)
@@ -585,7 +595,12 @@ def test_roadmap_versions(page, remi, fake):
     # 終了したバージョンは畳んでおく
     playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_have_count(0)
     page.locator(".tree .node.version-group").click()
-    playwright_api.expect(page.locator(".tree .node.version", has_text="v0.9")).to_be_visible()
+    closed = page.locator(".tree .node.version", has_text="v0.9")
+    playwright_api.expect(closed).to_be_visible()
+    # 終了したバージョンのチケットは、開いたときに初めて取得する(それまでは件数を「…」で出す)
+    playwright_api.expect(closed.locator(".node-count")).to_have_text("…")
+    closed.click()
+    playwright_api.expect(closed.locator(".node-count")).to_have_text("0/0", timeout=20000)
     # バージョンを選ぶと、関係ないチケットも一覧に出て、右に概要が出る(ほかの一覧の件数は変わらない)
     version.click()
     playwright_api.expect(page.locator(".issue")).to_have_count(1)

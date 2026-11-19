@@ -101,13 +101,16 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .node-error { margin: 2px 8px 4px 34px; padding: 6px 8px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-fg); font-size: 11px; }
 .tree-footer { padding: 6px 10px; border-top: 1px solid var(--border); }
 .tree-footer:has(.sync-status:empty) { display: none; }
-/* プロジェクトの横の「表示するチケット」ボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
-   フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ) */
-.node-filter { flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+/* 行の右端は「件数 | フィルタ | 歯車」の決まった幅の列。件数の桁が違っても、ボタンが縦にそろう */
+.node-count { flex: none; min-width: 34px; display: flex; justify-content: flex-end; }
+.node-tool-slot { flex: none; width: 22px; }
+/* プロジェクトの横の「表示するチケット」・設定のボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
+   フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ。場所は空けておく) */
+.node-tool { flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
   background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
-.node-filter svg.icon { width: 13px; height: 13px; }
-.node-filter:hover { background: var(--window); color: var(--text); }
-.node:hover .node-filter, .node-filter:focus-visible, .node-filter.own { opacity: 1; }
+.node-tool svg.icon { width: 13px; height: 13px; }
+.node-tool:hover { background: var(--window); color: var(--text); }
+.node:hover .node-tool, .node-tool:focus-visible, .node-filter.own { opacity: 1; }
 .node-filter.inherited { opacity: .7; }
 .node-filter.own { color: var(--accent); }
 .node-filter.own svg.icon { fill: currentColor; }

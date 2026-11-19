@@ -44,8 +44,13 @@ def test_watch_versions_records_changes(setup, fake, db):
     assert sync.sync_versions() == {10, 11}
     assert {v.version_id for v in versions.list(sid)} == {10, 11}
     assert versions.members(sid, 10) == {100: False, 101: False}
+    # 終了したバージョンのチケットは、自動では取得しない(開いたときに取得する)
+    assert versions.members(sid, 11) == {} and not versions.get(sid, 11).issues_synced
+    assert versions.progress(sid) == {10: (0, 2)}
+    assert sync.sync_version(11) is True
     assert versions.members(sid, 11) == {102: True}
     assert versions.progress(sid) == {10: (0, 2), 11: (1, 1)}
+    assert sync.sync_version(11) is False  # 変わっていなければ、署名を確かめるだけ
     # 最初の取得では、変化を記録しない
     assert kinds(versions, sid, 10) == [] and versions.unread_counts(sid) == {}
     # 関係ないチケットは、監視対象外として保存する(件数・未読数・通知には入らない)
@@ -150,7 +155,7 @@ def test_version_issues_are_fully_refetched_periodically(setup, fake, db, monkey
 
 
 def test_version_issues_are_fetched_open_and_newest_first(setup, fake, db):
-    """古い終了したバージョンが多くても、未完了のもの・新しいものから先にチケットを取得し、1つずつ知らせる。"""
+    """未完了のバージョンのチケットを新しいものから取得し、1つずつ知らせる。終了したものは開いたときだけ取得する。"""
     sync, versions, sid = setup
     fake.add_version(20, 2, "v0.1", status="closed")
     fake.add_version(21, 2, "v0.2", status="closed")
@@ -162,9 +167,13 @@ def test_version_issues_are_fetched_open_and_newest_first(setup, fake, db):
     fake.requests.clear()
     notified: list[set[int]] = []
     assert sync.sync_versions(on_changed=notified.append) == {20, 21, 22, 23}
-    assert notified == [{23}, {22}, {21}, {20}]
+    assert notified == [{23}, {22}]
     order = [int(q.split("fixed_version_id=")[1].split("&")[0]) for m, q in fake.requests if "fixed_version_id=" in q]
-    assert order == [23, 22, 21, 20]
+    assert order == [23, 22]
+    # 一覧は新しいものから(期日のないものは先頭、同じならIDの大きい順)
+    assert [v.version_id for v in versions.list(sid)] == [23, 22, 21, 20]
+    assert sync.sync_version(20) is True and versions.members(sid, 20) == {200: False}
+    assert versions.members(sid, 21) == {}
     # 2回目は変化がなければ知らせない
     notified.clear()
     assert sync.sync_versions(on_changed=notified.append) == set()

@@ -530,11 +530,18 @@ def test_versions_api_list_tree_and_read(app, fake):
     assert app.rpc("getProjectSettings", serverId=sid, projectId=2)["watch_versions"]["effective"] is True
     child = lambda: app.rpc("getTree")["servers"][0]["projects"][0]["children"][0]  # noqa: E731
     # 同期スレッドの取得が終わるのを待つ(このあと同じ処理をテストからも呼ぶので、重ならないように)
-    assert wait_until(lambda: all((x := app.ctx.versions.get(sid, vid)) and x.issues_synced for vid in (5, 6)))
+    assert wait_until(lambda: (x := app.ctx.versions.get(sid, 5)) and x.issues_synced)
     time.sleep(0.3)
     v = {x["versionId"]: x for x in child()["versions"]}
     assert v[5]["closed"] is False and v[5]["done"] == 1 and v[5]["total"] == 2 and v[5]["changed"] is False
-    assert v[6]["closed"] is True
+    assert v[5]["synced"] is True
+    # 終了したバージョンのチケットは、開いた(fetchVersion)ときに初めて取得する
+    assert v[6]["closed"] is True and v[6]["synced"] is False
+    assert app.rpc("getVersion", serverId=sid, versionId=6, markRead=False)["synced"] is False
+    assert app.rpc("fetchVersion", serverId=sid, versionId=6) == {"started": True}
+    assert wait_until(lambda: app.ctx.versions.get(sid, 6).issues_synced)
+    assert app.rpc("fetchVersion", serverId=sid, versionId=5) == {"started": False}  # 取得済みの未完了は定期の確認に任せる
+    assert app.rpc_error("fetchVersion", serverId=sid, versionId=999)["code"] == "not_found"
     tree = app.rpc("getTree")["servers"][0]
     assert tree["count"] == 1  # バージョンのチケットは件数に入れない
     assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [10]

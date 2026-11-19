@@ -336,7 +336,8 @@ class ServerSync:
         前回からの変化(追加・外れた・完了など)を記録する。内容が変わったバージョンのIDを返す。
 
         まずウォッチしているすべてのプロジェクトのバージョン一覧を取り、次に各バージョンのチケットを、未完了のもの・
-        新しいもの(IDの大きいもの)から順に取り直す(古い終了したバージョンが多いと、最初の取得に時間がかかるため)。
+        新しいもの(IDの大きいもの)から順に取り直す。終了したバージョンのチケットは自動では取得せず、画面で
+        開いたときに取得する(sync_version。終了したバージョンが数千あると、取得に非常に時間がかかるため)。
         on_changed を渡すと、チケットを取り直して内容が変わったバージョンを、1つずつその場で知らせる
         (知らせたものも戻り値に含む)。
 
@@ -401,14 +402,30 @@ class ServerSync:
         settings.set(self._seen_key(), sorted(fetched | (seen_projects & watched)))
         return changed
 
-    def _version_issues_due(self, version: Version, old: Version | None) -> bool:
-        """バージョンのチケットの一覧を取り直すか。
+    def sync_version(self, version_id: int) -> bool:
+        """画面で開いたバージョンのチケットを取得する。まだ取得していなければ全件を取り、取得済みなら署名
+        (1回の軽い問い合わせ)で確かめて、変わっていたときだけ取り直す。内容が変わったら True。"""
+        sid = self.server_id
+        version = self.versions.get(sid, version_id)
+        if version is None:
+            return False
+        if version.issues_synced and version.issues_signature is not None:
+            signature = self.client.issues_signature(fixed_version_id=version_id, status_id="*")
+            if signature == version.issues_signature:
+                return False
+        return self._sync_version_issues(version, self._closed_ids(), format_ts(datetime.now(UTC)))
 
+    def _version_issues_due(self, version: Version, old: Version | None) -> bool:
+        """定期的な確認で、バージョンのチケットの一覧を取り直すか。
+
+        - 終了したバージョンは、まだ取得していなければ取得しない(画面で開いたときに sync_version で取得する)
         - 最初と、バージョンの状態が変わった(終了・再開)ときは取り直す
-        - 終了したバージョンは、それ以外では取り直さない
+        - 取得済みの終了したバージョンは、それ以外では取り直さない
         - 未完了のバージョンは、署名(件数と最新の更新日時)を1回の軽い問い合わせで確かめ、変わっていたときと、
           前回の全件の取得から VERSION_FULL_REFRESH 経ったときだけ取り直す(多数の利用者でサーバーを叩きすぎない)
         """
+        if version.closed and not version.issues_synced:
+            return False
         if not version.issues_synced or (old is not None and old.status != version.status):
             return True
         if version.closed:

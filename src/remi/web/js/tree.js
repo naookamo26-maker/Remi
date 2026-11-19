@@ -67,11 +67,15 @@ export class Tree {
           hasKids ? (isCollapsed ? "▶" : "▼") : ""),
         opts.icon ? icon(opts.icon) : null,
         h("span", { class: "name" }, label),
-        opts.extra || null,
         opts.dot ? h("span", { class: `dot ${opts.dot}`, title: opts.dotLabel, "aria-label": opts.dotLabel }) : null,
-        opts.progress ? h("span", { class: "count" }, opts.progress) : null,
-        opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
-          : (opts.count ? h("span", { class: "count" }, opts.count) : null));
+        // 右端は「件数 | フィルタ | 歯車」の決まった幅の列にして、件数の桁が違っても縦にそろえる。
+        // ボタンのない行も同じ幅を空けておく(ロードマップ・バージョンの行は、名前を広く出すため空けない)
+        h("span", { class: "node-count" },
+          opts.progress ? h("span", { class: "count" }, opts.progress) : null,
+          opts.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: opts.unread }) }, countText(opts.unread))
+            : (opts.count ? h("span", { class: "count" }, opts.count) : null)),
+        opts.noTools ? null : opts.filter || h("span", { class: "node-tool-slot", "aria-hidden": "true" }),
+        opts.noTools ? null : opts.gear || h("span", { class: "node-tool-slot", "aria-hidden": "true" }));
       const li = h("li", { role: "treeitem", "aria-selected": String(key === sel && !opts.header),
         dataset: { key: opts.header ? "" : key, token: hasKids ? token : "" },
         "aria-expanded": hasKids ? String(!isCollapsed) : null }, row);
@@ -85,8 +89,9 @@ export class Tree {
     for (const s of data.servers) {
       // バージョン: 変化があれば印を付け、完了数/全体を出す。終了したものは、畳んだ「終了したバージョン」の下に出す
       const version = (p, v, depth) => node(v.name, { kind: "version", serverId: s.serverId, versionId: v.versionId }, {
-        depth, icon: "flag", cls: ["version", v.changed ? "changed" : "", v.closed ? "closed" : ""].join(" "),
-        title: [v.dueDate ? t("tree.versionDue", { date: v.dueDate }) : "", v.synced ? "" : t("tree.versionLoading")]
+        depth, noTools: true, icon: "flag", cls: ["version", v.changed ? "changed" : "", v.closed ? "closed" : ""].join(" "),
+        title: [v.dueDate ? t("tree.versionDue", { date: v.dueDate }) : "",
+          v.synced ? "" : t(v.closed ? "tree.versionNotFetched" : "tree.versionLoading")]
           .filter(Boolean).join("\n") || null,
         dot: v.changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
         // チケットをまだ取得していないバージョンは 0/0 ではなく「…」にする(空のバージョンと見分ける)
@@ -99,14 +104,14 @@ export class Tree {
         const closed = p.versions.filter((v) => v.closed);
         if (closed.length) {
           kids.push(node(t("tree.closedVersions", { count: closed.length }), { kind: "closedVersions", serverId: s.serverId,
-            projectId: p.projectId }, { depth: depth + 1, header: true, toggleOnly: true, collapsedByDefault: true,
+            projectId: p.projectId }, { depth: depth + 1, header: true, toggleOnly: true, collapsedByDefault: true, noTools: true,
             cls: "version-group", token: `vc:${s.serverId}:${p.projectId}`,
             children: closed.map((v) => version(p, v, depth + 2)) }));
         }
         // 畳んでいても気づけるよう、中のバージョンに変化があればロードマップにも印を付ける
         const changed = p.versions.some((v) => v.changed);
         return [node(t("tree.roadmap"), { kind: "roadmap", serverId: s.serverId, projectId: p.projectId }, {
-          depth, header: true, toggleOnly: true, icon: "flag", cls: `roadmap${changed ? " changed" : ""}`,
+          depth, header: true, toggleOnly: true, noTools: true, icon: "flag", cls: `roadmap${changed ? " changed" : ""}`,
           token: `rm:${s.serverId}:${p.projectId}`, dot: changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
           children: kids })];
       };
@@ -114,7 +119,8 @@ export class Tree {
         depth, unread: p.unread, count: p.unread ? 0 : p.count, token: `p:${s.serverId}:${p.projectId}`,
         cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : ""].join(" "),
         title: !p.accessible ? t("tree.noAccess") : null,
-        extra: this.relationsButton(s, p, depth),
+        filter: this.relationsButton(s, p, depth),
+        gear: this.settingsButton(s, p),
         children: [...roadmap(p, depth + 1), ...p.children.map((c) => project(c, depth + 1))],
       });
       const kids = [
@@ -125,7 +131,7 @@ export class Tree {
       const dotLabel = s.status === "error" ? t("tree.statusError") : s.status === "ok" ? t("tree.statusOk") : null;
       const server = node(s.name, { kind: "server", serverId: s.serverId }, {
         icon: "server", cls: "server", header: true, token: `s:${s.serverId}`, children: kids,
-        extra: this.relationsButton(s),
+        filter: this.relationsButton(s),
         dot: s.status === "unknown" ? null : s.status, dotLabel, title: s.url,
       });
       this.el.append(server);
@@ -177,13 +183,61 @@ export class Tree {
     const from = depth === 1 ? "tree.relationsFromServer" : "tree.relationsInherited";
     const title = !restricted ? t("tree.visibleRelations") : (target.relationsOwn || !p ? summary : t(from, { summary }));
     const state = !restricted ? "" : (target.relationsOwn ? "own" : "inherited");
-    return h("button", { type: "button", class: `node-filter ${state}`.trim(), title,
+    return h("button", { type: "button", class: `node-tool node-filter ${state}`.trim(), title,
       "aria-label": `${t("tree.visibleRelations")}: ${target.name}`, "aria-haspopup": "menu",
       onClick: (e) => {
         e.stopPropagation();
         const r = e.currentTarget.getBoundingClientRect();
         this.relationsMenu(r.right + 4, r.top, server.serverId, p?.projectId ?? null, depth === 1);
       } }, icon("filter"));
+  }
+
+  // プロジェクトの横の歯車ボタン: 通知・作成したチケットのウォッチ・バージョンのウォッチの設定を開く
+  settingsButton(server, p) {
+    return h("button", { type: "button", class: "node-tool node-gear", title: t("tree.projectSettingsShort"),
+      "aria-label": t("tree.projectSettings", { name: p.name }), "aria-haspopup": "menu",
+      onClick: (e) => {
+        e.stopPropagation();
+        const r = e.currentTarget.getBoundingClientRect();
+        this.projectSettingsMenu(r.right + 4, r.top, server.serverId, p.projectId);
+      } }, icon("gear"));
+  }
+
+  // プロジェクトの設定(継承あり)。変えるたびに開き直して、今の値を描き直す
+  async projectSettingsMenu(x, y, serverId, projectId, focusLabel = null) {
+    const ps = await call("getProjectSettings", { serverId, projectId });
+    const options = [
+      { label: t("menu.inherit"), value: null }, { label: t("menu.on"), value: true }, { label: t("menu.off"), value: false },
+    ];
+    const seg = (key, label, extra) => ({
+      segmented: {
+        label, options, value: ps[key].value,
+        onChange: (value) => call("setProjectSetting", { serverId, projectId, key, value })
+          .then(() => this.refresh())
+          .then(() => this.projectSettingsMenu(x, y, serverId, projectId, label)),
+      },
+      hint: [t("menu.currently", { value: ps[key].effective ? t("menu.on") : t("menu.off") }), extra].filter(Boolean).join(" · "),
+    });
+    const target = this.findProject(serverId, projectId);
+    contextMenu(x, y, [
+      { label: t("tree.projectSettings", { name: target?.name ?? "" }), hint: true },
+      { sep: true },
+      seg("notify", t("menu.notifications")),
+      seg("watch_authored", t("menu.watchAuthored"), t("menu.appliesToSubprojects")),
+      seg("watch_versions", t("menu.watchVersions"), t("menu.appliesToSubprojects")),
+    ], { focusLabel });
+  }
+
+  findVersion(serverId, versionId) {
+    const server = this.data?.servers.find((s) => s.serverId === serverId);
+    const find = (nodes) => {
+      for (const n of nodes) {
+        const v = n.versions.find((x) => x.versionId === versionId) || find(n.children);
+        if (v) return v;
+      }
+      return null;
+    };
+    return server ? find(server.projects) : null;
   }
 
   findProject(serverId, projectId) {
@@ -269,26 +323,9 @@ export class Tree {
     const items = [{ label: t("menu.markAllRead"), onClick: () => call("markAllRead", { serverId: sel.serverId ?? null, projectId: sel.projectId ?? null }) }];
     const server = this.data.servers.find((s) => s.serverId === sel.serverId);
     if (sel.kind === "project") {
+      // 設定は行の右端のボタン(フィルタ・歯車)から開く。右クリックは操作だけにする
       const ps = await call("getProjectSettings", { serverId: sel.serverId, projectId: sel.projectId });
       if (ps.url) items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: ps.url }) });
-      const options = [
-        { label: t("menu.inherit"), value: null }, { label: t("menu.on"), value: true }, { label: t("menu.off"), value: false },
-      ];
-      const seg = (key, label, extra) => ({
-        segmented: {
-          label, options, value: ps[key].value,
-          onChange: (value) => call("setProjectSetting", { serverId: sel.serverId, projectId: sel.projectId, key, value })
-            .then(() => this.refresh()),
-        },
-        hint: [t("menu.currently", { value: ps[key].effective ? t("menu.on") : t("menu.off") }), extra].filter(Boolean).join(" · "),
-      });
-      const depth = server?.projects.some((p) => p.projectId === sel.projectId) ? 1 : 2;
-      items.push({ sep: true }, seg("notify", t("menu.notifications")),
-        seg("watch_authored", t("menu.watchAuthored"), t("menu.appliesToSubprojects")),
-        seg("watch_versions", t("menu.watchVersions"), t("menu.appliesToSubprojects")),
-        { sep: true },
-        { label: t("menu.visibleRelations"),
-          onClick: () => this.relationsMenu(e.clientX, e.clientY, sel.serverId, sel.projectId, depth === 1) });
     } else if (server) {
       // チケットのないプロジェクトも表示するかは、サーバーごとに選ぶ
       items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) },

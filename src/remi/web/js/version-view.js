@@ -20,7 +20,7 @@ export function renderVersion(d, app) {
     h("span", { class: "progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(d.total),
       "aria-valuenow": String(d.done), "aria-label": t("version.progress") },
     h("span", { class: "bar" }, h("span", { style: { width: `${percent}%` } })),
-    t("version.doneOf", { done: d.done, total: d.total })));
+    d.synced ? t("version.doneOf", { done: d.done, total: d.total }) : t("version.loading")));
   const header = h("header", { class: "conv-header" },
     h("div", { class: "top" },
       h("div", { class: "titles" },

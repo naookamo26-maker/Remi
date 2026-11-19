@@ -489,8 +489,20 @@ class RemiApi:
             "serverId": serverId, "versionId": versionId, "name": v.name, "status": v.status,
             "dueDate": v.due_date, "description": v.description or "", "projectId": v.project_id,
             "breadcrumb": crumbs, "done": done, "total": total,
-            "url": f"{server.url}/versions/{versionId}", "events": events,
+            "url": f"{server.url}/versions/{versionId}", "events": events, "synced": v.issues_synced,
         }
+
+    @rpc
+    def fetchVersion(self, serverId: int, versionId: int) -> dict[str, Any]:  # noqa: N802,N803
+        """画面で開いたバージョンのチケットを取得する(終了したバージョンは、開いたときに初めて取得する)。
+        まだ取得していないものと終了したものだけを取りに行く(未完了で取得済みのものは定期的な確認に任せる)。"""
+        v = self.ctx.versions.get(serverId, versionId)
+        if v is None:
+            raise RpcError("not_found")
+        started = False
+        if (v.closed or not v.issues_synced) and self.sync is not None:
+            started = self.sync.fetch_version(serverId, versionId)
+        return {"started": started}
 
     # --- 会話 ---------------------------------------------------------------------
     def _render_ctx(self, server: Server, issue_id: int) -> RenderContext:

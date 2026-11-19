@@ -22,6 +22,7 @@
  * @property {number} unread
  * @property {number} count
  * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか(サーバーごと)
+ * @property {"initial"|"versions"|null} loading  いま取得している内容(最初の取得・ロードマップ)。下の状態欄に出す
  * @property {number} hiddenProjects      表示するものがなくて、ふだんは隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
  * @property {Relation[]} relations        表示するチケットの既定(プロジェクトで設定していなければこれを使う)
  * @property {boolean} relationsOwn        表示するチケットの既定を、すべてから変えているか
@@ -34,6 +35,7 @@
  * @property {string} name
  * @property {boolean} accessible          自分がメンバーでない(チケット経由で知った)プロジェクトは false
  * @property {boolean} active
+ * @property {boolean} loadingVersions     ロードマップ(バージョン)を取得している最中か(名前の横に回転する印を出す)
  * @property {boolean} shownOnlyByShowAll  「すべてを表示」にしたときだけ出ている(ふだんは隠れる)プロジェクトか。画面では薄い色にする
  * @property {number} unread               子プロジェクトを含む
  * @property {number} count                子プロジェクトを含む

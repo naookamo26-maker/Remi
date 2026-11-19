@@ -255,6 +255,8 @@
   "tree.hideEmptyProjects": "Hide again",
   "tree.label": "Servers and projects",
   "tree.lastSynced": "Last synced {time}",
+  "tree.loadingInitial": "Loading issues…",
+  "tree.loadingVersions": "Loading roadmaps…",
   "tree.noAccess": "You do not have access to this project",
   "tree.noServers": "No servers yet. Use “Add server” above.",
   "tree.projectSettings": "Settings for {name}",

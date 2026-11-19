@@ -122,6 +122,12 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .node-filter.own { color: var(--accent); }
 .node-filter.own svg.icon { fill: currentColor; }
 .sync-status { font-size: 11px; color: var(--text-muted); padding: 0 2px; }
+.sync-status.loading { display: flex; align-items: center; gap: 6px; }
+/* 読み込み中の、小さな回転する印 */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { display: inline-block; flex: none; width: 11px; height: 11px; box-sizing: border-box; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
 
 /* ---- 一覧 ---- */
 .list-header { padding: 10px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); }

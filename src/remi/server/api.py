@@ -384,7 +384,7 @@ class RemiApi:
             raise RpcError("invalid_setting", key)
         self.ctx.projects.set_setting(serverId, projectId, key, value)
         if key == "watch_versions" and self.sync is not None:
-            self.sync.sync_now(manual=False)  # バージョンをすぐ取得する(やめたときは、ツリーから消す)
+            self.sync.sync_versions_now(serverId)  # バージョンをすぐ取得する(やめたときは、ツリーから消す)
         if key == "watch_authored" and self.sync is not None:
             # 作成したチケットを取り直すため、初回同期からやり直す
             self.ctx.servers.update_fields(serverId, initial_sync_done=False)

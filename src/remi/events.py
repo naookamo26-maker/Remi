@@ -36,6 +36,21 @@ class EventBus:
         self._lock = threading.Lock()
         self._subs: list[Subscription] = []
         self._callbacks: list[Callable[[Event], None]] = []
+        # サーバーごとの、今動いている同期の種類(例: {1: {"versions"}})。画面の「読み込み中」の表示に使う
+        self._activity: dict[int, set[str]] = {}
+
+    def set_activity(self, server_id: int, name: str, on: bool) -> None:
+        """同期の活動(name)が始まった・終わったことを記録し、画面に知らせる。"""
+        with self._lock:
+            current = self._activity.setdefault(server_id, set())
+            if (name in current) == on:
+                return
+            current.add(name) if on else current.discard(name)
+        self.publish("syncState", serverId=server_id)
+
+    def activity(self, server_id: int) -> set[str]:
+        with self._lock:
+            return set(self._activity.get(server_id, ()))
 
     def subscribe(self) -> Subscription:
         sub = Subscription()

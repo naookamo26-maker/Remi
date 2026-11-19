@@ -71,6 +71,8 @@ export class Tree {
           hasKids ? (isCollapsed ? "▶" : "▼") : opts.twistyIcon ? icon(opts.twistyIcon) : ""),
         opts.icon ? icon(opts.icon) : null,
         h("span", { class: "name" }, label),
+        // ロードマップを取得している最中は、名前の横に小さな回転する印を出す
+        opts.loading ? h("span", { class: "spin", role: "progressbar", title: opts.loading, "aria-label": opts.loading }) : null,
         // 件数は名前のすぐ右に、(5) のように控えめに出す(バージョンは 完了/全体)
         opts.count ? h("span", { class: "count-inline" }, `(${opts.count})`) : null,
         // 変化の印は青い丸だけ。親(畳んでいる行)では、中の変化も拾う。開いている行は、自分の分だけ
@@ -134,6 +136,7 @@ export class Tree {
         const own = p.unread - p.children.reduce((sum, c) => sum + c.unread, 0);
         return node(p.name, { kind: "project", serverId: s.serverId, projectId: p.projectId }, {
           depth, count: p.count || null, token: `p:${s.serverId}:${p.projectId}`,
+          loading: p.loadingVersions ? t("tree.loadingVersions") : null,
           cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : "", p.shownOnlyByShowAll ? "dim" : ""].join(" "),
           title: !p.accessible ? t("tree.noAccess") : null,
           dotExpanded: own > 0 ? { kind: "changed", label: t("tree.unreadCount", { count: own }) } : null,
@@ -176,8 +179,17 @@ export class Tree {
     if (!data.servers.length) {
       this.el.append(h("li", { class: "empty" }, t("tree.noServers")));
     }
+    // 下の状態欄: 取得している最中は回転する印と内容を、ふだんは最後に同期した時刻を出す
+    const loading = data.servers.map((s) => s.loading).find(Boolean);
     const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
-    this.status.textContent = times.length ? t("tree.lastSynced", { time: formatTime(times.at(-1)) }) : "";
+    if (loading) {
+      this.status.replaceChildren(h("span", { class: "spin" }),
+        h("span", {}, t(loading === "initial" ? "tree.loadingInitial" : "tree.loadingVersions")));
+      this.status.classList.add("loading");
+    } else {
+      this.status.textContent = times.length ? t("tree.lastSynced", { time: formatTime(times.at(-1)) }) : "";
+      this.status.classList.remove("loading");
+    }
   }
 
   toggle(token) {

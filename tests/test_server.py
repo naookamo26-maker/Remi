@@ -558,6 +558,34 @@ def test_switching_user_clears_previous_users_data(app, fake):
     assert not any(e["type"] == "serverCacheCleared" for e in events)
 
 
+def test_loading_state_while_roadmap_is_fetched(app, fake):
+    """マイルストーンの監視をオンにすると、取得している間だけ「読み込み中」になる(ツリーの印と状態欄)。"""
+    fake.add_project(1, "A")
+    fake.add_project(2, "A-子", parent=1)
+    fake.add_version(5, 2, "v1.0")
+    fake.add_issue(10, 1, "自分のチケット")
+    fake.add_issue(20, 2, "関係ない", assigned_to=7, version=5)
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 1)
+    time.sleep(1.5)  # 最初の同期が落ち着くのを待つ
+    tree = lambda: app.rpc("getTree")["servers"][0]  # noqa: E731
+    assert tree()["loading"] is None and not tree()["projects"][0]["loadingVersions"]
+    seen: list[tuple[str | None, bool]] = []
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="watch_versions", value=True)
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
+        s = tree()
+        seen.append((s["loading"], s["projects"][0]["loadingVersions"]))
+        if (x := app.ctx.versions.get(sid, 5)) and x.issues_synced and s["loading"] is None:
+            break
+        time.sleep(0.05)
+    # 取得している間は、サーバーとプロジェクトに読み込み中の印が付き、終わると消える
+    assert ("versions", True) in seen
+    assert seen[-1] == (None, False)
+    # バージョンは、取得できた(設定を変えたら、バージョンの同期だけがすぐ動く)
+    assert app.ctx.versions.get(sid, 5).issues_synced
+
+
 def test_versions_api_list_tree_and_read(app, fake):
     """バージョンのチケットは、バージョンを選んだときだけ一覧に出す(件数・未読数には入れない)。"""
     from remi.sync.engine import ServerSync

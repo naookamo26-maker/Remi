@@ -53,6 +53,15 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 "dueDate": v.due_date, "done": done, "total": total,
                 "changed": version_unread.get(v.version_id, 0) > 0, "synced": v.issues_synced,
             })
+        # ロードマップを取得している最中のプロジェクト(画面で回転する印を出す)。バージョンの同期が動いている間だけ、
+        # まだ一覧を取っていない・チケットを取っていないバージョンがあるウォッチ中のプロジェクトを数える
+        loading_projects: set[int] = set()
+        if "versions" in ctx.bus.activity(sid) and not s.last_error:
+            watched = ctx.projects.projects_with_setting(sid, "watch_versions")
+            seen = set(ctx.settings.get(f"versions_seen_projects:{sid}") or [])
+            unsynced = {v.project_id for v in ctx.versions.list(sid) if not v.issues_synced and not v.closed}
+            loading_projects = {pid for pid in watched if pid in by_id and by_id[pid].accessible
+                                and (pid not in seen or pid in unsynced)}
         shown = monitored | (set(versions) & set(by_id))
         visible = visible_projects(projects, shown, s.show_all_projects)
         # 表示するものがなくて、ふだんは隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
@@ -73,6 +82,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 "active": p.status == PROJECT_STATUS_ACTIVE,
                 # 「すべてを表示」にしたときだけ出ているプロジェクト(ふだんは隠れる)。画面では薄い色にする
                 "shownOnlyByShowAll": p.project_id not in usual,
+                "loadingVersions": p.project_id in loading_projects,
                 "unread": unread.get(p.project_id, 0) + sum(k["unread"] for k in kids),
                 "count": counts.get(p.project_id, 0) + sum(k["count"] for k in kids),
                 # 表示するチケット(継承を解決済み)と、このプロジェクト自身で設定しているか
@@ -96,6 +106,9 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             "count": sum(counts.values()),
             "showAllProjects": s.show_all_projects,
             "hiddenProjects": hidden,
+            # いま取得している内容(画面の下の状態欄に出す): 最初の取得("initial")・ロードマップ("versions")
+            "loading": (None if s.last_error else "initial" if not s.initial_sync_done
+                        else "versions" if loading_projects else None),
             # 表示するチケットの既定(プロジェクトで設定していなければこれを使う)と、既定から変えているか
             "relations": [r for r in RELATIONS if r in server_relations],
             "relationsOwn": s.visible_relations is not None,

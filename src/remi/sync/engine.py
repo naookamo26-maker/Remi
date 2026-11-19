@@ -436,6 +436,7 @@ class ServerSync:
                     continue  # プロジェクトが消えた・見えなくなった
                 raise
             fetched.add(pid)
+            listed_before = set(changed)
             for data in items:
                 if int((data.get("project") or {}).get("id", -1)) != pid:
                     continue
@@ -457,6 +458,9 @@ class ServerSync:
                             self.versions.add_event(sid, vid, kind, now, old_value=before, new_value=after)
                             changed.add(vid)
                 pending.append((new, old))
+            # 一覧を保存した時点で、画面に知らせる(バージョンは、チケットを取得するまでは「…」で出る)
+            if on_changed is not None and changed - listed_before:
+                on_changed(changed - listed_before)
         # 2. 各バージョンのチケット(未完了のもの、新しいものから)
         closed_ids = self._closed_ids()
         pending.sort(key=lambda p: (p[0].closed, -p[0].version_id))

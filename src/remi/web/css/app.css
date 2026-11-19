@@ -104,6 +104,8 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 /* 行の右端は「件数 | フィルタ | 歯車」の決まった幅の列。件数の桁が違っても、ボタンが縦にそろう */
 .node-count { flex: none; min-width: 34px; display: flex; justify-content: flex-end; }
 .node-tool-slot { flex: none; width: 22px; }
+/* フィルタと歯車は1組のボタンとして詰めて並べる(行の gap 6px を打ち消して 2px にする) */
+.node :is(.node-tool, .node-tool-slot) + :is(.node-tool, .node-tool-slot) { margin-left: -4px; }
 /* プロジェクトの横の「表示するチケット」・設定のボタン。絞っていないプロジェクトでは、行にマウスを乗せたとき・
    フォーカスしたときだけ見せる(キーボードで操作できるよう、隠すのは見た目だけ。場所は空けておく) */
 .node-tool { flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;

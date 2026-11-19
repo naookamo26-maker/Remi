@@ -701,16 +701,18 @@ def test_edit_delete_note_attachment_and_uri_link(page, remi, fake, monkeypatch)
     page.get_by_role("dialog", name="コメントを削除").get_by_role("button", name="削除").click()
     playwright_api.expect(conv.locator(".msg", has_text="書き直したコメント")).to_have_count(0, timeout=15000)
 
-    # 添付の削除(添付の行の「削除」)
+    # 添付の削除(添付の行の「⋯」メニューから)
     fake.add_journal(10, 7, details=[{"property": "attachment", "name": "77", "new_value": "shot.png"}])
     remi.sync.refetch_issue(1, 10)
-    delete = conv.locator(".change-group, .system").get_by_role("button", name="削除").first
-    playwright_api.expect(delete).to_be_visible(timeout=15000)
-    delete.click()
+    tools = conv.locator(".change-group, .system").get_by_role("button", name="ファイルの操作").first
+    playwright_api.expect(tools).to_be_attached(timeout=15000)
+    tools.evaluate("el => el.closest('li, .system').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))")
+    tools.click()
+    page.get_by_role("menuitem", name="ファイルを削除").click()
     page.get_by_role("dialog", name="ファイルを削除").get_by_role("button", name="削除").click()
     end = time.monotonic() + 15
     while time.monotonic() < end and 77 in fake.attachments:
         time.sleep(0.1)
     assert 77 not in fake.attachments
-    playwright_api.expect(conv.get_by_role("button", name="削除")).to_have_count(0, timeout=15000)
+    playwright_api.expect(conv.get_by_role("button", name="ファイルの操作")).to_have_count(0, timeout=15000)
     assert not page.errors, page.errors

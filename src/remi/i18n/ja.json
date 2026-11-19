@@ -251,6 +251,8 @@
   "tree.hideEmptyProjects": "非表示に戻す",
   "tree.label": "サーバーとプロジェクト",
   "tree.lastSynced": "最終同期 {time}",
+  "tree.loadingInitial": "チケットを取得しています…",
+  "tree.loadingVersions": "ロードマップを取得しています…",
   "tree.noAccess": "このプロジェクトへのアクセス権がありません",
   "tree.noServers": "サーバーが未登録です。上の「サーバーを追加」から登録してください。",
   "tree.projectSettings": "{name} の設定",

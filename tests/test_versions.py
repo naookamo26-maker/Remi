@@ -26,6 +26,24 @@ def kinds(versions, sid, vid):
     return [(e.kind, e.issue_id) for e in versions.events(sid, vid)]
 
 
+def test_versions_are_announced_when_listed_before_their_issues_are_fetched(setup, fake, db):
+    """バージョンの一覧を保存した時点で知らせる(チケットの取得を待たない)。画面には「…」つきで先に出る。"""
+    sync, versions, sid = setup
+    fake.add_version(10, 2, "v1.0")
+    fake.add_issue(100, 2, "チケット", assigned_to=7, version=10)
+    ProjectStore(db).set_setting(sid, 1, "watch_versions", True)
+    calls: list[tuple[set[int], bool]] = []
+
+    def on_changed(ids: set[int]) -> None:
+        calls.append((set(ids), all(versions.get(sid, v).issues_synced for v in ids)))
+
+    sync.sync_versions(on_changed=on_changed)
+    # 最初の知らせは、チケットを取得する前(issues_synced が False のとき)
+    assert calls[0] == ({10}, False)
+    # チケットを取得したあとにも、もう一度知らせる
+    assert calls[-1] == ({10}, True)
+
+
 def test_watch_versions_records_changes(setup, fake, db):
     sync, versions, sid = setup
     fake.add_version(10, 2, "v1.0")
@@ -167,7 +185,8 @@ def test_version_issues_are_fetched_open_and_newest_first(setup, fake, db):
     fake.requests.clear()
     notified: list[set[int]] = []
     assert sync.sync_versions(on_changed=notified.append) == {20, 21, 22, 23}
-    assert notified == [{23}, {22}]
+    # 最初に、一覧を保存した時点でまとめて知らせ、そのあと、チケットを取得できたバージョンを1つずつ知らせる
+    assert notified == [{20, 21, 22, 23}, {23}, {22}]
     order = [int(q.split("fixed_version_id=")[1].split("&")[0]) for m, q in fake.requests if "fixed_version_id=" in q]
     assert order == [23, 22]
     # 一覧は新しいものから(期日のないものは先頭、同じならIDの大きい順)

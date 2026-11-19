@@ -132,6 +132,8 @@ class ServerWorker(threading.Thread):
                         self._stopping.set()
                     except Exception:  # noqa: BLE001 - 予期しないエラーでもワーカーは止めない
                         log.exception("unexpected error in sync worker %s (%s)", self.server_id, cmd)
+                    if cmd in ("sync_now", "sync_versions"):
+                        next_tick = 0.0  # 次の刻みを待たず、すぐ同期を始める
                     continue  # 続けて届いた依頼を先に処理する
                 self.tick()
                 next_tick = time.monotonic() + TICK_SECONDS
@@ -190,6 +192,11 @@ class ServerWorker(threading.Thread):
             # バックオフ中でも1回は試す(VPNをつなぎ直したときなど)。失敗の回数は残すので、また失敗すれば
             # 前より長く待つ。連打は上の最短間隔で抑える
             self.sched.backoff_until = 0
+        elif cmd == "sync_versions":
+            # プロジェクトの設定を変えたときなど: バージョンの監視だけをすぐ確かめる(チケットの差分同期は要らない)
+            self.sched.versions = 0
+            self.sched.backoff_until = 0
+            self.bus.set_activity(self.server_id, "versions", True)
         elif cmd == "open":
             (issue_id,) = args
             self.open_issue = issue_id
@@ -356,7 +363,12 @@ class ServerWorker(threading.Thread):
                 notified.update(ids)
                 self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(ids))
 
-            rest = sync.sync_versions(on_changed=on_version) - notified
+            # 同期の間だけ、画面に「ロードマップを取得しています」を出す
+            self.bus.set_activity(self.server_id, "versions", True)
+            try:
+                rest = sync.sync_versions(on_changed=on_version) - notified
+            finally:
+                self.bus.set_activity(self.server_id, "versions", False)
             if rest:
                 self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(rest))
             self.sched.versions = now + jittered(self._interval(max(server.poll_interval, VERSIONS_MIN_INTERVAL)))
@@ -529,6 +541,13 @@ class SyncManager:
         with self._lock:
             for w in self._workers.values():
                 w.send("sync_now", manual)
+
+    def sync_versions_now(self, server_id: int) -> None:
+        """バージョンの監視だけを、すぐ同期する(プロジェクトの設定を変えたとき)。"""
+        with self._lock:
+            w = self._workers.get(server_id)
+            if w is not None:
+                w.send("sync_versions")
 
     def set_active(self, active: bool) -> None:
         """ウィンドウが非アクティブの間はポーリング間隔を延ばす(設計書 §4.6)。"""

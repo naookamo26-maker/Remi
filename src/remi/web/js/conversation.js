@@ -236,9 +236,9 @@ export class Conversation {
   }
 
   noteTools(j) {
-    if (!j.html || this.editingNote?.journalId === j.journalId) return null;
-    // 編集・削除できないコメントでも「⋯」は出し、項目をグレーアウトして理由を示す
-    // (権限は読み込み後に分かる。それまでもグレーアウトしておく)
+    // 権限が分かるまでは出さない(読み込み後に描き直す)。分かってからは、編集・削除できないコメントでも
+    // 「⋯」を出し、項目をグレーアウトして理由を示す
+    if (!this.permissions || !j.html || this.editingNote?.journalId === j.journalId) return null;
     return h("button", { type: "button", class: "msg-menu", "aria-label": t("conv.noteActions"), title: t("conv.noteActions"),
       "aria-haspopup": "menu", onClick: (e) => {
         const r = e.currentTarget.getBoundingClientRect();
@@ -246,7 +246,7 @@ export class Conversation {
         contextMenu(r.left, r.bottom + 4, [
           { label: t("conv.editNote"), disabled: !can, onClick: () => this.startEdit(j) },
           { label: t("conv.deleteNote"), disabled: !can, onClick: () => this.deleteNote(j) },
-          ...(can || !this.permissions ? [] : [{ sep: true }, { label: t("conv.noEditNote"), hint: true }]),
+          ...(can ? [] : [{ sep: true }, { label: t("conv.noEditNote"), hint: true }]),
         ]);
       } }, "⋯");
   }
@@ -323,14 +323,14 @@ export class Conversation {
 
   /** 添付の「⋯」メニュー(削除)。Redmineでは、チケットを編集できる人だけが削除できる。できないときはグレーアウトする */
   attachmentTools(det) {
-    if (det.kind !== "attachment" || !det.url || !det.attachmentId) return null;
+    if (!this.permissions || det.kind !== "attachment" || !det.url || !det.attachmentId) return null;
     return h("button", { type: "button", class: "msg-menu", "aria-label": t("conv.fileActions"), title: t("conv.fileActions"),
       "aria-haspopup": "menu", onClick: (e) => {
         const r = e.currentTarget.getBoundingClientRect();
-        const can = !!this.permissions?.editFields;
+        const can = !!this.permissions.editFields;
         contextMenu(r.left, r.bottom + 4, [
           { label: t("conv.deleteFile"), disabled: !can, onClick: () => this.deleteAttachment(det) },
-          ...(can || !this.permissions ? [] : [{ sep: true }, { label: t("conv.noDeleteFile"), hint: true }]),
+          ...(can ? [] : [{ sep: true }, { label: t("conv.noDeleteFile"), hint: true }]),
         ]);
       } }, "⋯");
   }

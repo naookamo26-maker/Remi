@@ -95,7 +95,8 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 /* 2つ目以降のサーバーの上に、薄い横線を入れて、サーバーごとのかたまりの区切りを強調する */
 .tree > li + li { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 2px; }
 .tree > li + li > .node.server { margin-top: 6px; }
-.node.inaccessible .name, .node.inactive .name { color: var(--text-muted); }
+/* 「すべてを表示」にしたときだけ出ているプロジェクトは、薄い色にする(「非表示に戻す」で消えるものが分かるように) */
+.node.inaccessible .name, .node.inactive .name, .node.dim .name { color: var(--text-muted); }
 /* バージョン: 変化の印は青い丸だけ(太字にはしない)。終了したものは控えめに */
 .node.version .name { font-size: 12px; }
 .node.version .twisty { color: var(--text-muted); }

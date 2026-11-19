@@ -315,6 +315,9 @@ def test_show_all_projects_per_server(app, fake):
     assert tree["servers"][0]["showAllProjects"] is True
     assert tree["servers"][0]["hiddenProjects"] == 1  # 表示していても、「隠す」リンクのために数える
     assert names(0) == ["チケットあり", "チケットなし"]
+    # ふだんは隠れていて、「すべてを表示」で出ているプロジェクトには印が付く(画面では薄い色にする)
+    flags = {p["name"]: p["shownOnlyByShowAll"] for p in app.rpc("getTree")["servers"][0]["projects"]}
+    assert flags == {"チケットあり": False, "チケットなし": True}
     assert names(1) == ["チケットあり"]  # ほかのサーバーには効かない
     assert app.ctx.servers.get(other).show_all_projects is False
     assert app.rpc_error("setServerSetting", serverId=999, key="show_all_projects", value=True)["code"] == "not_found"

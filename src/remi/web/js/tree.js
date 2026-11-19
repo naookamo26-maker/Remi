@@ -155,7 +155,7 @@ export class Tree {
       if (s.showAllProjects || s.hiddenProjects) {
         kids.push(node(s.showAllProjects ? t("tree.hideEmptyProjects") : t("tree.showAllProjects"),
           { kind: "toggleProjects", serverId: s.serverId }, {
-            depth: 1, header: true, noTools: true, cls: "link-row", count: s.showAllProjects ? null : s.hiddenProjects,
+            depth: 1, header: true, noTools: true, cls: "link-row",
             title: t("tree.showAllProjectsHint"),
             onClick: () => call("setServerSetting", { serverId: s.serverId, key: "show_all_projects",
               value: !s.showAllProjects }).then(() => this.refresh()) }));

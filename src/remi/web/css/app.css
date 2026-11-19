@@ -92,6 +92,9 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 /* 件数は名前のすぐ右に、グレーの (5) で出す。名前が長いときは名前を省略して、件数と丸は残す */
 .node .count-inline { flex: none; margin-left: -2px; color: var(--text-muted); font-size: 12px; font-weight: 400; }
 .node.server { font-weight: 700; margin-top: 8px; }
+/* 2つ目以降のサーバーの上に、薄い横線を入れて、サーバーごとのかたまりの区切りを強調する */
+.tree > li + li { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 2px; }
+.tree > li + li > .node.server { margin-top: 6px; }
 .node.inaccessible .name, .node.inactive .name { color: var(--text-muted); }
 /* バージョン: 変化の印は青い丸だけ(太字にはしない)。終了したものは控えめに */
 .node.version .name { font-size: 12px; }
@@ -100,7 +103,7 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .node.version-group .name { font-size: 12px; color: var(--text-muted); }
 .node.roadmap .name { font-size: 12px; color: var(--text-muted); }
 /* サーバーの下の「すべてのプロジェクトを表示」: ふつうの行より控えめなリンクにする */
-.node.link-row { min-height: 24px; font-size: 11px; color: var(--link); }
+.node.link-row { min-height: 24px; font-size: 11px; color: color-mix(in srgb, var(--link) 60%, var(--surface)); }
 .node.link-row:hover .name { text-decoration: underline; }
 .node-error { margin: 2px 8px 4px 34px; padding: 6px 8px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-fg); font-size: 11px; }
 .tree-footer { padding: 6px 10px; border-top: 1px solid var(--border); }

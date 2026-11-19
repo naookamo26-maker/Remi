@@ -683,7 +683,7 @@ def test_edit_delete_note_and_attachment(app, fake):
     sid = _register(app, fake)
     assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10) and app.ctx.issues.attachments(sid, 10))
     perms = app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]
-    assert perms["editNotes"] == "all"
+    assert perms["editNotes"] == "own"  # 権限が分からないときは、自分のコメントだけ
 
     notes = lambda: {j.journal_id: (j.notes, j.private_notes) for j in app.ctx.issues.journals(sid, 10)}  # noqa: E731
     app.rpc("editNote", serverId=sid, issueId=10, journalId=j1["id"], notes="書き直した", private=True)

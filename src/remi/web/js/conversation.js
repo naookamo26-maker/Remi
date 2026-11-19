@@ -236,13 +236,17 @@ export class Conversation {
   }
 
   noteTools(j) {
-    if (!this.canEditNote(j) || this.editingNote?.journalId === j.journalId) return null;
+    // 権限が分かるまでは出さない(読み込み後に描き直す)。分かってからは、編集・削除できないコメントでも
+    // 「⋯」を出し、項目をグレーアウトして理由を示す
+    if (!this.permissions || !j.html || this.editingNote?.journalId === j.journalId) return null;
     return h("button", { type: "button", class: "msg-menu", "aria-label": t("conv.noteActions"), title: t("conv.noteActions"),
       "aria-haspopup": "menu", onClick: (e) => {
         const r = e.currentTarget.getBoundingClientRect();
+        const can = this.canEditNote(j);
         contextMenu(r.left, r.bottom + 4, [
-          { label: t("conv.editNote"), onClick: () => this.startEdit(j) },
-          { label: t("conv.deleteNote"), onClick: () => this.deleteNote(j) },
+          { label: t("conv.editNote"), disabled: !can, onClick: () => this.startEdit(j) },
+          { label: t("conv.deleteNote"), disabled: !can, onClick: () => this.deleteNote(j) },
+          ...(can ? [] : [{ sep: true }, { label: t("conv.noEditNote"), hint: true }]),
         ]);
       } }, "⋯");
   }
@@ -250,19 +254,22 @@ export class Conversation {
   startEdit(j) {
     this.editingNote = { journalId: j.journalId, text: j.notes, private: j.private, saving: false };
     this.refreshTimeline();
-    this.timeline?.querySelector(".note-editor textarea")?.focus();
+    const area = this.timeline?.querySelector(".note-editor textarea");
+    area?.focus();
+    area?.setSelectionRange(area.value.length, area.value.length); // 続きから書けるよう、末尾にカーソルを置く
   }
 
   /** 編集中のコメントの編集欄。描き直しても書きかけの内容が残るよう、入力は editingNote に持つ */
   noteEditor(j) {
     const e = this.editingNote;
     if (!e || e.journalId !== j.journalId) return null;
-    const area = h("textarea", { value: e.text, "aria-label": t("conv.editNote"), disabled: e.saving,
+    const area = h("textarea", { "aria-label": t("conv.editNote"), disabled: e.saving,
       onInput: () => { e.text = area.value; },
       onKeydown: (ev) => {
         if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); this.saveEdit(); }
         if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); this.cancelEdit(); }
       } });
+    area.value = e.text; // textarea の中身は value 属性では設定できないので、ここで入れる
     const priv = this.permissions?.privateNotes ? h("label", {},
       h("input", { type: "checkbox", checked: e.private, disabled: e.saving, onChange: (ev) => { e.private = ev.target.checked; } }),
       t("conv.sendPrivate")) : null;
@@ -314,19 +321,29 @@ export class Conversation {
     }
   }
 
-  /** 添付の削除ボタン(Redmineでは、チケットを編集できる人だけが削除できる) */
+  /** 添付の「⋯」メニュー(削除)。Redmineでは、チケットを編集できる人だけが削除できる。できないときはグレーアウトする */
   attachmentTools(det) {
-    if (!this.permissions?.editFields || det.kind !== "attachment" || !det.url || !det.attachmentId) return null;
-    return h("button", { type: "button", class: "link-button danger", onClick: async () => {
-      const d = this.data;
-      if (!d || !(await confirmDialog(t("conv.deleteFile"), t("conv.deleteFileBody", { name: det.filename }),
-        t("common.delete"), { danger: true }))) return;
-      try {
-        await call("deleteAttachment", { serverId: d.serverId, issueId: d.issueId, attachmentId: det.attachmentId });
-      } catch (err) {
-        toast(t("conv.deleteFileFailed", { reason: t(`errors.${err.code || "connection_failed"}`) }));
-      }
-    } }, t("conv.deleteFileShort"));
+    if (!this.permissions || det.kind !== "attachment" || !det.url || !det.attachmentId) return null;
+    return h("button", { type: "button", class: "msg-menu", "aria-label": t("conv.fileActions"), title: t("conv.fileActions"),
+      "aria-haspopup": "menu", onClick: (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        const can = !!this.permissions.editFields;
+        contextMenu(r.left, r.bottom + 4, [
+          { label: t("conv.deleteFile"), disabled: !can, onClick: () => this.deleteAttachment(det) },
+          ...(can ? [] : [{ sep: true }, { label: t("conv.noDeleteFile"), hint: true }]),
+        ]);
+      } }, "⋯");
+  }
+
+  async deleteAttachment(det) {
+    const d = this.data;
+    if (!d || !(await confirmDialog(t("conv.deleteFile"), t("conv.deleteFileBody", { name: det.filename }),
+      t("common.delete"), { danger: true }))) return;
+    try {
+      await call("deleteAttachment", { serverId: d.serverId, issueId: d.issueId, attachmentId: det.attachmentId });
+    } catch (err) {
+      toast(t("conv.deleteFileFailed", { reason: t(`errors.${err.code || "connection_failed"}`) }));
+    }
   }
 
   // --- 本文中のリンク ---------------------------------------------------------------

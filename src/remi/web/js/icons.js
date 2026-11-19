@@ -12,6 +12,7 @@ const PATHS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   filter: '<path d="M3 5h18l-7 8v6l-4-2v-4z"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
 };
 

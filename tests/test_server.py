@@ -252,8 +252,8 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     assert server["count"] == 3 and server["unread"] == 0 and tree["unread"] == 0
     a = projects()[1]
     assert a["count"] == 2 and a["relationsOwn"] is True and a["relations"] == ["assigned", "group", "authored"]
-    assert a["children"][0]["relations"] == ["assigned", "group", "authored"]
-    assert a["children"][0]["relationsOwn"] is False and a["children"][0]["count"] == 0
+    # 子プロジェクトは、表示するチケットがなくなる(ウォッチだけだった)ので、ツリーから消える
+    assert a["children"] == []
     assert projects()[3]["count"] == 1
     # 子プロジェクトで上書きできる
     app.rpc("setProjectSetting", serverId=sid, projectId=2, key="visible_relations", value=["watching"])
@@ -287,8 +287,8 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     # 継承に戻す
     app.rpc("setProjectSetting", serverId=sid, projectId=3, key="visible_relations", value=None)
     assert ids() == [10, 30]
-    # 何も選ばない・知らない関係は受け付けない
-    for bad in ([], ["x"], ["assigned", "assigned"], "assigned", True):
+    # 知らない関係・重複・リストでない値は受け付けない
+    for bad in (["x"], ["assigned", "assigned"], "assigned", True):
         err = app.rpc_error("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=bad)
         assert err["code"] == "invalid_setting"
     # グローバル設定としては、もう受け付けない
@@ -308,15 +308,51 @@ def test_show_all_projects_per_server(app, fake):
     names = lambda i: [p["name"] for p in app.rpc("getTree")["servers"][i]["projects"]]  # noqa: E731
     assert wait_until(lambda: names(0) == ["チケットあり"] and names(1) == ["チケットあり"])
     assert app.rpc("getTree")["servers"][0]["showAllProjects"] is False
+    # 隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
+    assert app.rpc("getTree")["servers"][0]["hiddenProjects"] == 1
     app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=True)
     tree = app.rpc("getTree")
     assert tree["servers"][0]["showAllProjects"] is True
+    assert tree["servers"][0]["hiddenProjects"] == 1  # 表示していても、「隠す」リンクのために数える
     assert names(0) == ["チケットあり", "チケットなし"]
     assert names(1) == ["チケットあり"]  # ほかのサーバーには効かない
     assert app.ctx.servers.get(other).show_all_projects is False
     assert app.rpc_error("setServerSetting", serverId=999, key="show_all_projects", value=True)["code"] == "not_found"
-    for key, bad in (("show_all_projects", "yes"), ("visible_relations", []), ("x", True)):
+    for key, bad in (("show_all_projects", "yes"), ("visible_relations", ["x"]), ("x", True)):
         assert app.rpc_error("setServerSetting", serverId=sid, key=key, value=bad)["code"] == "invalid_setting"
+
+
+def test_empty_relations_hide_project_from_tree(app, fake):
+    """表示するチケットをすべて外せる。表示するものがないプロジェクトは、ツリーから消える。"""
+    fake.add_project(1, "A")
+    fake.add_project(2, "B")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(20, 2, "担当")
+    sid = _register(app, fake)
+    assert wait_until(lambda: len(app.ctx.issues.list_issues([sid])) == 2)
+    names = lambda: [p["name"] for p in app.rpc("getTree")["servers"][0]["projects"]]  # noqa: E731
+    assert names() == ["A", "B"]
+    ps = app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=[])
+    assert ps["visible_relations"] == {"value": [], "effective": []}
+    assert names() == ["B"]
+    assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [20]
+    # 一覧の絞り込みボタンでは、ツリーの形は変わらない
+    app.rpc("setSetting", key="relation_filter", value="watching")
+    assert names() == ["B"]
+    app.rpc("setSetting", key="relation_filter", value="all")
+    # 「すべてのプロジェクトを表示」にすれば、表示するものがなくても出る(ここから戻せる)
+    app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=True)
+    assert names() == ["A", "B"]
+    app.rpc("setServerSetting", serverId=sid, key="show_all_projects", value=False)
+    assert app.rpc("getTree")["servers"][0]["hiddenProjects"] == 1
+    # サーバーの既定もすべて外せる。独自の設定があるプロジェクトだけが残る
+    app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=[])
+    assert names() == []
+    assert app.rpc("getTree")["servers"][0]["hiddenProjects"] == 2
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=["assigned"])
+    assert names() == ["A"]
+    tree = app.rpc("getTree")["servers"][0]
+    assert tree["relations"] == [] and tree["relationsOwn"] is True
 
 
 def test_server_default_visible_relations(app, fake):
@@ -335,12 +371,15 @@ def test_server_default_visible_relations(app, fake):
     [server] = app.rpc("getTree")["servers"]
     assert server["relations"] == ["assigned", "group"] and server["relationsOwn"] is True
     assert server["count"] == 1
-    assert [p["relations"] for p in server["projects"]] == [["assigned", "group"]] * 2
+    # 表示するチケットがない B と A-子 は、ツリーから消える
+    assert [(p["name"], p["relations"], p["children"]) for p in server["projects"]] == [("A", ["assigned", "group"], [])]
     assert app.rpc("getProjectSettings", serverId=sid, projectId=2)["visible_relations"] == {
         "value": None, "effective": ["assigned", "group"]}
     # プロジェクトの独自設定はサーバーの既定より優先し、子プロジェクトにも効く
     app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=["watching"])
     assert ids() == [20]
+    [a] = app.rpc("getTree")["servers"][0]["projects"]
+    assert [c["name"] for c in a["children"]] == ["A-子"]
     app.rpc("setServerSetting", serverId=sid, key="visible_relations", value=None)
     assert ids() == [20, 30]
     assert app.rpc("getTree")["servers"][0]["relationsOwn"] is False
@@ -368,6 +407,8 @@ def test_write_permissions(app, fake):
                          "attach": False, "editNotes": "none", "reason": "project_closed"}
     # メンバーでない(権限が分からない)ときは制限しない
     assert perms(30)["editFields"] and perms(30)["comment"]
+    # ただし他の人のコメントまで編集できるとはしない(自分のコメントだけ「⋯」から操作できる)
+    assert perms(30)["editNotes"] == "own"
 
     # 権限はしばらく覚えておくので、変えたら覚えた分を捨てる
     fake.roles = {3: ["view_issues"], 4: ["edit_issues", "add_issue_notes", "set_notes_private"]}
@@ -388,6 +429,7 @@ def test_write_permissions(app, fake):
     fake.admin = True
     app.api._my_roles.clear()
     assert perms(10)["editFields"] and perms(30)["comment"]
+    assert perms(10)["editNotes"] == "all"
 
 
 def test_edit_upload_and_watch(app, fake):
@@ -545,9 +587,16 @@ def test_versions_api_list_tree_and_read(app, fake):
     tree = app.rpc("getTree")["servers"][0]
     assert tree["count"] == 1  # バージョンのチケットは件数に入れない
     assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [10]
-    assert [i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"]] == [20]
-    app.rpc("setSetting", key="show_closed", value=True)
-    assert sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"]) == [20, 21]
+    # マイルストーンの「クローズ済みも表示」は、チケット一覧の設定(show_closed)とは別で、既定はオン
+    vids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"])  # noqa: E731
+    assert vids() == [20, 21]
+    app.rpc("setSetting", key="version_show_closed", value=False)
+    assert vids() == [20]
+    app.rpc("setSetting", key="show_closed", value=True)  # 一覧の設定は、バージョンには効かない
+    assert vids() == [20]
+    app.rpc("setSetting", key="version_show_closed", value=True)
+    assert vids() == [20, 21]
+    app.rpc("setSetting", key="show_closed", value=False)
     assert app.rpc_error("listIssues", serverId=sid, versionId=999)["code"] == "not_found"
 
     # 変化があれば印が付き、表示したら消える
@@ -639,7 +688,7 @@ def test_edit_delete_note_and_attachment(app, fake):
     sid = _register(app, fake)
     assert wait_until(lambda: app.ctx.issues.journals_synced(sid, 10) and app.ctx.issues.attachments(sid, 10))
     perms = app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]
-    assert perms["editNotes"] == "all"
+    assert perms["editNotes"] == "own"  # 権限が分からないときは、自分のコメントだけ
 
     notes = lambda: {j.journal_id: (j.notes, j.private_notes) for j in app.ctx.issues.journals(sid, 10)}  # noqa: E731
     app.rpc("editNote", serverId=sid, issueId=10, journalId=j1["id"], notes="書き直した", private=True)

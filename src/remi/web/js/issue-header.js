@@ -37,24 +37,29 @@ export class IssueHeader {
    */
   render(d) {
     const app = this.conv.app;
-    const openBtn = h("button", { type: "button", class: "btn", title: t("conv.openRedmineHint"),
-      onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }) }, icon("external"), t("conv.openRedmine"));
-    const moreBtn = h("button", { type: "button", class: "btn", "aria-label": t("conv.moreActions"),
+    // 件名の幅を確保するため、ウォッチ(星)と「Redmineで開く」は、アイコンだけのボタンを縦に並べる。
+    // 開くボタンは、右の「▾」でブラウザで開く・URLのコピーを選べる(Shift+クリックでも既定のブラウザで開く)
+    const openBtn = h("button", { type: "button", class: "btn icon-only", title: t("conv.openRedmineHint"),
+      "aria-label": t("conv.openRedmine"),
+      onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }) }, icon("external"));
+    const moreBtn = h("button", { type: "button", class: "btn more", "aria-label": t("conv.moreActions"),
+      title: t("conv.moreActions"), "aria-haspopup": "menu",
       onClick: (e) => {
         const r = e.currentTarget.getBoundingClientRect();
-        contextMenu(r.left, r.bottom + 4, [
+        contextMenu(r.right - 4, r.bottom + 4, [
           { label: t("conv.openInBrowser"), onClick: () => app.openRedmine(d.url, { external: true }) },
           { label: t("conv.copyUrl"), onClick: () => navigator.clipboard.writeText(d.url).then(() => toast(t("conv.copied"))) },
         ]);
       } }, "▾");
-    const watchBtn = h("button", { type: "button", class: `btn${d.watching ? " on" : ""}`, "aria-pressed": String(d.watching),
+    const watchBtn = h("button", { type: "button", class: `btn icon-only watch${d.watching ? " on" : ""}`,
+      "aria-pressed": String(d.watching), "aria-label": d.watching ? t("conv.watching") : t("conv.watch"),
       title: d.watching ? t("conv.unwatchHint") : t("conv.watchHint"),
       onClick: () => {
         // 結果は watchFinished / dataChanged イベントで届き、ヘッダが描き直される
         watchBtn.disabled = true;
         call("setWatching", { serverId: d.serverId, issueId: d.issueId, watching: !d.watching })
           .catch((e) => { watchBtn.disabled = false; toast(t(`errors.${e.code}`)); });
-      } }, d.watching ? t("conv.watching") : t("conv.watch"));
+      } }, icon("star"));
     /** 書き込めないときの説明(選択肢を読み込んでから表示する) */
     this.readOnlyNote = h("span", { class: "read-only-note", hidden: true });
     this.selects = {

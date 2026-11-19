@@ -44,6 +44,7 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "notify_enabled": lambda v: isinstance(v, bool),
     "autostart": lambda v: isinstance(v, bool),
     "show_closed": lambda v: isinstance(v, bool),
+    "version_show_closed": lambda v: isinstance(v, bool),
     "unread_first": lambda v: isinstance(v, bool),
     "closed_retention_days": lambda v: isinstance(v, int) and 0 <= v <= 365,
     "allow_external_images": lambda v: isinstance(v, bool),
@@ -105,8 +106,8 @@ def _valid_change(key: str, v: Any) -> bool:
 
 
 def _valid_relations(v: Any) -> bool:
-    """表示するチケット(プロジェクトごと)の値: 関係の重複のないリスト(1つ以上)。"""
-    return isinstance(v, list) and len(v) > 0 and len(set(v)) == len(v) and all(x in RELATIONS for x in v)
+    """表示するチケット(プロジェクトごと)の値: 関係の重複のないリスト。空なら、何も表示しない。"""
+    return isinstance(v, list) and len(set(v)) == len(v) and all(x in RELATIONS for x in v)
 
 
 class RpcError(Exception):
@@ -363,7 +364,7 @@ class RemiApi:
             out[key] = {"value": self.ctx.projects.get_setting(serverId, projectId, key), "effective": bool(eff)}
         own = self.ctx.projects.get_visible_relations(serverId, projectId)
         eff_rel = self.ctx.projects.visible_relations_map(serverId).get(
-            projectId, (server.visible_relations if server else None) or list(RELATIONS))
+            projectId, server.visible_relations if server and server.visible_relations is not None else list(RELATIONS))
         out["visible_relations"] = {"value": own, "effective": [r for r in RELATIONS if r in eff_rel]}
         p = self.ctx.projects.get(serverId, projectId)
         out["url"] = f"{server.url}/projects/{p.identifier or p.project_id}" if server and p else None
@@ -436,7 +437,8 @@ class RemiApi:
         return self._issue_summaries(rows, version=True)
 
     def _issue_summaries(self, rows, version: bool = False) -> dict[str, Any]:
-        show_closed = bool(self.ctx.settings.get("show_closed"))
+        # バージョンを開いたときの「クローズ済みも表示」は、チケット一覧とは別の設定
+        show_closed = bool(self.ctx.settings.get("version_show_closed" if version else "show_closed"))
         names: dict[int, dict[str, Any]] = {}
         out = []
         for r in rows:
@@ -463,7 +465,8 @@ class RemiApi:
                 "relations": _flags(r.relation_flags), "monitored": r.monitored,
                 "lastNoteUser": r.last_note_user, "lastNote": (r.last_note or "")[:120].replace("\n", " "),
             })
-        if self.ctx.settings.get("unread_first"):
+        # バージョンのチケットは自分と関係ないものも含み、未読として数えないので、未読を上にしない
+        if not version and self.ctx.settings.get("unread_first"):
             out.sort(key=lambda x: 0 if x["unread"] else 1)  # 安定ソートなので更新順は保たれる
         return {"issues": out, "total": len(out)}
 
@@ -795,7 +798,8 @@ class RemiApi:
         perms = self._project_permissions(server.server_id, row.project_id)
         if perms is None or "admin" in perms:
             edit = comment = private = True
-            edit_notes = "all"
+            # 管理者なら、すべてのコメントを編集できる。権限が分からないときは、自分のコメントだけを出す
+            edit_notes = "all" if perms is not None else "own"
         else:
             own = row.author_id is not None and row.author_id == server.my_user_id
             edit = "edit_issues" in perms or ("edit_own_issues" in perms and own)

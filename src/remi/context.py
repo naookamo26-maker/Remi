@@ -48,5 +48,5 @@ class AppContext:
             visible[s.server_id] = m
             defaults[s.server_id] = s.visible_relations
             for pid in self.issues.count_by_project(s.server_id):
-                in_use.update(m.get(pid, s.visible_relations or RELATIONS))
+                in_use.update(m.get(pid, RELATIONS if s.visible_relations is None else s.visible_relations))
         return RelationScope.build(defaults, visible, in_use, relation_filter)

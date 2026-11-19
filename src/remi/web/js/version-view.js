@@ -12,8 +12,8 @@ import { icon } from "./icons.js";
  */
 export function renderVersion(d, app) {
   const percent = d.total ? Math.round((d.done / d.total) * 100) : 0;
-  const openBtn = h("button", { type: "button", class: "btn", title: t("conv.openRedmineHint"),
-    onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }) }, icon("external"), t("conv.openRedmine"));
+  const openBtn = h("button", { type: "button", class: "btn icon-only", title: t("conv.openRedmineHint"),
+    "aria-label": t("conv.openRedmine"), onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }) }, icon("external"));
   const meta = h("div", { class: "fields" },
     h("span", { class: `pill${d.status === "closed" ? " closed" : ""}` }, t(`version.status.${d.status}`)),
     h("span", { class: "static" }, t("version.dueDate"), " ", h("b", {}, d.dueDate || t("version.noDueDate"))),

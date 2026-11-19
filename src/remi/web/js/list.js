@@ -31,7 +31,8 @@ export class IssueList {
         }
       } });
     this.unreadFirst = h("input", { type: "checkbox", onChange: () => app.saveSetting("unread_first", this.unreadFirst.checked).then(() => this.refresh()) });
-    this.showClosed = h("input", { type: "checkbox", onChange: () => app.saveSetting("show_closed", this.showClosed.checked).then(() => this.refresh()) });
+    // 「クローズ済みも表示」は、マイルストーン(バージョン)を開いているときはチケット一覧とは別の設定にする
+    this.showClosed = h("input", { type: "checkbox", onChange: () => app.saveSetting(this.showClosedKey(), this.showClosed.checked).then(() => this.refresh()) });
     // 関係での絞り込み(すべて / 担当 / ウォッチ / 作成)
     this.relationButtons = ["all", "assigned", "watching", "authored"].map((value) =>
       h("button", { type: "button", dataset: { value }, "aria-pressed": "false",
@@ -47,7 +48,7 @@ export class IssueList {
         h("label", { class: "search" }, icon("search"), this.searchInput),
         this.relationGroup,
         h("div", { class: "toggles" },
-          h("label", {}, this.unreadFirst, t("list.unreadFirst")),
+          this.unreadFirstLabel = h("label", {}, this.unreadFirst, t("list.unreadFirst")),
           h("label", {}, this.showClosed, t("list.showClosed")))),
       this.el);
   }
@@ -73,7 +74,9 @@ export class IssueList {
     this.title.textContent = title;
     this.crumb.textContent = [crumb, t("list.count", { count: this.issues.length })].filter(Boolean).join(" · ");
     this.unreadFirst.checked = !!this.app.settings.unread_first;
-    this.showClosed.checked = !!this.app.settings.show_closed;
+    this.showClosed.checked = !!this.app.settings[this.showClosedKey()];
+    // マイルストーンのチケットは未読として数えないので、「未読を上に」は出さない
+    this.unreadFirstLabel.hidden = this.app.selection.kind === "version";
     const rel = this.relationFilter();
     const shown = this.shownFilters();
     for (const b of this.relationButtons) {
@@ -117,6 +120,11 @@ export class IssueList {
           preview ? h("span", { class: "preview" }, preview) : null)));
     }
     this.el.scrollTop = scroll;
+  }
+
+  /** 「クローズ済みも表示」の設定のキー: マイルストーンを開いているときは、チケット一覧と分けて覚える */
+  showClosedKey() {
+    return this.app.selection.kind === "version" ? "version_show_closed" : "show_closed";
   }
 
   /** 絞り込みのボタンのうち、どこかのプロジェクトで表示している(表示するチケットに含まれる)関係のもの */

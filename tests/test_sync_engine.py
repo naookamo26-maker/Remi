@@ -220,3 +220,49 @@ def test_edited_or_deleted_comment_and_removed_attachment_update_screen(setup, f
     del fake.attachments[77]
     assert sync.fetch_journals(1).changed_issue_ids == {1}
     assert issues.attachments(sid, 1) == []
+
+
+def test_fetch_journals_resolves_names_in_details(setup, fake, db):
+    """変更履歴に出てくる、知らないバージョン・カテゴリ・ユーザーの名前を問い合わせて覚える(見えないものは #ID)。"""
+    from remi.store.masters import MasterStore
+
+    sync, issues, sid = setup
+    fake.add_version(5, 2, "v1.0")
+    fake.add_version(6, 2, "v2.0")
+    fake.categories[2] = [{"id": 3, "name": "画面"}]
+    fake.add_issue(1, 2, "担当", version=6)
+    fake.add_journal(1, 7, "", details=[
+        {"property": "attr", "name": "fixed_version_id", "old_value": "5", "new_value": "6"},
+        {"property": "attr", "name": "category_id", "old_value": None, "new_value": "3"},
+        {"property": "attr", "name": "assigned_to_id", "old_value": "8", "new_value": "999"},
+    ])
+    sync.sync_changes()
+    fake.requests.clear()
+    sync.fetch_journals(1)
+    masters = MasterStore(db)
+    assert masters.names(sid, "version") == {5: "v1.0", 6: "v2.0"}
+    assert masters.names(sid, "category") == {3: "画面"}
+    assert masters.names(sid, "user")[8] == "佐藤 花子"
+    asked = [q for _, q in fake.requests if q.startswith(("/versions/", "/issue_categories/", "/users/"))]
+    # v2.0 はチケットに含まれていたので問い合わせない。見えないユーザー(999)は1回だけ問い合わせる
+    assert sorted(asked) == ["/issue_categories/3.json", "/users/8.json", "/users/999.json", "/versions/5.json"]
+    fake.requests.clear()
+    sync.fetch_journals(1)
+    assert not [q for _, q in fake.requests if q.startswith(("/versions/", "/issue_categories/", "/users/"))]
+
+
+def test_does_not_notify_the_same_comment_twice(setup, fake):
+    """チケットのキャッシュを消して取り直しても(監視対象から外れて戻ったなど)、通知したコメントは再び通知しない。"""
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "担当", updated_on=ts(60))
+    sync.sync_changes()
+    sync.fetch_journals(1)
+    fake.add_journal(1, 7, "新しいコメント")
+    sync.sync_changes()
+    r = sync.fetch_journals(1)
+    assert [c.notes for c in r.new_comments] == ["新しいコメント"]  # 読まずにおく
+    issues.delete_issues(sid, [1])
+    sync.servers.update_fields(sid, last_sync_cursor=ts(120))  # 古いコメントも「新しく」見える状態にする
+    sync.sync_changes()
+    assert sync.fetch_journals(1).new_comments == []
+    assert issues.unread_count(sid, 1) == 1  # 未読のまま(通知しないだけ)

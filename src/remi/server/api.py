@@ -169,6 +169,8 @@ class RemiApi:
         # 通知の判定に使う: 画面で開いているチケットと、ウィンドウがアクティブか
         self.open_issue: tuple[int, int] | None = None
         self.active = True
+        # 通知を押して起動されたときに開くチケット(画面が起動時に takePendingOpen で受け取る)
+        self.pending_open: list[tuple[int, int]] = []
         self._members: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
         # server_id → (取得した時刻, 管理者か, project_id → ロールID)
         self._my_roles: dict[int, tuple[float, bool, dict[int, set[int]]]] = {}
@@ -489,8 +491,20 @@ class RemiApi:
             "serverId": serverId, "versionId": versionId, "name": v.name, "status": v.status,
             "dueDate": v.due_date, "description": v.description or "", "projectId": v.project_id,
             "breadcrumb": crumbs, "done": done, "total": total,
-            "url": f"{server.url}/versions/{versionId}", "events": events,
+            "url": f"{server.url}/versions/{versionId}", "events": events, "synced": v.issues_synced,
         }
+
+    @rpc
+    def fetchVersion(self, serverId: int, versionId: int) -> dict[str, Any]:  # noqa: N802,N803
+        """画面で開いたバージョンのチケットを取得する(終了したバージョンは、開いたときに初めて取得する)。
+        まだ取得していないものと終了したものだけを取りに行く(未完了で取得済みのものは定期的な確認に任せる)。"""
+        v = self.ctx.versions.get(serverId, versionId)
+        if v is None:
+            raise RpcError("not_found")
+        started = False
+        if (v.closed or not v.issues_synced) and self.sync is not None:
+            started = self.sync.fetch_version(serverId, versionId)
+        return {"started": started}
 
     # --- 会話 ---------------------------------------------------------------------
     def _render_ctx(self, server: Server, issue_id: int) -> RenderContext:
@@ -510,7 +524,12 @@ class RemiApi:
             status=m.names(server_id, "status"), user=m.names(server_id, "user"),
             priority=m.names(server_id, "priority"), tracker=m.names(server_id, "tracker"),
             project={p.project_id: p.name for p in self.ctx.projects.list(server_id)},
+            # ウォッチしているバージョンの名前を優先する(名前が変わっていれば新しい名前)
+            version={**m.names(server_id, "version"),
+                     **{v.version_id: v.name for v in self.ctx.versions.list(server_id)}},
+            category=m.names(server_id, "category"),
             custom_field=m.names(server_id, "custom_field"),
+            custom_field_defs={cid: e for cid, e in m.extras(server_id, "custom_field").items() if e.get("field_format")},
         )
 
     @rpc
@@ -575,6 +594,15 @@ class RemiApi:
                 self.ctx.issues.mark_read(serverId, issueId)
                 self.ctx.bus.publish("dataChanged", serverId=serverId, issueIds=[issueId], source="read")
         return result
+
+    @rpc
+    def takePendingOpen(self) -> dict[str, int] | None:  # noqa: N802
+        """通知を押して起動されたときに開くチケット。画面が起動時に1回だけ受け取る。"""
+        if not self.pending_open:
+            return None
+        server_id, issue_id = self.pending_open[-1]
+        self.pending_open.clear()
+        return {"serverId": server_id, "issueId": issue_id}
 
     @rpc
     def setOpenIssue(self, serverId: int | None, issueId: int | None) -> None:  # noqa: N802,N803
@@ -850,6 +878,10 @@ class RemiApi:
             pid = int(data["project"]["id"])
             project = client.project(pid, include="trackers,issue_categories")
             versions = client.versions(pid)
+            # 変更履歴の値(ID)を名前にするため、取得したバージョン・カテゴリの名前を覚える
+            for kind, items in (("version", versions), ("category", project.get("issue_categories") or [])):
+                for it in items:
+                    self.ctx.masters.remember(serverId, kind, it.get("id"), it.get("name"))
             members = self._members_of(serverId, pid)
             defs = self._custom_field_defs(serverId)
         except RedmineError as e:

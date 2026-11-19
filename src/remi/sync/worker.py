@@ -218,6 +218,17 @@ class ServerWorker(threading.Thread):
                 log.info("refetch #%s failed: %s", issue_id, e)
         elif cmd == "watch":
             self._set_watching(*args)
+        elif cmd == "version":
+            (version_id,) = args
+            try:
+                changed = self.sync.sync_version(version_id)
+            except RedmineError as e:
+                log.info("fetching version %s failed: %s", version_id, e)
+                self.bus.publish("versionFetchFailed", serverId=self.server_id, versionId=version_id,
+                                 error=e.code.value)
+                return
+            if changed:
+                self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=[version_id])
 
     # --- コメント投稿・項目の変更・ウォッチ ------------------------------------------
     def _update_issue(self, issue_id: int, notes: str, private: bool, changes: dict | None,
@@ -338,9 +349,16 @@ class ServerWorker(threading.Thread):
             self.sched.changes = now + jittered(self._interval(server.poll_interval))
             did_network = True
         if now >= self.sched.versions:
-            changed = sync.sync_versions()
-            if changed:
-                self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(changed))
+            # チケットを取り直したバージョンは、1つずつすぐ画面に反映する(最初の取得は時間がかかるため)
+            notified: set[int] = set()
+
+            def on_version(ids: set[int]) -> None:
+                notified.update(ids)
+                self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(ids))
+
+            rest = sync.sync_versions(on_changed=on_version) - notified
+            if rest:
+                self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(rest))
             self.sched.versions = now + jittered(self._interval(max(server.poll_interval, VERSIONS_MIN_INTERVAL)))
             did_network = True
         # 画面が見えていない間は確かめない(そのチケットの新着は、上の差分同期で見つかる)
@@ -546,6 +564,15 @@ class SyncManager:
         if w is None:
             return False
         w.send("update", issue_id, notes, private, changes, uploads)
+        return True
+
+    def fetch_version(self, server_id: int, version_id: int) -> bool:
+        """画面で開いたバージョンのチケットを取得する(終了したバージョンは自動では取得しないため)。
+        変わっていれば versionsChanged、失敗したら versionFetchFailed が届く。"""
+        w = self._worker(server_id)
+        if w is None:
+            return False
+        w.send("version", version_id)
         return True
 
     def refetch_issue(self, server_id: int, issue_id: int) -> bool:

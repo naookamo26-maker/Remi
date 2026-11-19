@@ -7,7 +7,8 @@ from typing import Any
 
 from remi.store.db import Database
 
-KINDS = ("status", "tracker", "priority", "user", "custom_field")
+# version・category は、チケットやjournalに含まれていた名前と、個別に問い合わせた名前を覚える
+KINDS = ("status", "tracker", "priority", "user", "custom_field", "version", "category")
 
 
 class MasterStore:
@@ -25,8 +26,23 @@ class MasterStore:
                     (server_id, kind, int(it["id"]), it.get("name", ""), json.dumps(extra)),
                 )
 
+    def merge(self, server_id: int, kind: str, items: list[dict[str, Any]], extra_keys: tuple[str, ...]) -> None:
+        """名前と追加の情報を、ほかの行を消さずに書き込む(カスタムフィールドの定義など)。"""
+        with self.db.tx() as c:
+            for it in items:
+                extra = {k: it.get(k) for k in extra_keys if k in it}
+                c.execute(
+                    "INSERT INTO masters(server_id, kind, id, name, extra_json) VALUES(?, ?, ?, ?, ?) "
+                    "ON CONFLICT(server_id, kind, id) DO UPDATE SET name = excluded.name, extra_json = excluded.extra_json",
+                    (server_id, kind, int(it["id"]), it.get("name", ""), json.dumps(extra)),
+                )
+
+    def extras(self, server_id: int, kind: str) -> dict[int, dict[str, Any]]:
+        return {r[0]: json.loads(r[1] or "{}") for r in self.db.query(
+            "SELECT id, extra_json FROM masters WHERE server_id = ? AND kind = ?", (server_id, kind))}
+
     def remember(self, server_id: int, kind: str, id_: int | None, name: str | None) -> None:
-        """チケットやjournalに含まれていた名前を覚えておく(ユーザー・カスタムフィールド)。"""
+        """チケットやjournalに含まれていた名前を覚えておく(ユーザー・カスタムフィールド・バージョン・カテゴリ)。"""
         if id_ is None or not name:
             return
         with self.db.tx() as c:

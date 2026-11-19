@@ -54,8 +54,9 @@ class VersionStore:
 
     # --- バージョン ---------------------------------------------------------------
     def list(self, server_id: int) -> list[Version]:
+        """新しいものから(Redmineと同じく上に新しいもの)。期日の遅い順で、期日のないものは先頭。同じならIDの大きい順。"""
         return [_version(r) for r in self.db.query(
-            "SELECT * FROM versions WHERE server_id = ? ORDER BY COALESCE(due_date, '9999'), name COLLATE NOCASE",
+            "SELECT * FROM versions WHERE server_id = ? ORDER BY COALESCE(due_date, '9999') DESC, version_id DESC",
             (server_id,))]
 
     def get(self, server_id: int, version_id: int) -> Version | None:

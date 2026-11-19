@@ -85,7 +85,12 @@ export class IssueList {
     const scroll = this.el.scrollTop;
     clear(this.el);
     if (!this.issues.length) {
-      this.el.append(h("li", { class: "empty" }, this.search ? t("list.noMatches") : t("list.empty")));
+      // まだチケットを取得していないバージョンは、空ではなく取得中と出す
+      const sel = this.app.selection;
+      const loading = !this.search && sel.kind === "version"
+        && this.app.tree.findVersion(sel.serverId, sel.versionId)?.synced === false;
+      this.el.append(h("li", { class: "empty" },
+        this.search ? t("list.noMatches") : loading ? t("list.versionLoading") : t("list.empty")));
       return;
     }
     const current = this.app.current;

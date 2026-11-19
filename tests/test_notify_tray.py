@@ -7,10 +7,18 @@ from remi.system.tray import Tray, make_icon
 class FakeBackend:
     def __init__(self):
         self.shown = []
+        self.removed = []
+        self.in_center = []  # 通知センターに残っている (サーバー, チケット)
 
     def show(self, n, on_click):
         self.shown.append(n)
         self.on_click = on_click
+
+    def remove(self, server_id, issue_id):
+        self.removed.append((server_id, issue_id))
+
+    def shown_issues(self):
+        return list(self.in_center)
 
 
 class FakeApi:
@@ -147,3 +155,36 @@ def test_fallback_log_does_not_contain_comment_text(caplog):
         backend.show(Notification("#10 機密の件名", "田中: 機密のコメント", 1, 10), lambda: None)
     assert "#10" in caplog.text or "10" in caplog.text
     assert "機密" not in caplog.text
+
+
+def test_open_url_round_trip():
+    from remi.system.notifier import open_url, parse_open_url, toast_tag
+
+    assert open_url(1, 23) == "remi://open?server=1&issue=23"
+    assert parse_open_url(open_url(1, 23)) == (1, 23)
+    assert parse_open_url("remi://open/?server=1&issue=23/") == (1, 23)  # Windows が / を付けることがある
+    for bad in ("", "remi://open?server=1", "remi://delete?server=1&issue=2", "http://x/?server=1&issue=2",
+                "remi://open?server=1&issue=2&x=3", "remi://open?server=-1&issue=2"):
+        assert parse_open_url(bad) is None
+    assert toast_tag(1, 23) == ("1-23", "s1")
+
+
+def test_removes_notifications_of_read_issues(db):
+    """アプリでチケットを読んだら、そのチケットの通知を通知センターから消す(未読が残るものは消さない)。"""
+    ctx, sid, n, backend, api, opened = setup(db)
+    for iid in (5, 6):
+        ctx.issues.upsert_issue(sid, {"id": iid, "project": {"id": 1}, "subject": f"件名{iid}",
+                                      "updated_on": "2026-11-19T00:00:00Z"}, 1, True)
+        ctx.issues.upsert_journals(sid, iid, [{"id": iid * 10, "user": {"id": 7, "name": "田中"}, "notes": "x",
+                                               "created_on": "2026-11-19T00:00:00Z"}])
+    ctx.issues.mark_read(sid, 5)
+    ctx.bus.publish("dataChanged", serverId=sid, issueIds=[5], source="read")
+    assert backend.removed == [(sid, 5)]
+    # 既読以外の変化では消さない
+    ctx.bus.publish("dataChanged", serverId=sid, issueIds=[6])
+    assert backend.removed == [(sid, 5)]
+    # すべて既読: 通知センターに残っている通知のうち、読んだものを消す
+    backend.in_center = [(sid, 6), (sid + 1, 6)]
+    ctx.issues.mark_read(sid, 6)
+    ctx.bus.publish("dataChanged", serverId=sid, issueIds=[], source="read")
+    assert backend.removed == [(sid, 5), (sid, 6)]

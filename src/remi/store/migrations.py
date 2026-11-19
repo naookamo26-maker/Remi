@@ -202,6 +202,18 @@ ALTER TABLE versions ADD COLUMN issues_full_at TEXT;
 UPDATE servers SET poll_interval = 180 WHERE poll_interval < 180
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3, V4]
+# 通知したコメントの記録。チケットのキャッシュを消して取り直したとき(監視対象から外れて戻った・削除の確認など)に、
+# 同じコメントを再び通知しないよう、チケットのキャッシュとは別に残す(サーバーを削除したときだけ消える)
+V5 = """
+CREATE TABLE notified (
+    server_id  INTEGER NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
+    issue_id   INTEGER NOT NULL,
+    -- ここまでの journal は通知した(または通知の対象として扱った)
+    journal_id INTEGER NOT NULL,
+    PRIMARY KEY (server_id, issue_id)
+)
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4, V5]
 
 SCHEMA_VERSION = len(MIGRATIONS)

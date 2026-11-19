@@ -345,6 +345,19 @@ class FakeRedmine:
                 if not self.admin:
                     return 403, {}
                 return 200, {"custom_fields": self.custom_fields}
+            m = re.match(r"^/versions/(\d+)\.json$", path)
+            if m:
+                v = self.versions.get(int(m.group(1)))
+                return (200, {"version": v}) if v else (404, {})
+            m = re.match(r"^/issue_categories/(\d+)\.json$", path)
+            if m:
+                cid = int(m.group(1))
+                c = next((c for cs in self.categories.values() for c in cs if c["id"] == cid), None)
+                return (200, {"issue_category": c}) if c else (404, {})
+            m = re.match(r"^/users/(\d+)\.json$", path)
+            if m:
+                u = self.users.get(int(m.group(1)))  # グループ・見えないユーザーは 404
+                return (200, {"user": u}) if u else (404, {})
             m = re.match(r"^/projects/(\d+)/versions\.json$", path)
             if m:
                 pid = int(m.group(1))

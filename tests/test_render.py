@@ -111,6 +111,26 @@ def test_details():
     assert "#99" in d["text"]
 
 
+def test_details_versions_categories_and_custom_fields():
+    """対象バージョン・カテゴリ・カスタムフィールド(ユーザー・バージョン・キーバリュー・真偽値)をIDのまま出さない。"""
+    names = DetailNames(
+        user={42: "岡本"}, version={5: "v1.0", 6: "v2.0"}, category={3: "画面"},
+        custom_field={1: "確認者", 2: "リリース", 3: "環境", 4: "緊急", 5: "メモ"},
+        custom_field_defs={1: {"field_format": "user"}, 2: {"field_format": "version"},
+                           3: {"field_format": "enumeration", "possible_values": [{"value": "7", "label": "本番"}]},
+                           4: {"field_format": "bool"}, 5: {"field_format": "string"}})
+    text = lambda d: describe_detail(d, names, "ja")["text"]  # noqa: E731
+    assert text({"property": "attr", "name": "fixed_version_id", "old_value": "5", "new_value": "6"}) == \
+        "対象バージョン を v1.0 から v2.0 に変更"
+    assert "画面" in text({"property": "attr", "name": "category_id", "old_value": None, "new_value": "3"})
+    assert "#9" in text({"property": "attr", "name": "fixed_version_id", "old_value": None, "new_value": "9"})
+    assert "岡本" in text({"property": "cf", "name": "1", "old_value": None, "new_value": "42"})
+    assert "v2.0" in text({"property": "cf", "name": "2", "old_value": None, "new_value": "6"})
+    assert "本番" in text({"property": "cf", "name": "3", "old_value": None, "new_value": "7"})
+    assert text({"property": "cf", "name": "4", "old_value": "0", "new_value": "1"}) == "緊急 を いいえ から はい に変更"
+    assert "42" in text({"property": "cf", "name": "5", "old_value": None, "new_value": "42"})  # 文字列はそのまま
+
+
 @pytest.mark.parametrize("fmt", ["common_mark", "textile", "plain"])
 def test_custom_uri_schemes_are_linked(fmt):
     """link_schemes.json で指定したスキームは、どの書式でも自動でリンクにする。"""

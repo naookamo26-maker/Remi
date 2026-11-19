@@ -59,6 +59,9 @@ class App {
     if (this.tree.data.servers.length === 1) this.selection = { kind: "server", serverId: this.tree.data.servers[0].serverId };
     this.tree.render();
     await this.list.refresh();
+    // 通知を押して起動されたときは、そのチケットを開く
+    const target = await call("takePendingOpen").catch(() => null);
+    if (target) this.openIssue(target.serverId, target.issueId);
   }
 
   // --- 表示の設定 -------------------------------------------------------------------
@@ -147,6 +150,10 @@ class App {
       return;
     }
     this.selection = sel;
+    // 終了したバージョン・まだ取得していないバージョンは、開いたときにチケットを取得する(届いたら versionsChanged)
+    if (sel.kind === "version") {
+      call("fetchVersion", { serverId: sel.serverId, versionId: sel.versionId }).catch(() => {});
+    }
     // 開いていた会話は閉じる(別のプロジェクトなどを選んだのに、前のチケットが残って見えると紛らわしいので)
     if (this.current) this.closeIssue({ keepDraft: true });
     else this.showSelectionView();
@@ -337,6 +344,13 @@ class App {
         // 接続先や認証ユーザーが変わった: 前のユーザーのデータ(入力中の内容・添付を含む)を残さない
         if (this.current?.serverId === e.serverId) this.closeIssue();
         break;
+      case "versionFetchFailed": {
+        const sel = this.selection;
+        if (sel.kind === "version" && sel.serverId === e.serverId && sel.versionId === e.versionId) {
+          toast(t(`errors.${e.error}`));
+        }
+        break;
+      }
       case "noteFinished":
         this.conv.noteFinished(e);
         if (e.error) toast(t("conv.sendFailed"));

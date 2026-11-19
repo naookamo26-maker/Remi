@@ -228,6 +228,16 @@ class RedmineClient:
         """プロジェクトのバージョン(ほかのプロジェクトから共有されたものを含む)。ページングはない。"""
         return self.get_json(f"/projects/{project_id}/versions.json").get("versions", [])
 
+    def version(self, version_id: int) -> dict[str, Any]:
+        return self.get_json(f"/versions/{version_id}.json")["version"]
+
+    def issue_category(self, category_id: int) -> dict[str, Any]:
+        return self.get_json(f"/issue_categories/{category_id}.json")["issue_category"]
+
+    def user(self, user_id: int) -> dict[str, Any]:
+        """ユーザー。見えないユーザー(権限による)とグループは 404 になる。"""
+        return self.get_json(f"/users/{user_id}.json")["user"]
+
     def issues_signature(self, **filters: Any) -> str:
         """条件に合うチケットの「件数と最新の更新日時」。一覧が変わったかを1回の軽い問い合わせで判定する。
 

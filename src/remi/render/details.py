@@ -32,7 +32,11 @@ MASTER_KINDS = {
     "priority_id": "priority",
     "tracker_id": "tracker",
     "project_id": "project",
+    "fixed_version_id": "version",
+    "category_id": "category",
 }
+# カスタムフィールドの形式 → 値の名前の種類(値がIDで記録される形式)
+CF_FORMAT_KINDS = {"user": "user", "version": "version"}
 
 
 @dataclass
@@ -42,7 +46,11 @@ class DetailNames:
     priority: dict[int, str] = field(default_factory=dict)
     tracker: dict[int, str] = field(default_factory=dict)
     project: dict[int, str] = field(default_factory=dict)
+    version: dict[int, str] = field(default_factory=dict)
+    category: dict[int, str] = field(default_factory=dict)
     custom_field: dict[int, str] = field(default_factory=dict)
+    # カスタムフィールドの定義(ID → {"field_format", "possible_values"})。管理者でなければ空(値はそのまま出す)
+    custom_field_defs: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def lookup(self, kind: str, value: Any) -> str:
         if value in (None, ""):
@@ -72,7 +80,7 @@ def describe_detail(d: dict[str, Any], names: DetailNames, lang: str) -> dict[st
 
     if prop == "cf":
         field_name = names.lookup("custom_field", name)
-        old_s, new_s = old or "", new or ""
+        old_s, new_s = (_cf_value(names, name, old, lang), _cf_value(names, name, new, lang))
     elif prop == "attr":
         field_name = t(ATTR_KEYS[name], lang) if name in ATTR_KEYS else name
         if name in ("description",):
@@ -100,6 +108,23 @@ def describe_detail(d: dict[str, Any], names: DetailNames, lang: str) -> dict[st
     else:
         text = t("details.cleared", lang, field=field_name, old=old_s)
     return {"kind": prop or "other", "text": text}
+
+
+def _cf_value(names: DetailNames, cf_id: str, value: Any, lang: str) -> str:
+    """カスタムフィールドの値を表示用にする。ユーザー・バージョン・キー・バリューリストはIDで、
+    真偽値は 1/0 で記録されるので、定義(形式)が分かれば名前にする。"""
+    if value in (None, ""):
+        return ""
+    d = names.custom_field_defs.get(_int(cf_id) or -1) or {}
+    fmt = d.get("field_format") or ""
+    if fmt in CF_FORMAT_KINDS:
+        return names.lookup(CF_FORMAT_KINDS[fmt], value)
+    if fmt == "bool":
+        return t("common.yes", lang) if str(value) == "1" else t("common.no", lang) if str(value) == "0" else str(value)
+    if fmt == "enumeration":
+        labels = {str(o.get("value")): o.get("label") for o in d.get("possible_values") or [] if isinstance(o, dict)}
+        return labels.get(str(value)) or str(value)
+    return str(value)
 
 
 def _int(v: Any) -> int | None:

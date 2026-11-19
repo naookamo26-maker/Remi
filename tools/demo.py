@@ -66,6 +66,8 @@ def seed(fake) -> None:
         {"property": "attr", "name": "status_id", "old_value": "1", "new_value": "2"},
         {"property": "attr", "name": "priority_id", "old_value": "2", "new_value": "3"},
         {"property": "attr", "name": "assigned_to_id", "old_value": "7", "new_value": str(ME)},
+        {"property": "attr", "name": "fixed_version_id", "old_value": "31", "new_value": "32"},
+        {"property": "attr", "name": "category_id", "old_value": None, "new_value": "1"},
     ])
     fake.add_journal(1234, 7, "ありがとうございます!テスト環境で確認します。", created_on=ts(2))
     # 自動リンクの見本(http / https / www. / mailto と、link_schemes.json で指定したスキーム)

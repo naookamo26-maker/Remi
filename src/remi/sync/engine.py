@@ -97,6 +97,8 @@ class ServerSync:
         # journal を取得したときの updated_on。updated_on は秒単位なので、取得と同じ秒に入った更新は
         # updated_on が変わらず見逃してしまう。開いているチケットは、取得後に一度だけ確認し直す。
         self._unconfirmed: dict[int, str | None] = {}
+        # 名前を問い合わせても分からなかった (種類, ID)。同じものを何度も問い合わせない
+        self._unresolvable: set[tuple[str, int]] = set()
 
     @property
     def server(self) -> Server:
@@ -169,10 +171,71 @@ class ServerSync:
             self.projects.ensure_placeholder(self.server_id, int(proj["id"]), proj.get("name", ""))
         self.issues.upsert_issue(self.server_id, data, flags, self._is_monitored(data, flags, closed_ids))
         self.issues.ensure_read_state(self.server_id, iid, baseline)
-        for kind, key in (("user", "assigned_to"), ("user", "author")):
+        self._remember_refs(data)
+        return before != data.get("updated_on")
+
+    # チケットに含まれている名前(担当者・作成者・対象バージョン・カテゴリ)。変更履歴の値を名前にするのに使う
+    _REFS = (("user", "assigned_to"), ("user", "author"), ("version", "fixed_version"), ("category", "category"))
+
+    def _remember_refs(self, data: dict[str, Any]) -> None:
+        for kind, key in self._REFS:
             ref = data.get(key) or {}
             self.masters.remember(self.server_id, kind, ref.get("id"), ref.get("name"))
-        return before != data.get("updated_on")
+
+    # 変更履歴の属性 → 名前の種類(ID のまま表示しないよう、知らないものは問い合わせる)
+    _DETAIL_ATTR_KINDS = {"fixed_version_id": "version", "category_id": "category", "assigned_to_id": "user"}
+    _CF_FORMAT_KINDS = {"version": "version", "user": "user"}
+    _RESOLVE_LIMIT = 20  # 1回に問い合わせる数の上限(古いチケットで知らない値が多くても、開くのを遅くしない)
+
+    def _resolve_detail_names(self, journals: list[dict[str, Any]]) -> bool:
+        """変更履歴に出てくる、名前を知らないバージョン・カテゴリ・ユーザーを問い合わせて覚える。
+        見えない(権限がない・削除された・グループ)ものは #ID のまま表示する。名前が増えたら True。"""
+        sid = self.server_id
+        cf_formats = {cid: (e.get("field_format") or "") for cid, e in self.masters.extras(sid, "custom_field").items()}
+        wanted: set[tuple[str, int]] = set()
+        for j in journals:
+            for d in j.get("details") or []:
+                if d.get("property") == "attr":
+                    kind = self._DETAIL_ATTR_KINDS.get(str(d.get("name")))
+                elif d.get("property") == "cf":
+                    try:
+                        kind = self._CF_FORMAT_KINDS.get(cf_formats.get(int(d.get("name")), ""))
+                    except (TypeError, ValueError):
+                        kind = None
+                else:
+                    kind = None
+                if kind is None:
+                    continue
+                for v in (d.get("old_value"), d.get("new_value")):
+                    try:
+                        wanted.add((kind, int(v)))
+                    except (TypeError, ValueError):
+                        pass
+        known = {kind: set(self.masters.names(sid, kind)) for kind in ("version", "category", "user")}
+        missing = sorted(k for k in wanted if k[1] not in known[k[0]] and k not in self._unresolvable)
+        fetch = {"version": self.client.version, "category": self.client.issue_category, "user": self.client.user}
+        added = False
+        for kind, id_ in missing[:self._RESOLVE_LIMIT]:
+            try:
+                item = fetch[kind](id_)
+            except RedmineError as e:
+                if e.code == ErrorCode.CANCELLED:
+                    raise
+                if e.code in (ErrorCode.NOT_FOUND, ErrorCode.FORBIDDEN):
+                    self._unresolvable.add((kind, id_))
+                    continue
+                log.info("resolving %s %s failed: %s", kind, id_, e)
+                break  # 通信の失敗など: 次に開いたときにまた試す
+            if kind == "user":
+                name = " ".join(p for p in (item.get("lastname"), item.get("firstname")) if p) or item.get("login")
+            else:
+                name = item.get("name")
+            if name:
+                self.masters.remember(sid, kind, id_, name)
+                added = True
+            else:
+                self._unresolvable.add((kind, id_))
+        return added
 
     # --- 差分同期 ---------------------------------------------------------------
     def initial_sync(self) -> SyncResult:
@@ -229,6 +292,9 @@ class ServerSync:
             self.masters.remember(self.server_id, "user", u.get("id"), u.get("name"))
         for cf in data.get("custom_fields") or []:
             self.masters.remember(self.server_id, "custom_field", cf.get("id"), cf.get("name"))
+        self._remember_refs(data)
+        if self._resolve_detail_names(data.get("journals") or []):
+            result.changed_issue_ids.add(issue_id)  # 変更履歴の表示(名前)が変わった
         if first_fetch:
             self.issues.apply_read_baseline(self.server_id, issue_id)
         self._unconfirmed[issue_id] = data.get("updated_on")
@@ -373,6 +439,7 @@ class ServerSync:
                 found.add(vid)
                 old = known.get(vid)
                 self.versions.upsert(sid, data)
+                self.masters.remember(sid, "version", vid, data.get("name"))
                 new = self.versions.get(sid, vid)
                 assert new is not None
                 if old is None:
@@ -454,9 +521,7 @@ class ServerSync:
             self.issues.upsert_issue_data(sid, it)
             # バージョンのチケットのコメントは未読として扱わない(開いたときに取得する)
             self.issues.ensure_read_state(sid, iid, it.get("updated_on"))
-            for key in ("assigned_to", "author"):
-                ref = it.get(key) or {}
-                self.masters.remember(sid, "user", ref.get("id"), ref.get("name"))
+            self._remember_refs(it)
             status = it.get("status") or {}
             after[iid] = bool(status.get("is_closed")) or status.get("id") in closed_ids
             items[iid] = it

@@ -522,7 +522,12 @@ class RemiApi:
             status=m.names(server_id, "status"), user=m.names(server_id, "user"),
             priority=m.names(server_id, "priority"), tracker=m.names(server_id, "tracker"),
             project={p.project_id: p.name for p in self.ctx.projects.list(server_id)},
+            # ウォッチしているバージョンの名前を優先する(名前が変わっていれば新しい名前)
+            version={**m.names(server_id, "version"),
+                     **{v.version_id: v.name for v in self.ctx.versions.list(server_id)}},
+            category=m.names(server_id, "category"),
             custom_field=m.names(server_id, "custom_field"),
+            custom_field_defs={cid: e for cid, e in m.extras(server_id, "custom_field").items() if e.get("field_format")},
         )
 
     @rpc
@@ -862,6 +867,10 @@ class RemiApi:
             pid = int(data["project"]["id"])
             project = client.project(pid, include="trackers,issue_categories")
             versions = client.versions(pid)
+            # 変更履歴の値(ID)を名前にするため、取得したバージョン・カテゴリの名前を覚える
+            for kind, items in (("version", versions), ("category", project.get("issue_categories") or [])):
+                for it in items:
+                    self.ctx.masters.remember(serverId, kind, it.get("id"), it.get("name"))
             members = self._members_of(serverId, pid)
             defs = self._custom_field_defs(serverId)
         except RedmineError as e:

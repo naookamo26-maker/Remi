@@ -220,3 +220,32 @@ def test_edited_or_deleted_comment_and_removed_attachment_update_screen(setup, f
     del fake.attachments[77]
     assert sync.fetch_journals(1).changed_issue_ids == {1}
     assert issues.attachments(sid, 1) == []
+
+
+def test_fetch_journals_resolves_names_in_details(setup, fake, db):
+    """変更履歴に出てくる、知らないバージョン・カテゴリ・ユーザーの名前を問い合わせて覚える(見えないものは #ID)。"""
+    from remi.store.masters import MasterStore
+
+    sync, issues, sid = setup
+    fake.add_version(5, 2, "v1.0")
+    fake.add_version(6, 2, "v2.0")
+    fake.categories[2] = [{"id": 3, "name": "画面"}]
+    fake.add_issue(1, 2, "担当", version=6)
+    fake.add_journal(1, 7, "", details=[
+        {"property": "attr", "name": "fixed_version_id", "old_value": "5", "new_value": "6"},
+        {"property": "attr", "name": "category_id", "old_value": None, "new_value": "3"},
+        {"property": "attr", "name": "assigned_to_id", "old_value": "8", "new_value": "999"},
+    ])
+    sync.sync_changes()
+    fake.requests.clear()
+    sync.fetch_journals(1)
+    masters = MasterStore(db)
+    assert masters.names(sid, "version") == {5: "v1.0", 6: "v2.0"}
+    assert masters.names(sid, "category") == {3: "画面"}
+    assert masters.names(sid, "user")[8] == "佐藤 花子"
+    asked = [q for _, q in fake.requests if q.startswith(("/versions/", "/issue_categories/", "/users/"))]
+    # v2.0 はチケットに含まれていたので問い合わせない。見えないユーザー(999)は1回だけ問い合わせる
+    assert sorted(asked) == ["/issue_categories/3.json", "/users/8.json", "/users/999.json", "/versions/5.json"]
+    fake.requests.clear()
+    sync.fetch_journals(1)
+    assert not [q for _, q in fake.requests if q.startswith(("/versions/", "/issue_categories/", "/users/"))]

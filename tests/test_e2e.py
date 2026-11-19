@@ -551,6 +551,9 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     # サーバーの下のリンクで、隠すことも戻すこともできる
     link = page.locator(".tree .node.link-row")
     playwright_api.expect(link).to_have_text("非表示に戻す")
+    # ふだんから出ているプロジェクトは、薄い色にならない(「すべてを表示」でだけ出るプロジェクトが薄くなるのは、
+    # サーバーのテストで確かめている。ここのデータには、チケットのないプロジェクトがない)
+    playwright_api.expect(page.locator(".tree .node.dim")).to_have_count(0)
     link.click()
     end = time.monotonic() + 5
     while time.monotonic() < end and remi.ctx.servers.get(1).show_all_projects:

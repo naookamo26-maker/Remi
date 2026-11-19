@@ -134,7 +134,7 @@ export class Tree {
         const own = p.unread - p.children.reduce((sum, c) => sum + c.unread, 0);
         return node(p.name, { kind: "project", serverId: s.serverId, projectId: p.projectId }, {
           depth, count: p.count || null, token: `p:${s.serverId}:${p.projectId}`,
-          cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : ""].join(" "),
+          cls: [!p.accessible ? "inaccessible" : "", !p.active ? "inactive" : "", p.shownOnlyByShowAll ? "dim" : ""].join(" "),
           title: !p.accessible ? t("tree.noAccess") : null,
           dotExpanded: own > 0 ? { kind: "changed", label: t("tree.unreadCount", { count: own }) } : null,
           dotCollapsed: changedBelow(p) ? { kind: "changed", label: p.unread > 0 && !p.versions.some((v) => v.changed)

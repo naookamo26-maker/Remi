@@ -34,6 +34,7 @@
  * @property {string} name
  * @property {boolean} accessible          自分がメンバーでない(チケット経由で知った)プロジェクトは false
  * @property {boolean} active
+ * @property {boolean} shownOnlyByShowAll  「すべてを表示」にしたときだけ出ている(ふだんは隠れる)プロジェクトか。画面では薄い色にする
  * @property {number} unread               子プロジェクトを含む
  * @property {number} count                子プロジェクトを含む
  * @property {Relation[]} relations        表示するチケット(親プロジェクト・サーバーの既定からの継承を解決済み)

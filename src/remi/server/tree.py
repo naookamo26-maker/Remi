@@ -56,8 +56,8 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
         shown = monitored | (set(versions) & set(by_id))
         visible = visible_projects(projects, shown, s.show_all_projects)
         # 表示するものがなくて、ふだんは隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
-        hidden = len({p.project_id for p in projects if p.accessible and p.status == PROJECT_STATUS_ACTIVE}
-                     - visible_projects(projects, shown, False))
+        usual = visible_projects(projects, shown, False)
+        hidden = len({p.project_id for p in projects if p.accessible and p.status == PROJECT_STATUS_ACTIVE} - usual)
         children: dict[int | None, list[Project]] = {}
         for pid in visible:
             p = by_id[pid]
@@ -71,6 +71,8 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
                 "name": p.name,
                 "accessible": p.accessible,
                 "active": p.status == PROJECT_STATUS_ACTIVE,
+                # 「すべてを表示」にしたときだけ出ているプロジェクト(ふだんは隠れる)。画面では薄い色にする
+                "shownOnlyByShowAll": p.project_id not in usual,
                 "unread": unread.get(p.project_id, 0) + sum(k["unread"] for k in kids),
                 "count": counts.get(p.project_id, 0) + sum(k["count"] for k in kids),
                 # 表示するチケット(継承を解決済み)と、このプロジェクト自身で設定しているか

@@ -49,7 +49,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             versions.setdefault(v.project_id, []).append({
                 "versionId": v.version_id, "name": v.name, "status": v.status, "closed": v.closed,
                 "dueDate": v.due_date, "done": done, "total": total,
-                "changed": version_unread.get(v.version_id, 0) > 0,
+                "changed": version_unread.get(v.version_id, 0) > 0, "synced": v.issues_synced,
             })
         visible = visible_projects(projects, monitored | (set(versions) & set(by_id)), s.show_all_projects)
         children: dict[int | None, list[Project]] = {}

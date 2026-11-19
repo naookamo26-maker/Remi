@@ -86,9 +86,11 @@ export class Tree {
       // バージョン: 変化があれば印を付け、完了数/全体を出す。終了したものは、畳んだ「終了したバージョン」の下に出す
       const version = (p, v, depth) => node(v.name, { kind: "version", serverId: s.serverId, versionId: v.versionId }, {
         depth, icon: "flag", cls: ["version", v.changed ? "changed" : "", v.closed ? "closed" : ""].join(" "),
-        title: v.dueDate ? t("tree.versionDue", { date: v.dueDate }) : null,
+        title: [v.dueDate ? t("tree.versionDue", { date: v.dueDate }) : "", v.synced ? "" : t("tree.versionLoading")]
+          .filter(Boolean).join("\n") || null,
         dot: v.changed ? "changed" : null, dotLabel: t("tree.versionChanged"),
-        progress: `${v.done}/${v.total}`,
+        // チケットをまだ取得していないバージョンは 0/0 ではなく「…」にする(空のバージョンと見分ける)
+        progress: v.synced ? `${v.done}/${v.total}` : "…",
       });
       // プロジェクトの下に「ロードマップ」を置き、その中にバージョンを並べる
       const roadmap = (p, depth) => {

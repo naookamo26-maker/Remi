@@ -52,6 +52,7 @@
  * @property {number} done                 完了したチケットの数
  * @property {number} total                チケットの数
  * @property {boolean} changed             まだ見ていない変化があるか
+ * @property {boolean} synced              チケットの一覧を取得済みか(まだなら件数を「…」で出す)
  */
 
 /**

@@ -147,3 +147,25 @@ def test_version_issues_are_fully_refetched_periodically(setup, fake, db, monkey
     n = sum(1 for m, p in fake.requests if "fixed_version_id=10" in p and "limit=100" in p)
     sync.sync_versions()
     assert sum(1 for m, p in fake.requests if "fixed_version_id=10" in p and "limit=100" in p) == n + 1
+
+
+def test_version_issues_are_fetched_open_and_newest_first(setup, fake, db):
+    """古い終了したバージョンが多くても、未完了のもの・新しいものから先にチケットを取得し、1つずつ知らせる。"""
+    sync, versions, sid = setup
+    fake.add_version(20, 2, "v0.1", status="closed")
+    fake.add_version(21, 2, "v0.2", status="closed")
+    fake.add_version(22, 2, "v1.0")
+    fake.add_version(23, 2, "v2.0")
+    for i, vid in enumerate((20, 21, 22, 23)):
+        fake.add_issue(200 + i, 2, f"チケット{i}", assigned_to=7, version=vid)
+    ProjectStore(db).set_setting(sid, 2, "watch_versions", True)
+    fake.requests.clear()
+    notified: list[set[int]] = []
+    assert sync.sync_versions(on_changed=notified.append) == {20, 21, 22, 23}
+    assert notified == [{23}, {22}, {21}, {20}]
+    order = [int(q.split("fixed_version_id=")[1].split("&")[0]) for m, q in fake.requests if "fixed_version_id=" in q]
+    assert order == [23, 22, 21, 20]
+    # 2回目は変化がなければ知らせない
+    notified.clear()
+    assert sync.sync_versions(on_changed=notified.append) == set()
+    assert notified == []

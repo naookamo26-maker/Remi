@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from remi.api.client import RedmineClient
@@ -330,9 +331,14 @@ class ServerSync:
     def _seen_key(self) -> str:
         return f"versions_seen_projects:{self.server_id}"
 
-    def sync_versions(self) -> set[int]:
+    def sync_versions(self, on_changed: Callable[[set[int]], None] | None = None) -> set[int]:
         """「未完了のバージョンをウォッチ」しているプロジェクトのバージョンと、含まれるチケットを取り直し、
         前回からの変化(追加・外れた・完了など)を記録する。内容が変わったバージョンのIDを返す。
+
+        まずウォッチしているすべてのプロジェクトのバージョン一覧を取り、次に各バージョンのチケットを、未完了のもの・
+        新しいもの(IDの大きいもの)から順に取り直す(古い終了したバージョンが多いと、最初の取得に時間がかかるため)。
+        on_changed を渡すと、チケットを取り直して内容が変わったバージョンを、1つずつその場で知らせる
+        (知らせたものも戻り値に含む)。
 
         プロジェクトで最初に取得したとき・バージョンを最初に取得したときは、その状態を基準にして変化は記録しない。
         ほかのプロジェクトから共有されたバージョンは、持ち主のプロジェクトをウォッチしているときだけ扱う。
@@ -342,11 +348,12 @@ class ServerSync:
         watched = self.projects.projects_with_setting(sid, "watch_versions")
         seen_projects = set(settings.get(self._seen_key()) or [])
         known = {v.version_id: v for v in self.versions.list(sid)}
-        closed_ids = self._closed_ids()
         now = format_ts(datetime.now(UTC))
         changed: set[int] = set()
         found: set[int] = set()
         fetched: set[int] = set()
+        pending: list[tuple[Version, Version | None]] = []
+        # 1. バージョンの一覧(プロジェクトごとに1回の問い合わせ)
         for pid in sorted(watched):
             project = self.projects.get(sid, pid)
             if project is None or not project.accessible:
@@ -377,9 +384,15 @@ class ServerSync:
                         if before != after:
                             self.versions.add_event(sid, vid, kind, now, old_value=before, new_value=after)
                             changed.add(vid)
-                if self._version_issues_due(new, old):
-                    if self._sync_version_issues(new, closed_ids, now):
-                        changed.add(vid)
+                pending.append((new, old))
+        # 2. 各バージョンのチケット(未完了のもの、新しいものから)
+        closed_ids = self._closed_ids()
+        pending.sort(key=lambda p: (p[0].closed, -p[0].version_id))
+        for new, old in pending:
+            if self._version_issues_due(new, old) and self._sync_version_issues(new, closed_ids, now):
+                changed.add(new.version_id)
+                if on_changed is not None:
+                    on_changed({new.version_id})
         # ウォッチをやめた・削除されたバージョンは消す。取得できなかったプロジェクトのものは残す
         gone = {vid for vid, v in known.items() if vid not in found and v.project_id not in watched - fetched}
         if gone:

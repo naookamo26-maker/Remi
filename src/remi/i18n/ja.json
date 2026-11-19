@@ -270,6 +270,7 @@
   "tree.unreadOnly": "未読のみ",
   "tree.versionChanged": "変化があります",
   "tree.versionDue": "期日 {date}",
+  "tree.versionLoading": "このバージョンのチケットを取得しています…",
   "tree.visibleRelations": "表示するチケット",
   "tree.visibleRelationsAtLeastOne": "少なくとも1つは選んでください",
   "tree.visibleRelationsFor": "表示するチケット — {name}",

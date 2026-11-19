@@ -275,6 +275,7 @@
   "tree.unreadOnly": "Unread only",
   "tree.versionChanged": "Has changes",
   "tree.versionDue": "Due {date}",
+  "tree.versionLoading": "Loading the issues of this version…",
   "tree.visibleRelations": "Issues to show",
   "tree.visibleRelationsAtLeastOne": "Choose at least one",
   "tree.visibleRelationsFor": "Issues to show — {name}",

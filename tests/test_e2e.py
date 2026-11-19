@@ -550,7 +550,7 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     assert remi.ctx.servers.get(1).show_all_projects is True
     # サーバーの下のリンクで、隠すことも戻すこともできる
     link = page.locator(".tree .node.link-row")
-    playwright_api.expect(link).to_have_text("表示するものがないプロジェクトを隠す")
+    playwright_api.expect(link).to_have_text("非表示に戻す")
     link.click()
     end = time.monotonic() + 5
     while time.monotonic() < end and remi.ctx.servers.get(1).show_all_projects:

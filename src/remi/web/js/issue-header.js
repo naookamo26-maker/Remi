@@ -38,17 +38,19 @@ export class IssueHeader {
   render(d) {
     const app = this.conv.app;
     // 件名の幅を確保するため、ウォッチ(星)と「Redmineで開く」は、アイコンだけのボタンを縦に並べる。
-    // Shift+クリックは既定のブラウザで開く。右クリック(メニューキー)で、ブラウザで開く・URLのコピー
+    // 開くボタンは、右の「▾」でブラウザで開く・URLのコピーを選べる(Shift+クリックでも既定のブラウザで開く)
     const openBtn = h("button", { type: "button", class: "btn icon-only", title: t("conv.openRedmineHint"),
-      "aria-label": t("conv.openRedmine"), "aria-haspopup": "menu",
-      onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }),
-      onContextmenu: (e) => {
-        e.preventDefault();
-        contextMenu(e.clientX, e.clientY, [
+      "aria-label": t("conv.openRedmine"),
+      onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }) }, icon("external"));
+    const moreBtn = h("button", { type: "button", class: "btn more", "aria-label": t("conv.moreActions"),
+      title: t("conv.moreActions"), "aria-haspopup": "menu",
+      onClick: (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        contextMenu(r.right - 4, r.bottom + 4, [
           { label: t("conv.openInBrowser"), onClick: () => app.openRedmine(d.url, { external: true }) },
           { label: t("conv.copyUrl"), onClick: () => navigator.clipboard.writeText(d.url).then(() => toast(t("conv.copied"))) },
         ]);
-      } }, icon("external"));
+      } }, "▾");
     const watchBtn = h("button", { type: "button", class: `btn icon-only watch${d.watching ? " on" : ""}`,
       "aria-pressed": String(d.watching), "aria-label": d.watching ? t("conv.watching") : t("conv.watch"),
       title: d.watching ? t("conv.unwatchHint") : t("conv.watchHint"),
@@ -78,7 +80,7 @@ export class IssueHeader {
         h("div", { class: "titles" },
           h("div", { class: "crumb", title: crumb }, crumb, " · ", `${d.tracker} #${d.issueId}`),
           h("h1", {}, d.subject)),
-        h("div", { class: "actions" }, watchBtn, openBtn)),
+        h("div", { class: "actions" }, watchBtn, h("span", { class: "split" }, openBtn, moreBtn))),
       h("div", { class: "fields" },
         field("status_id"), field("assigned_to_id"), field("priority_id"),
         h("span", { class: "static" }, `${t("conv.updated")} `, h("b", {}, formatTime(d.updatedOn))),

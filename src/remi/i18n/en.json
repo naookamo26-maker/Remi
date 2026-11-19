@@ -55,7 +55,7 @@
   "conv.openFile": "Open",
   "conv.openInBrowser": "Open in default browser",
   "conv.openRedmine": "Open in Redmine",
-  "conv.openRedmineHint": "Shift+click opens in your default browser. Right-click for more (copy URL, etc.)",
+  "conv.openRedmineHint": "Shift+click opens in your default browser",
   "conv.openUriBody": "Open {url} with the associated app?",
   "conv.openUriOk": "Open",
   "conv.openUriTitle": "Open link",

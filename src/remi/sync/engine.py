@@ -303,12 +303,16 @@ class ServerSync:
             result.changed_issue_ids.add(issue_id)
         if notify and new_ids:
             me = self.server.my_user_id
-            last_read = self.issues.last_read(self.server_id, issue_id)
+            # 既読のもの・一度通知したものは通知しない(キャッシュを消して取り直すと、古いコメントも「新しく
+            # 保存した」ことになるため。通知したかはキャッシュとは別に残す)
+            seen = max(self.issues.last_read(self.server_id, issue_id),
+                       self.issues.last_notified(self.server_id, issue_id))
             for j in self.issues.get_journals(self.server_id, new_ids):
-                if j.notes and j.user_id != me and j.journal_id > last_read:
+                if j.notes and j.user_id != me and j.journal_id > seen:
                     result.new_comments.append(NewComment(
                         issue_id, j.journal_id, j.user_name or "", j.notes, data.get("subject", ""),
                         int(data["project"]["id"])))
+            self.issues.set_notified(self.server_id, issue_id, max(new_ids))
         return result
 
     def _snapshot(self, issue_id: int) -> tuple[list[tuple[int, str, bool]], list[int]]:

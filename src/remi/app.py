@@ -18,7 +18,7 @@ from remi.server.http import LocalServer
 from remi.store.db import SchemaTooNewError, open_database
 from remi.sync.worker import SyncManager
 from remi.system import windows
-from remi.system.notifier import Notifier
+from remi.system.notifier import PROTOCOL, Notifier, parse_open_url
 from remi.system.single_instance import SingleInstance
 from remi.system.tray import Tray
 from remi.system.webview2 import enable_browser_features
@@ -186,6 +186,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--browser", action="store_true", help="open the UI in the default browser (development)")
     p.add_argument("--background", action="store_true", help="start hidden in the tray (used by autostart)")
     p.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
+    # 通知を押したとき(remi: プロトコル)に、Windowsが渡すURL
+    p.add_argument("--open", default=None, metavar="URL", help=argparse.SUPPRESS)
     p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     return p.parse_args(argv[1:])
 
@@ -199,15 +201,23 @@ def run(argv: list[str]) -> int:
     # ウィンドウを作るまでに届いた前面表示の依頼は、覚えておいて起動時に表示する
     show_requested = threading.Event()
     show_target: list = []
+    # 通知を押して起動された(または起動中のRemiへ届いた)ときに開くチケット
+    open_target = parse_open_url(args.open) if args.open else None
+    pending_open: list[tuple[int, int]] = [open_target] if open_target else []
 
-    def on_show() -> None:
+    def on_show(message: object = "show") -> None:
+        if isinstance(message, tuple) and message[0] == "open":
+            if len(show_target) > 1:
+                show_target[1](message[1], message[2])
+                return
+            pending_open.append((message[1], message[2]))
         if show_target:
             show_target[0]()
         else:
             show_requested.set()
 
     single = SingleInstance()
-    if not single.acquire(on_show):
+    if not single.acquire(on_show, ("open", *open_target) if open_target else "show"):
         log.info("another instance is running; asked it to show itself")
         return 0
 
@@ -224,7 +234,8 @@ def run(argv: list[str]) -> int:
     api = RemiApi(ctx, sync, window, autostart=windows.set_autostart)
     server = LocalServer(api, port=args.port)
     server.start()
-    show_target.append(window.show)
+    if pending_open:
+        show_requested.set()
     if show_requested.is_set() and isinstance(window, WebviewWindow):
         window.start_hidden = False  # 起動中に、もう一度起動された(前面表示の依頼が来た)
 
@@ -232,6 +243,11 @@ def run(argv: list[str]) -> int:
         window.show()
         ctx.bus.publish("openIssue", serverId=server_id, issueId=issue_id)
 
+    # 画面が立ち上がる前に届いた「チケットを開く」は、画面が起動時に受け取る(takePendingOpen)
+    api.pending_open = pending_open
+    show_target.extend([window.show, open_issue])
+    # 通知センターでアプリ名・アイコンを出し、履歴から押しても届くよう、起動のたびに登録し直す
+    windows.register_notifications(APP_USER_MODEL_ID, APP_NAME, WebviewWindow._icon_path(), PROTOCOL)
     notifier = Notifier(ctx, api, open_issue)
     tray = None
     if not args.browser:

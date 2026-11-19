@@ -508,6 +508,19 @@ class IssueStore:
             "ORDER BY cached_at")]
 
     # --- 既読 -----------------------------------------------------------------
+    def last_notified(self, server_id: int, issue_id: int) -> int:
+        """ここまでの journal は通知した(同じコメントを2回通知しない)。"""
+        r = self.db.query_one("SELECT journal_id FROM notified WHERE server_id = ? AND issue_id = ?",
+                              (server_id, issue_id))
+        return int(r[0]) if r else 0
+
+    def set_notified(self, server_id: int, issue_id: int, journal_id: int) -> None:
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO notified(server_id, issue_id, journal_id) VALUES(?, ?, ?) "
+                "ON CONFLICT(server_id, issue_id) DO UPDATE SET journal_id = MAX(journal_id, excluded.journal_id)",
+                (server_id, issue_id, int(journal_id)))
+
     def last_read(self, server_id: int, issue_id: int) -> int:
         r = self.db.query_one("SELECT last_read_journal_id FROM read_state WHERE server_id = ? AND issue_id = ?",
                               (server_id, issue_id))

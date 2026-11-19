@@ -49,12 +49,51 @@ def set_dark_title_bar(hwnd: int, dark: bool) -> None:
         log.debug("DwmSetWindowAttribute failed", exc_info=True)
 
 
-def autostart_command() -> str:
-    """自動起動で登録するコマンド。exe化されていればexe、そうでなければ pythonw -m remi。"""
+def launch_command() -> str:
+    """Remiを起動するコマンド。exe化されていればexe、そうでなければ pythonw -m remi。"""
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}" --background'
+        return f'"{sys.executable}"'
     exe = sys.executable.replace("python.exe", "pythonw.exe")
-    return f'"{exe}" -m remi --background'
+    return f'"{exe}" -m remi'
+
+
+def autostart_command() -> str:
+    """自動起動で登録するコマンド。"""
+    return f"{launch_command()} --background"
+
+
+CLASSES_KEY = r"Software\Classes"
+
+
+def _set_values(path: str, values: dict[str, str]) -> None:
+    import winreg
+
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+        for name, value in values.items():
+            winreg.SetValueEx(key, name or None, 0, winreg.REG_SZ, value)
+
+
+def register_notifications(aumid: str, display_name: str, icon_path: str | None, protocol: str) -> None:
+    """通知の登録(HKCU なので管理者権限は要らない。起動のたびに最新の場所で登録し直す)。
+
+    - AppUserModelID: 登録したIDで通知を出すと、通知センターでアプリ名とアイコンが出て、履歴にも正しく残る
+    - プロトコル(remi:): 通知を押すと `<exe> --open "remi://open?..."` を起動する。トーストが消えた後の履歴から
+      押したとき・アプリを終了した後でも届く(起動中なら、2つ目のプロセスが起動中のRemiへ依頼して終わる)
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        values = {"DisplayName": display_name}
+        if icon_path:
+            values["IconUri"] = icon_path
+        _set_values(rf"{CLASSES_KEY}\AppUserModelId\{aumid}", values)
+        base = rf"{CLASSES_KEY}\{protocol}"
+        _set_values(base, {"": f"URL:{display_name}", "URL Protocol": ""})
+        if icon_path:
+            _set_values(rf"{base}\DefaultIcon", {"": icon_path})
+        _set_values(rf"{base}\shell\open\command", {"": f'{launch_command()} --open "%1"'})
+    except OSError:
+        log.exception("could not register notifications")
 
 
 def set_autostart(enabled: bool) -> None:

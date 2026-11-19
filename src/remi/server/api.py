@@ -169,6 +169,8 @@ class RemiApi:
         # 通知の判定に使う: 画面で開いているチケットと、ウィンドウがアクティブか
         self.open_issue: tuple[int, int] | None = None
         self.active = True
+        # 通知を押して起動されたときに開くチケット(画面が起動時に takePendingOpen で受け取る)
+        self.pending_open: list[tuple[int, int]] = []
         self._members: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
         # server_id → (取得した時刻, 管理者か, project_id → ロールID)
         self._my_roles: dict[int, tuple[float, bool, dict[int, set[int]]]] = {}
@@ -592,6 +594,15 @@ class RemiApi:
                 self.ctx.issues.mark_read(serverId, issueId)
                 self.ctx.bus.publish("dataChanged", serverId=serverId, issueIds=[issueId], source="read")
         return result
+
+    @rpc
+    def takePendingOpen(self) -> dict[str, int] | None:  # noqa: N802
+        """通知を押して起動されたときに開くチケット。画面が起動時に1回だけ受け取る。"""
+        if not self.pending_open:
+            return None
+        server_id, issue_id = self.pending_open[-1]
+        self.pending_open.clear()
+        return {"serverId": server_id, "issueId": issue_id}
 
     @rpc
     def setOpenIssue(self, serverId: int | None, issueId: int | None) -> None:  # noqa: N802,N803

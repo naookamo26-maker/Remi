@@ -59,6 +59,9 @@ class App {
     if (this.tree.data.servers.length === 1) this.selection = { kind: "server", serverId: this.tree.data.servers[0].serverId };
     this.tree.render();
     await this.list.refresh();
+    // 通知を押して起動されたときは、そのチケットを開く
+    const target = await call("takePendingOpen").catch(() => null);
+    if (target) this.openIssue(target.serverId, target.issueId);
   }
 
   // --- 表示の設定 -------------------------------------------------------------------

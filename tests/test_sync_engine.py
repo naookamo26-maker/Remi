@@ -249,3 +249,20 @@ def test_fetch_journals_resolves_names_in_details(setup, fake, db):
     fake.requests.clear()
     sync.fetch_journals(1)
     assert not [q for _, q in fake.requests if q.startswith(("/versions/", "/issue_categories/", "/users/"))]
+
+
+def test_does_not_notify_the_same_comment_twice(setup, fake):
+    """チケットのキャッシュを消して取り直しても(監視対象から外れて戻ったなど)、通知したコメントは再び通知しない。"""
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "担当", updated_on=ts(60))
+    sync.sync_changes()
+    sync.fetch_journals(1)
+    fake.add_journal(1, 7, "新しいコメント")
+    sync.sync_changes()
+    r = sync.fetch_journals(1)
+    assert [c.notes for c in r.new_comments] == ["新しいコメント"]  # 読まずにおく
+    issues.delete_issues(sid, [1])
+    sync.servers.update_fields(sid, last_sync_cursor=ts(120))  # 古いコメントも「新しく」見える状態にする
+    sync.sync_changes()
+    assert sync.fetch_journals(1).new_comments == []
+    assert issues.unread_count(sid, 1) == 1  # 未読のまま(通知しないだけ)

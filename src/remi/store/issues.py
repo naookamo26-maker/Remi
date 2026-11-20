@@ -287,6 +287,14 @@ class IssueStore:
         return {r[0] for r in self.db.query(
             "SELECT issue_id FROM issues WHERE server_id = ? AND monitored = 1", (server_id,))}
 
+    def monitored_relation_counts(self, server_id: int) -> tuple[int, int]:
+        """監視対象(未完了)のチケットの、(担当の件数, ウォッチの件数)。サーバーの件数との比較に使う。"""
+        r = self.db.query_one(
+            "SELECT COALESCE(SUM((relation_flags & ?) != 0), 0), COALESCE(SUM((relation_flags & ?) != 0), 0) "
+            "FROM issues WHERE server_id = ? AND monitored = 1",
+            (REL_ASSIGNED, REL_WATCHING, server_id))
+        return int(r[0]), int(r[1])
+
     def delete_issues(self, server_id: int, issue_ids: list[int]) -> None:
         with self.db.tx() as c:
             for iid in issue_ids:

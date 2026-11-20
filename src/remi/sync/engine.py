@@ -87,6 +87,7 @@ class ServerSync:
         self.db = db
         self.server_id = server_id
         self.client = client
+        self._mismatch_seen: tuple[tuple[int, int], tuple[int, int]] | None = None  # count_mismatch で見た食い違い
         self.servers = ServerStore(db)
         self.issues = IssueStore(db)
         self.projects = ProjectStore(db)
@@ -358,6 +359,23 @@ class ServerSync:
             self.issues.set_monitored(self.server_id, drop, False)
             result.unmonitored_issue_ids |= set(drop)
         return result
+
+    def count_mismatch(self) -> bool:
+        """担当・ウォッチの未完了の件数が、ローカルとサーバーで違うか(設計書 §4.7)。
+
+        担当替え・ウォッチ解除・クローズは、差分に出ないことがある。差分同期のたびに件数だけ(1通信ずつ)確かめ、
+        違うときだけ全件の突き合わせ(reconcile)をさせる。突き合わせても直らない同じ食い違いは、繰り返さない。
+        """
+        remote = (self.client.issue_count(assigned_to_id="me", status_id="open"),
+                  self.client.issue_count(watcher_id="me", status_id="open"))
+        local = self.issues.monitored_relation_counts(self.server_id)
+        if remote == local:
+            self._mismatch_seen = None
+            return False
+        if (local, remote) == self._mismatch_seen:
+            return False
+        self._mismatch_seen = (local, remote)
+        return True
 
     def detect_deleted(self) -> SyncResult:
         """監視対象のチケットが削除されていないか確認する。見えなくなったものは個別に404を確認する。"""

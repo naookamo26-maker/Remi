@@ -421,7 +421,7 @@ def run(argv: list[str]) -> int:
         window.start_hidden = args.background and window.minimize_to_tray and not show_requested.is_set()
         if ctx.settings.get("autostart"):
             windows.set_autostart(True)  # exeの場所が変わっても登録を最新にする
-    sync.restart(startup=True)  # 最初の同期をずらす(朝に一斉に起動しても、サーバーへの問い合わせが集中しない)
+    sync.restart()
     try:
         window.run(server.start_url)
     except Exception:

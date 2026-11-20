@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
@@ -20,8 +21,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from remi import __version__
-from remi.api import client as redmine_client
-from remi.api.client import RedmineClient, normalize_url
+from remi.api.client import RedmineClient, interactive, normalize_url
 from remi.api.errors import ErrorCode, RedmineError
 from remi.api.probe import probe_server
 from remi.context import AppContext
@@ -175,8 +175,15 @@ class NullWindow:
 
 
 def rpc(fn: Callable) -> Callable:
-    fn._rpc = True  # type: ignore[attr-defined]
-    return fn
+    """画面から呼べる処理。Redmineへの通信は、人が待っているので、最小間隔を空けず背景の同期に先んじる(設計書 §2.4)。"""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with interactive():
+            return fn(*args, **kwargs)
+
+    wrapper._rpc = True  # type: ignore[attr-defined]
+    return wrapper
 
 
 def _flags(flags: int) -> list[str]:
@@ -206,6 +213,7 @@ class RemiApi:
         self.active = True
         # 通知を押して起動されたときに開くチケット(画面が起動時に takePendingOpen で受け取る)
         self.pending_open: list[tuple[int, int]] = []
+        self._flights: dict[tuple, threading.Lock] = {}  # 同じものを同時に取りに行かないための鍵(_once)
         self._members: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
         # server_id → (取得した時刻, 管理者か, project_id → ロールID)
         self._my_roles: dict[int, tuple[float, bool, dict[int, set[int]]]] = {}
@@ -286,8 +294,7 @@ class RemiApi:
         if not key:
             raise RpcError("unauthorized")
         try:
-            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None,
-                                 min_interval=redmine_client.PROBE_MIN_INTERVAL)
+            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None)
         except RedmineError as e:
             raise RpcError(e.code.value, e.detail) from e
         try:
@@ -775,12 +782,30 @@ class RemiApi:
             raise RpcError("connection_failed")
         return client
 
+    def _cache_get(self, cache: dict, key: Any, ttl: float) -> tuple | None:
+        """キャッシュ(先頭が取得時刻のタプル)に、有効期間内のものがあれば返す。"""
+        with self._members_lock:
+            hit = cache.get(key)
+        return hit if hit and time.monotonic() - hit[0] < ttl else None
+
+    def _once(self, *key: Any) -> threading.Lock:
+        """同じものを同時に取りに行かないための鍵。画面が同時に呼ぶ処理(「詳細」と編集の選択肢)が、
+        同じ定義を2回ずつ取得しないようにする。取りに行く前に、取り終わっていないか(キャッシュ)を確かめ直すこと。"""
+        with self._members_lock:
+            return self._flights.setdefault(key, threading.Lock())
+
     def _members_of(self, server_id: int, project_id: int) -> list[dict[str, Any]]:
         key = (server_id, project_id)
-        with self._members_lock:
-            cached = self._members.get(key)
-            if cached and time.monotonic() - cached[0] < MEMBERS_TTL:
-                return cached[1]
+        hit = self._cache_get(self._members, key, MEMBERS_TTL)
+        if hit:
+            return hit[1]
+        with self._once("members", key):
+            hit = self._cache_get(self._members, key, MEMBERS_TTL)
+            if hit:
+                return hit[1]
+            return self._load_members(server_id, project_id, key)
+
+    def _load_members(self, server_id: int, project_id: int, key: tuple[int, int]) -> list[dict[str, Any]]:
         out: dict[int, dict[str, Any]] = {}
         for m in self._client(server_id).memberships(project_id):
             ref = m.get("user") or m.get("group")
@@ -794,10 +819,16 @@ class RemiApi:
 
     def _my_project_roles(self, server_id: int) -> tuple[bool, dict[int, set[int]]]:
         """自分が管理者か と、プロジェクトごとの自分のロール(グループ経由を含む)。"""
-        with self._members_lock:
-            cached = self._my_roles.get(server_id)
-            if cached and time.monotonic() - cached[0] < PERMISSIONS_TTL:
-                return cached[1], cached[2]
+        hit = self._cache_get(self._my_roles, server_id, PERMISSIONS_TTL)
+        if hit:
+            return hit[1], hit[2]
+        with self._once("my_roles", server_id):
+            hit = self._cache_get(self._my_roles, server_id, PERMISSIONS_TTL)
+            if hit:
+                return hit[1], hit[2]
+            return self._load_my_roles(server_id)
+
+    def _load_my_roles(self, server_id: int) -> tuple[bool, dict[int, set[int]]]:
         u = self._client(server_id).current_user()
         roles: dict[int, set[int]] = {}
         for m in u.get("memberships") or []:
@@ -811,14 +842,17 @@ class RemiApi:
 
     def _permissions_of(self, server_id: int, role_id: int) -> set[str]:
         key = (server_id, role_id)
-        with self._members_lock:
-            cached = self._role_perms.get(key)
-            if cached and time.monotonic() - cached[0] < PERMISSIONS_TTL:
-                return cached[1]
-        perms = {str(p) for p in self._client(server_id).role(role_id).get("permissions") or []}
-        with self._members_lock:
-            self._role_perms[key] = (time.monotonic(), perms)
-        return perms
+        hit = self._cache_get(self._role_perms, key, PERMISSIONS_TTL)
+        if hit:
+            return hit[1]
+        with self._once("role_perms", key):
+            hit = self._cache_get(self._role_perms, key, PERMISSIONS_TTL)
+            if hit:
+                return hit[1]
+            perms = {str(p) for p in self._client(server_id).role(role_id).get("permissions") or []}
+            with self._members_lock:
+                self._role_perms[key] = (time.monotonic(), perms)
+            return perms
 
     def _project_permissions(self, server_id: int, project_id: int) -> set[str] | None:
         """このプロジェクトでの自分の権限。管理者なら {"admin"}。分からなければ None。
@@ -849,21 +883,21 @@ class RemiApi:
         """
         if tracker_id is None:
             return None
-        with self._members_lock:
-            cached = self._tracker_fields.get(server_id)
-        if cached and time.monotonic() - cached[0] < TRACKER_FIELDS_TTL:
-            table = cached[1]
-        else:
-            table = {}
-            try:
-                for t in self._client(server_id).trackers():
-                    fields = t.get("enabled_standard_fields")
-                    table[int(t["id"])] = {str(x) for x in fields} if isinstance(fields, list) else None
-            except (RedmineError, RpcError, KeyError, TypeError, ValueError) as e:
-                log.info("tracker fields unavailable for server %s: %s", server_id, e)
-            with self._members_lock:
-                self._tracker_fields[server_id] = (time.monotonic(), table)
-        return table.get(int(tracker_id))
+        hit = self._cache_get(self._tracker_fields, server_id, TRACKER_FIELDS_TTL)
+        if hit is None:
+            with self._once("tracker_fields", server_id):
+                hit = self._cache_get(self._tracker_fields, server_id, TRACKER_FIELDS_TTL)
+                if hit is None:
+                    table = {}
+                    try:
+                        for t in self._client(server_id).trackers():
+                            fields = t.get("enabled_standard_fields")
+                            table[int(t["id"])] = {str(x) for x in fields} if isinstance(fields, list) else None
+                    except (RedmineError, RpcError, KeyError, TypeError, ValueError) as e:
+                        log.info("tracker fields unavailable for server %s: %s", server_id, e)
+                    with self._members_lock:
+                        self._tracker_fields[server_id] = hit = (time.monotonic(), table)
+        return hit[1].get(int(tracker_id))
 
     def _write_permissions(self, server: Server, row, allowed: list[dict[str, Any]] | None) -> dict[str, Any]:
         """このチケットに書き込めるか(設計書 §6.2)。画面は、できない操作の入力欄を無効にする。
@@ -942,19 +976,20 @@ class RemiApi:
 
     def _custom_field_defs(self, server_id: int) -> dict[int, dict[str, Any]] | None:
         """カスタムフィールドの定義(ID → 定義)。管理者でなければ取得できないので None。"""
-        with self._members_lock:
-            cached = self._custom_fields.get(server_id)
-        if cached and time.monotonic() - cached[0] < CUSTOM_FIELDS_TTL:
-            defs = cached[1]
-        else:
-            try:
-                defs = self._client(server_id).custom_fields()
-            except RedmineError as e:
-                if e.code not in (ErrorCode.FORBIDDEN, ErrorCode.NOT_FOUND):
-                    raise
-                defs = None
-            with self._members_lock:
-                self._custom_fields[server_id] = (time.monotonic(), defs)
+        hit = self._cache_get(self._custom_fields, server_id, CUSTOM_FIELDS_TTL)
+        if hit is None:
+            with self._once("custom_fields", server_id):
+                hit = self._cache_get(self._custom_fields, server_id, CUSTOM_FIELDS_TTL)
+                if hit is None:
+                    try:
+                        defs = self._client(server_id).custom_fields()
+                    except RedmineError as e:
+                        if e.code not in (ErrorCode.FORBIDDEN, ErrorCode.NOT_FOUND):
+                            raise
+                        defs = None
+                    with self._members_lock:
+                        self._custom_fields[server_id] = hit = (time.monotonic(), defs)
+        defs = hit[1]
         return None if defs is None else {int(d["id"]): d for d in defs}
 
     @rpc

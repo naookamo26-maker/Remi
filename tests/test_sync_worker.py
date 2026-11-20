@@ -171,16 +171,17 @@ def _count(fake, pred):
 
 
 def _assigned_queries(fake):
-    return _count(fake, lambda m, p: p.startswith("/issues.json") and "assigned_to_id=me" in p)
+    # 一覧の取得(limit=100)だけ数える(件数の確認は limit=1)
+    return _count(fake, lambda m, p: p.startswith("/issues.json") and "assigned_to_id=me" in p and "limit=100" in p)
 
 
-def _start(db, fake, issues=(1,), bus=None, **kw):
+def _start(db, fake, issues=(1,), bus=None):
     fake.add_project(1, "A")
     for iid in issues:
         fake.add_issue(iid, 1, f"担当{iid}")
     sid = ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
     mgr = SyncManager(db, bus or EventBus())
-    mgr.restart(**kw)
+    mgr.restart()
     return sid, mgr
 
 
@@ -243,14 +244,14 @@ def test_manual_sync_now_is_throttled(db, fake, monkeypatch):
     try:
         assert wait_until(lambda: IssueStore(db).journals_synced(sid, 1))
         assert _assigned_queries(fake) == 1
-        mgr.sync_now()
-        assert wait_until(lambda: _assigned_queries(fake) == 2)
+        mgr.sync_now()  # 差分同期と、関係が外れたチケットの突き合わせ(一覧を取り直す)の2回
+        assert wait_until(lambda: _assigned_queries(fake) == 3)
         for _ in range(3):
             mgr.sync_now()
         time.sleep(1.5)
-        assert _assigned_queries(fake) == 2
-        mgr.sync_now(manual=False)
-        assert wait_until(lambda: _assigned_queries(fake) == 3)
+        assert _assigned_queries(fake) == 3
+        mgr.sync_now(manual=False)  # 内部からの同期は、差分だけ
+        assert wait_until(lambda: _assigned_queries(fake) == 4)
     finally:
         mgr.stop_all()
 
@@ -315,24 +316,57 @@ def test_backoff_respects_retry_after(db, fake):
         mgr.stop_all()
 
 
-def test_first_sync_is_delayed_at_app_start(db, fake, monkeypatch):
-    """アプリの起動時は、最初の同期をランダムにずらす(朝の一斉起動で集中しない)。初回同期は待たせない。"""
-    from remi.sync import worker
-
-    monkeypatch.setattr(worker, "STARTUP_DELAY_MAX", 600.0)
-    monkeypatch.setattr(worker.random, "uniform", lambda a, b: b)  # いちばん遅くなる場合
+def test_first_sync_starts_immediately_at_app_start(db, fake):
+    """アプリを起動したら、すぐ同期する(起動直後の新着・通知を遅らせない)。"""
     fake.add_project(1, "A")
     fake.add_issue(1, 1, "担当")
     servers = ServerStore(db)
     synced = servers.save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
     servers.update_fields(synced, initial_sync_done=True, last_sync_cursor="2026-01-01T00:00:00Z")
-    fresh = servers.save(Server(name="T", url=fake.base_url), api_key="test-key").server_id
     mgr = SyncManager(db, EventBus())
-    mgr.restart(startup=True)
+    mgr.restart()
     try:
-        assert wait_until(lambda: servers.get(fresh).initial_sync_done)  # まだ同期していないサーバーはすぐ
-        assert mgr._worker(synced).sched.changes - time.monotonic() > 500
-        assert servers.get(synced).last_synced_at is None
+        assert wait_until(lambda: servers.get(synced).last_synced_at is not None, timeout=5.0)
+    finally:
+        mgr.stop_all()
+
+
+def test_opening_an_issue_fetches_it_without_waiting_for_the_next_tick(db, fake, monkeypatch):
+    """チケットを開いたら、刻み(TICK_SECONDS)も先読みの間隔も待たず、すぐコメントを取得する。"""
+    from remi.sync import worker
+
+    monkeypatch.setattr(worker, "TICK_SECONDS", 30.0)
+    monkeypatch.setattr(worker, "JOURNAL_QUEUE_INTERVAL", 30.0)
+    sid, mgr = _start(db, fake, issues=(1, 2))
+    try:
+        store = IssueStore(db)
+        assert wait_until(lambda: store.get(sid, 1) is not None and store.get(sid, 2) is not None)
+        assert wait_until(lambda: store.journals_synced(sid, 1) or store.journals_synced(sid, 2))
+        target = 2 if store.journals_synced(sid, 1) else 1  # 先読みが済んでいない方(次の先読みは30秒後)
+        assert not store.journals_synced(sid, target)
+        mgr.set_open_issue(sid, target)
+        assert wait_until(lambda: store.journals_synced(sid, target), timeout=3.0)
+    finally:
+        mgr.stop_all()
+
+
+def test_reassigned_issue_is_noticed_by_the_next_sync_and_by_manual_sync(db, fake):
+    """担当を渡したチケットは、次の差分同期で件数の違いから気づく。「今すぐ同期」でも、すぐ突き合わせる。"""
+    sid, mgr = _start(db, fake, issues=(1, 2, 3))
+    try:
+        store = IssueStore(db)
+        assert wait_until(lambda: all(store.get(sid, i) is not None for i in (1, 2, 3)))
+        assert wait_until(lambda: all(store.journals_synced(sid, i) for i in (1, 2, 3)))
+        time.sleep(1.2)  # 最初の同期が落ち着くのを待つ(刻みの境目を避ける)
+        fake.issues[2]["assigned_to"] = {"id": 7, "name": "田中"}
+        fake.issues[2]["updated_on"] = "2099-01-01T00:00:00Z"
+        mgr.sync_now(manual=False)  # 通常の差分同期(突き合わせの時刻は来ていない)
+        assert wait_until(lambda: not store.get(sid, 2).monitored, timeout=5.0)
+        fake.issues[3]["assigned_to"] = {"id": 7, "name": "田中"}
+        fake.issues[3]["updated_on"] = "2099-01-02T00:00:00Z"
+        mgr.sync_now()  # 「今すぐ同期」
+        assert wait_until(lambda: not store.get(sid, 3).monitored, timeout=5.0)
+        assert store.get(sid, 1).monitored
     finally:
         mgr.stop_all()
 

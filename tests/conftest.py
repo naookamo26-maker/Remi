@@ -22,7 +22,6 @@ def _fast_sync(monkeypatch):
     from remi.api import client
 
     monkeypatch.setattr(client, "DEFAULT_MIN_INTERVAL", 0.0)
-    monkeypatch.setattr(client, "PROBE_MIN_INTERVAL", 0.0)
 
 
 @pytest.fixture

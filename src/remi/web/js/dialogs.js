@@ -158,7 +158,8 @@ export function settingsDialog(app) {
       h("span", { class: "label" }, t("settings.images")), check("allow_external_images", t("settings.externalImages")),
       field(t("settings.redmineOpenIn"), select("redmine_open_in", [...(app.boot.tabsSupported ? [["tab", t("settings.openInTab")]] : []),
         ["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
-        t("settings.redmineOpenInHelp")));
+        // Windows でタブを使えなかったときは、その理由を出す(原因を調べられるように)
+        [t("settings.redmineOpenInHelp"), app.boot.tabsError ? ` ${t("settings.tabsError", { reason: app.boot.tabsError })}` : ""].join("")));
   };
 
   const servers = () => {

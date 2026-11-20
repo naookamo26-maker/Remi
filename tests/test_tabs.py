@@ -104,6 +104,24 @@ def test_controller_falls_back_when_the_host_cannot_open():
     assert c.snapshot() == {"tabs": [], "active": None} and changes == []
 
 
+def test_controller_records_why_a_tab_could_not_be_opened():
+    class Broken(FakeHost):
+        def open(self, tab):
+            raise RuntimeError("no WebView2")
+
+    c = TabController(host=Broken())
+    assert c.last_error is None
+    c.open("https://rm/a")
+    assert c.last_error == "RuntimeError: no WebView2"
+    c2 = TabController(host=FakeHost(ok=False))
+    c2.open("https://rm/a")
+    assert c2.last_error == "the tab host could not open the page"
+    c3 = TabController(host=FakeHost())
+    c3.open("https://rm/a")
+    c3.failed(1)
+    assert c3.last_error == "WebView2 for the tab could not start"
+
+
 def test_controller_survives_a_host_that_raises():
     class Broken(FakeHost):
         def open(self, tab):

@@ -227,6 +227,8 @@ class RemiApi:
             "linkSchemes": [{"scheme": x.scheme, "confirm": x.confirm} for x in link_schemes()],
             # Redmineをタブで開けるか(設定の選択肢に出す)
             "tabsSupported": getattr(self.window, "tabs", None) is not None,
+            # タブを使えなかった理由(Windows でタブにできなかったとき。設定の画面に出す)
+            "tabsError": getattr(self.window, "tabs_error", None),
         }
 
     # --- 設定 -------------------------------------------------------------------
@@ -1062,7 +1064,10 @@ class RemiApi:
                 tabs = getattr(self.window, "tabs", None)
                 if tabs is not None and tabs.open(url):
                     return "tab"
-                mode = "app"  # タブにできなければ、別ウィンドウで開く
+                # タブにできなければ、別ウィンドウで開く。理由を画面に知らせる(原因を調べられるように)
+                reason = (tabs.last_error if tabs is not None else None) or getattr(self.window, "tabs_error", None)
+                self.ctx.bus.publish("tabsUnavailable", reason=reason or "unknown")
+                mode = "app"
             if mode == "app" and self.window.open_redmine(url):
                 return "app"
         webbrowser.open(url)

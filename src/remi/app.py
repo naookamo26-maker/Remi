@@ -41,6 +41,7 @@ class WebviewWindow:
         self._detached: list = []  # タブから切り離した、Redmineのウィンドウ
         self._tabs: TabController | None = None
         self._tabs_failed = False
+        self.tabs_error: str | None = None  # タブを使えなかった理由(設定の画面に出す)
         self.minimize_to_tray = False  # トレイが使えるときに True にする
         self._quitting = False
 
@@ -197,9 +198,10 @@ class WebviewWindow:
                 controller = TabController(on_changed=self._publish_tabs, on_failed=webbrowser.open)
                 controller.host = WinTabHost(self.window.native, controller)
                 self._tabs = controller
-            except Exception:  # noqa: BLE001 - タブにできなければ、別ウィンドウで開く
+            except Exception as e:  # noqa: BLE001 - タブにできなければ、別ウィンドウで開く
                 log.warning("could not set up the Redmine tabs", exc_info=True)
                 self._tabs_failed = True
+                self.tabs_error = f"{type(e).__name__}: {e}"
         return self._tabs
 
     def _publish_tabs(self) -> None:

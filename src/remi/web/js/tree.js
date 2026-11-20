@@ -16,6 +16,8 @@ export class Tree {
   constructor(app) {
     this.app = app;
     this.data = null;
+    /** チケットの取得に失敗したバージョン(「取得中」の表示を止める) */
+    this.failedVersions = new Set();
     this.el = h("ul", { class: "tree", role: "tree", "aria-label": t("tree.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.status = h("div", { class: "sync-status", "aria-live": "polite" });
@@ -99,6 +101,10 @@ export class Tree {
           v.synced ? "" : t(v.closed ? "tree.versionNotFetched" : "tree.versionLoading")]
           .filter(Boolean).join("\n") || null,
         dot: v.changed ? { kind: "changed", label: t("tree.versionChanged") } : null,
+        // 取得している最中(未完了のバージョンは同期中、終了したものは開いたとき)は、回転する印を出す
+        loading: !v.synced && !this.failedVersions.has(v.versionId)
+          && (!v.closed || selectionKey({ kind: "version", serverId: s.serverId, versionId: v.versionId }) === sel)
+          ? t("tree.versionLoading") : null,
         // チケットをまだ取得していないバージョンは 0/0 ではなく「…」にする(空のバージョンと見分ける)
         count: v.synced ? `${v.done}/${v.total}` : "…",
       });
@@ -184,7 +190,7 @@ export class Tree {
     const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
     if (loading) {
       this.status.replaceChildren(h("span", { class: "spin" }),
-        h("span", {}, t(loading === "initial" ? "tree.loadingInitial" : "tree.loadingVersions")));
+        h("span", {}, t({ initial: "tree.loadingInitial", sync: "tree.syncStarted" }[loading] || "tree.loadingVersions")));
       this.status.classList.add("loading");
     } else {
       this.status.textContent = times.length ? t("tree.lastSynced", { time: formatTime(times.at(-1)) }) : "";

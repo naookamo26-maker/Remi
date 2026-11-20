@@ -35,6 +35,7 @@ class WebviewWindow:
         self.start_hidden = start_hidden
         self.window = None
         self.redmine_window = None  # Redmineのページを開くウィンドウ(設計書 §5.4)
+        self._redmine_hidden = False  # 本体と一緒に隠している(本体を開いたら戻す)
         self.minimize_to_tray = False  # トレイが使えるときに True にする
         self._quitting = False
 
@@ -85,11 +86,35 @@ class WebviewWindow:
             self.window.show()
             self.window.restore()
             self.sync.set_visible(True)
+            self._show_redmine_window()
 
     def hide(self) -> None:
         if self.window is not None:
             self.window.hide()
+            self._hide_redmine_window()  # 本体をトレイに格納したら、Redmineのウィンドウだけが残らないようにする
             self.sync.set_visible(False)  # トレイに格納している間は、開いているチケットを確かめない
+
+    def _hide_redmine_window(self) -> None:
+        """本体と一緒に、Redmineのウィンドウも隠す(本体を開いたとき戻す)。"""
+        if self.redmine_window is None or self._redmine_hidden:
+            return
+        try:
+            self.redmine_window.hide()
+            self._redmine_hidden = True
+        except Exception:  # noqa: BLE001 - 隠せなくても、本体の格納は続ける
+            log.debug("could not hide the Redmine window", exc_info=True)
+
+    def _show_redmine_window(self) -> None:
+        if not self._redmine_hidden:
+            return
+        self._redmine_hidden = False
+        if self.redmine_window is None:
+            return
+        try:
+            self.redmine_window.show()
+            self.redmine_window.restore()
+        except Exception:  # noqa: BLE001
+            log.debug("could not show the Redmine window", exc_info=True)
 
     def quit(self) -> None:
         self._quitting = True
@@ -110,12 +135,14 @@ class WebviewWindow:
                 self.redmine_window.load_url(url)
                 self.redmine_window.show()
                 self.redmine_window.restore()
+                self._redmine_hidden = False
                 return True
             w = webview.create_window(f"{APP_NAME} — Redmine", url, width=1100, height=800, min_size=(640, 480),
                                       text_select=True)
 
             def closed() -> None:
                 self.redmine_window = None
+                self._redmine_hidden = False
 
             w.events.closed += closed
             # パスワードの保存・自動入力、右クリックメニューなど、標準的なブラウザと同じ機能を使えるようにする

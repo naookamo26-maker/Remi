@@ -108,6 +108,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             "hiddenProjects": hidden,
             # いま取得している内容(画面の下の状態欄に出す): 最初の取得("initial")・ロードマップ("versions")
             "loading": (None if s.last_error else "initial" if not s.initial_sync_done
+                        else "sync" if "sync" in ctx.bus.activity(sid)
                         else "versions" if loading_projects else None),
             # 表示するチケットの既定(プロジェクトで設定していなければこれを使う)と、既定から変えているか
             "relations": [r for r in RELATIONS if r in server_relations],

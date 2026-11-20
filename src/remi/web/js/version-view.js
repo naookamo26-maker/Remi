@@ -1,5 +1,5 @@
 // 右ペイン: バージョンを選んだときの表示。概要(期日・進捗)と、変化の記録(追加・外れた・完了など)(設計書 §5.5)
-import { h } from "./dom.js";
+import { h, spinner } from "./dom.js";
 import { dayKey, formatDateHeading, formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 
@@ -20,7 +20,8 @@ export function renderVersion(d, app) {
     h("span", { class: "progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(d.total),
       "aria-valuenow": String(d.done), "aria-label": t("version.progress") },
     h("span", { class: "bar" }, h("span", { style: { width: `${percent}%` } })),
-    d.synced ? t("version.doneOf", { done: d.done, total: d.total }) : t("version.loading")));
+    d.synced ? t("version.doneOf", { done: d.done, total: d.total })
+      : app.tree.failedVersions.has(d.versionId) ? t("version.loadFailed") : [spinner(), t("version.loading")]));
   const header = h("header", { class: "conv-header" },
     h("div", { class: "top" },
       h("div", { class: "titles" },

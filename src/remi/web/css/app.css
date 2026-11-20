@@ -128,6 +128,13 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .spin { display: inline-block; flex: none; width: 11px; height: 11px; box-sizing: border-box; border: 2px solid var(--border);
   border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+/* 文字と回転する印を並べる行(コメント・選択肢・詳細・一覧・バージョンの読み込み中など) */
+.loading { display: inline-flex; align-items: center; gap: 6px; }
+.system.loading, .empty.loading, li.empty.loading { display: flex; justify-content: center; }
+.who.loading { display: flex; }
+.chip .spin { width: 10px; height: 10px; }
+.result.busy { display: flex; align-items: center; gap: 6px; }
+.btn .spin { width: 10px; height: 10px; }
 
 /* ---- 一覧 ---- */
 .list-header { padding: 10px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); }

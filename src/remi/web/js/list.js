@@ -1,6 +1,6 @@
 // 中央ペイン: チケット一覧(設計書 §5.1)
 import { call } from "./api.js";
-import { clear, countText, debounce, h } from "./dom.js";
+import { clear, countText, debounce, h, spinner } from "./dom.js";
 import { formatShort, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { RELATIONS } from "./tree.js";
@@ -91,9 +91,10 @@ export class IssueList {
       // まだチケットを取得していないバージョンは、空ではなく取得中と出す
       const sel = this.app.selection;
       const loading = !this.search && sel.kind === "version"
-        && this.app.tree.findVersion(sel.serverId, sel.versionId)?.synced === false;
-      this.el.append(h("li", { class: "empty" },
-        this.search ? t("list.noMatches") : loading ? t("list.versionLoading") : t("list.empty")));
+        && this.app.tree.findVersion(sel.serverId, sel.versionId)?.synced === false
+        && !this.app.tree.failedVersions.has(sel.versionId);
+      this.el.append(h("li", { class: loading ? "empty loading" : "empty" },
+        loading ? [spinner(), t("list.versionLoading")] : this.search ? t("list.noMatches") : t("list.empty")));
       return;
     }
     const current = this.app.current;

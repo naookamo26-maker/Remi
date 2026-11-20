@@ -152,6 +152,7 @@ class App {
     this.selection = sel;
     // 終了したバージョン・まだ取得していないバージョンは、開いたときにチケットを取得する(届いたら versionsChanged)
     if (sel.kind === "version") {
+      this.tree.failedVersions.delete(sel.versionId); // 選び直したら、取得をもう一度試す
       call("fetchVersion", { serverId: sel.serverId, versionId: sel.versionId }).catch(() => {});
     }
     // 開いていた会話は閉じる(別のプロジェクトなどを選んだのに、前のチケットが残って見えると紛らわしいので)
@@ -346,6 +347,9 @@ class App {
         break;
       case "versionFetchFailed": {
         const sel = this.selection;
+        this.tree.failedVersions.add(e.versionId); // 「取得中」の表示を止める
+        this.tree.render();
+        this.list.render();
         if (sel.kind === "version" && sel.serverId === e.serverId && sel.versionId === e.versionId) {
           toast(t(`errors.${e.error}`));
         }

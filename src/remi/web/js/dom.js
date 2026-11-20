@@ -16,6 +16,11 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+// 読み込み中の、小さな回転する印(文字と並べて使う。意味は隣の文字が伝えるので、読み上げからは外す)
+export function spinner() {
+  return h("span", { class: "spin", "aria-hidden": "true" });
+}
+
 export function append(el, children) {
   for (const c of children.flat(Infinity)) {
     if (c == null || c === false) continue;

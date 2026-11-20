@@ -1,5 +1,5 @@
 // 会話ビューの本体: 説明・コメントの吹き出し、変更履歴の行、日付と未読の区切り(設計書 §5.2)
-import { h, html } from "./dom.js";
+import { h, html, spinner } from "./dom.js";
 import { dayKey, formatDateHeading, formatSize, formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 
@@ -31,8 +31,13 @@ function avatar(name, id) {
  */
 export function renderTimeline(tl, d, { onLoadMore, actions = null }) {
   if (d.hasMore) {
-    tl.append(h("div", { class: "system" }, h("button", { type: "button", class: "btn", onClick: onLoadMore },
-      t("conv.loadMore", { count: d.total - d.journals.length }))));
+    const more = h("button", { type: "button", class: "btn", onClick: () => {
+      // 取得している間は、押せない状態にして、回転する印を出す(届くと、描き直されて消える)
+      more.disabled = true;
+      more.prepend(spinner());
+      onLoadMore();
+    } }, t("conv.loadMore", { count: d.total - d.journals.length }));
+    tl.append(h("div", { class: "system" }, more));
   }
   let lastDay = "";
   const day = (iso) => {
@@ -63,7 +68,7 @@ export function renderTimeline(tl, d, { onLoadMore, actions = null }) {
       tl.append(message({ ...j, noteNo: firstNote + i, tools: actions?.noteTools(j), editor: actions?.noteEditor(j) }));
     }
   });
-  if (!d.journalsSynced) tl.append(h("div", { class: "system" }, t("conv.loading")));
+  if (!d.journalsSynced) tl.append(h("div", { class: "system loading" }, spinner(), t("conv.loading")));
 }
 
 /**
@@ -72,7 +77,7 @@ export function renderTimeline(tl, d, { onLoadMore, actions = null }) {
  */
 export function pendingMessage(parts) {
   return h("article", { class: "msg mine pending" },
-    h("div", { class: "body" }, h("div", { class: "who" }, t("conv.sending")),
+    h("div", { class: "body" }, h("div", { class: "who loading" }, spinner(), t("conv.sending")),
       h("div", { class: "bubble" }, parts.filter(Boolean).join("\n"))));
 }
 

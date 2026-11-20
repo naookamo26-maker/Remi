@@ -135,7 +135,10 @@ class ServerWorker(threading.Thread):
                     if cmd in ("sync_now", "sync_versions"):
                         next_tick = 0.0  # 次の刻みを待たず、すぐ同期を始める
                     continue  # 続けて届いた依頼を先に処理する
-                self.tick()
+                try:
+                    self.tick()
+                finally:
+                    self.bus.set_activity(self.server_id, "sync", False)
                 next_tick = time.monotonic() + TICK_SECONDS
         finally:
             if self.sync is not None:
@@ -187,6 +190,8 @@ class ServerWorker(threading.Thread):
                 self.sched.manual_sync_at = now
                 if now - self.sched.metadata_at >= MANUAL_METADATA_MIN_AGE:
                     self.sched.metadata = 0
+                # 同期している間、画面の状態欄に「同期しています…」を出す(受け付けたときだけ。tick の後で消す)
+                self.bus.set_activity(self.server_id, "sync", True)
             self.sched.changes = 0
             self.sched.versions = 0
             # バックオフ中でも1回は試す(VPNをつなぎ直したときなど)。失敗の回数は残すので、また失敗すれば

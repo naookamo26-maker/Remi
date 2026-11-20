@@ -362,12 +362,9 @@ export class Conversation {
       const img = a.querySelector("img");
       if (img) lightbox(href, img.getAttribute("alt"));
       else call("openAttachment", { serverId: d.serverId, attachmentId: Number(href.split("/").pop()) });
-    } else if (/^https?:\/\//i.test(href)) {
-      const server = d.url.replace(/\/issues\/\d+$/, "");
-      if (href.startsWith(server)) this.app.openRedmine(href, { external: e.shiftKey });
-      else call("openExternal", { url: href });
     } else {
-      this.app.openUri(href); // 自動リンクにしたスキーム・mailto(関連付けられたアプリで開く)
+      // http(s)・自動リンクにしたスキーム・mailto
+      this.app.openLink(href, { serverUrl: d.url.replace(/\/issues\/\d+$/, ""), external: e.shiftKey });
     }
   }
 

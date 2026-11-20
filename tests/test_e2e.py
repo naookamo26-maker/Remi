@@ -836,6 +836,43 @@ def test_issue_details_fields(page, remi, fake):
     assert not page.errors, page.errors
 
 
+def test_custom_field_link_button(page, remi, fake, monkeypatch):
+    """文字列のカスタムフィールドの値がリンクなら、右に「リンクを開く」ボタンを出す(入力欄はそのまま)。"""
+    import remi.server.api as api_module
+
+    opened = []
+    monkeypatch.setattr(api_module.webbrowser, "open", opened.append)
+    seed(fake)
+    fake.admin = True
+    fake.custom_fields = [{"id": 1, "name": "仕様書", "field_format": "string"},
+                          {"id": 2, "name": "顧客", "field_format": "string"}]
+    fake.issues[10]["custom_fields"] = [{"id": 1, "name": "仕様書", "value": "https://wiki.example.com/spec"},
+                                        {"id": 2, "name": "顧客", "value": "山田商事"}]
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    conv.get_by_role("button", name="詳細").click()
+    spec = conv.locator("label.detail", has_text="仕様書")
+    customer = conv.locator("label.detail", has_text="顧客")
+    playwright_api.expect(spec.get_by_label("仕様書")).to_be_enabled(timeout=15000)
+    playwright_api.expect(spec.get_by_role("button", name="リンクを開く")).to_be_visible()
+    playwright_api.expect(customer.get_by_role("button", name="リンクを開く")).to_be_hidden()
+    # 入力に合わせて、出たり消えたりする(入力欄にフォーカスしたまま)
+    customer.get_by_label("顧客").fill("www.example.co.jp")
+    playwright_api.expect(customer.get_by_role("button", name="リンクを開く")).to_be_visible()
+    spec.get_by_label("仕様書").fill("仕様は別紙")
+    playwright_api.expect(spec.get_by_role("button", name="リンクを開く")).to_be_hidden()
+    # 押すと、既定のブラウザで開く(www. は https を補う)
+    customer.get_by_role("button", name="リンクを開く").click()
+    end = time.monotonic() + 5
+    while time.monotonic() < end and not opened:
+        time.sleep(0.05)
+    assert opened == ["https://www.example.co.jp"]
+    assert not page.errors, page.errors
+
+
 def test_edit_delete_note_attachment_and_uri_link(page, remi, fake, monkeypatch):
     import remi.server.api as api_module
 

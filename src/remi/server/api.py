@@ -237,7 +237,8 @@ class RemiApi:
             "settings": self.getSettings(),
             "hasServers": bool(self.ctx.servers.list()),
             # 本文で自動リンクにするスキーム(src/remi/link_schemes.json)。画面は開く前の確認に使う
-            "linkSchemes": [{"scheme": x.scheme, "confirm": x.confirm} for x in link_schemes()],
+            "linkSchemes": [{"scheme": x.scheme, "confirm": x.confirm, "slashes": x.slashes}
+                            for x in link_schemes()],
             # Redmineをタブで開けるか(設定の選択肢に出す)
             "tabsSupported": getattr(self.window, "tabs", None) is not None,
             # タブを使えなかった理由(Windows でタブにできなかったとき。設定の画面に出す)

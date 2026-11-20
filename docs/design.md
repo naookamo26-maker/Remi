@@ -124,7 +124,6 @@ WebView2 ──HTTP──▶ ローカルAPIサーバー(127.0.0.1:ランダム�
 | 設定 | ルートの既定 | 内容 |
 | --- | --- | --- |
 | `notify` | 継承(サーバー設定に従う) | 通知のON/OFF |
-| `watch_authored` | オフ | 自分が作成したチケットを監視対象に含めるか |
 | `watch_versions` | オフ | 未完了のバージョン(ロードマップ)を監視するか(§5.5) |
 
 実際に使う値は、子から祖先へ順にたどって最初に見つかった「オン/オフ」とする。ツリーのプロジェクトの行の右端の歯車ボタンから変更する
@@ -180,10 +179,11 @@ journalの `details` にはIDしか入っていないので、表示には名前
 | --- | --- | --- |
 | 担当 | `GET /issues.json?assigned_to_id=me&status_id=*&updated_on=>=…&sort=updated_on` | 常に実行 |
 | ウォッチ | `GET /issues.json?watcher_id=me&status_id=*&updated_on=>=…&sort=updated_on` | 常に実行 |
-| 作成 | `GET /issues.json?author_id=me&status_id=*&updated_on=>=…&sort=updated_on` | `watch_authored` が有効なプロジェクトが1つでもある場合だけ |
+| 作成 | `GET /issues.json?author_id=me&status_id=*&updated_on=>=…&sort=updated_on` | 「表示するチケット」に「自分が作成」を含むプロジェクトが1つでもある場合だけ |
 
 - REST APIではOR条件が使えないので、クエリを別々に呼んでIDで統合する。各チケットに `relation_flags` を立てる
-- 「作成」で取れたチケットは、そのプロジェクトで `watch_authored` が有効な場合だけ監視対象にする(判定はローカルで行う)
+- 「作成」で取れたチケットは、そのプロジェクトの「表示するチケット」に「自分が作成」を含む場合だけ監視対象にする(判定はローカルで行う)。
+  「表示するチケット」の既定は「自分が作成」を含まない(含めると通信が増える)。含めるプロジェクトが増えたら、初回同期からやり直す
 - `limit=100` で `total_count` に達するまでページングする
 - `assigned_to_id=me` には、自分が所属するグループへの割り当ても含まれる(サーバーの設定による)。グループ経由の担当も「担当」として扱い、一覧ではアイコンで区別する
 

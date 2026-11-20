@@ -252,6 +252,8 @@ PASTE_JS = """(b64) => {
 def test_relation_filter(page, remi, fake):
     seed(fake)
     add_server(remi, fake)
+    # 「作成」のボタンは、どこかのプロジェクトが「自分が作成」を表示しているときだけ出る(既定では表示しない)
+    remi.ctx.servers.update_fields(1, visible_relations=["assigned", "group", "watching", "authored"])
     page.goto(remi.server.start_url)
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
     filters = page.get_by_role("group", name="関係で絞り込み")
@@ -540,7 +542,7 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     menu = page.get_by_role("menu")
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count-inline")).to_have_text("(1)")
-    assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
+    assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group"]}
     # 子プロジェクトは親の設定を継承していることを示す(担当のチケットが残るので、ツリーにも残る)
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 基幹システム")).to_have_class(re.compile("own"))

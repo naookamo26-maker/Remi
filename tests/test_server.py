@@ -212,7 +212,8 @@ def test_relation_filter(app, fake):
     assert ids("all") == [10, 11, 12, 13]
     assert ids("assigned") == [10, 12, 13]
     assert ids("watching") == [11, 12]
-    assert ids("authored") == []
+    # どのプロジェクトでも「自分が作成」を表示していないので、「作成」での絞り込みは、「すべて」として扱う(画面ではボタンが隠れる)
+    assert ids("authored") == [10, 11, 12, 13]
     assert app.rpc_error("listIssues", relation="x")["code"] == "invalid_input"
     assert app.rpc("setSetting", key="relation_filter", value="watching")["relation_filter"] == "watching"
 
@@ -234,7 +235,7 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     ids = lambda **kw: sorted(i["issueId"] for i in app.rpc("listIssues", **kw)["issues"])  # noqa: E731
     assert ids() == [10, 11, 13, 20, 30]
     projects = lambda: {p["projectId"]: p for p in app.rpc("getTree")["servers"][0]["projects"]}  # noqa: E731
-    assert projects()[1]["relations"] == ["assigned", "group", "watching", "authored"]
+    assert projects()[1]["relations"] == ["assigned", "group", "watching"]  # 既定は、「自分が作成」を含まない
     assert projects()[1]["relationsOwn"] is False
 
     # A でウォッチ中を表示しない: A と子プロジェクトのウォッチだけのチケットが、一覧からも、ツリーの件数・
@@ -294,6 +295,21 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     # グローバル設定としては、もう受け付けない
     for key in ("visible_relations", "show_all_projects"):
         assert app.rpc_error("setSetting", key=key, value=True)["code"] == "invalid_setting"
+
+
+def test_authored_issues_are_fetched_when_the_filter_shows_them(app, fake):
+    """「表示するチケット」の「自分が作成」にチェックすると、作成したチケットも取得する(通信が増えるので、既定は含めない)。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(20, 1, "自分が作成", assigned_to=7, author=ME)
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None)
+    time.sleep(1.5)
+    assert app.ctx.issues.get(sid, 20) is None  # 既定では、作成したチケットは取得しない
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations",
+            value=["assigned", "group", "watching", "authored"])
+    assert wait_until(lambda: app.ctx.issues.get(sid, 20) is not None, timeout=20)
+    assert [i["issueId"] for i in app.rpc("listIssues", relation="authored")["issues"]] == [20]
 
 
 def test_show_all_projects_per_server(app, fake):

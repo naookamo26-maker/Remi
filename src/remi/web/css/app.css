@@ -73,7 +73,11 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .tab-tools[hidden] { display: none; }
 .tab-tools .nb { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--text);
   font-size: 14px; cursor: pointer; }
+.tab-tools .nb svg.icon { width: 16px; height: 16px; }
 .tab-tools .nb:hover:not(:disabled) { background: var(--surface); }
+/* 切り離したウィンドウの上の操作行(chrome.html)。ページの上に、この高さだけ広がる */
+body.chrome-page #app { display: block; height: 100%; }
+body.chrome-page .tab-tools { height: 100%; box-sizing: border-box; border-top: 0; border-bottom: 1px solid var(--border); background: var(--window); }
 .tab-tools .nb:disabled { color: var(--text-muted); opacity: .45; cursor: default; }
 .tab-tools .tab-url { flex: 1; min-width: 0; margin: 0 6px; color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-tools .btn { min-height: 28px; padding: 0 10px; font-size: 12px; flex: none; }

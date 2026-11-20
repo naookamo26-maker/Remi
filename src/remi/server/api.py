@@ -126,6 +126,8 @@ class WindowController(Protocol):
     def hide(self) -> None: ...
     def open_redmine(self, url: str) -> bool: ...
     def open_detached(self, url: str) -> bool: ...
+    def window_action(self, window_id: int, action: str) -> None: ...
+    def window_state(self, window_id: int) -> dict[str, Any] | None: ...
     def quit(self) -> None: ...
     def apply_theme(self, theme: str) -> None: ...
 
@@ -139,6 +141,14 @@ class NullWindow:
     def __init__(self, simulate_tabs: bool = False) -> None:
         self.tabs: TabController | None = TabController() if simulate_tabs else None
         self.detached: list[str] = []
+        self.window_states: dict[int, dict[str, Any]] = {}  # 切り離したウィンドウの操作行の状態(確認用)
+        self.window_actions: list[tuple[int, str]] = []
+
+    def window_action(self, window_id: int, action: str) -> None:
+        self.window_actions.append((window_id, action))
+
+    def window_state(self, window_id: int) -> dict[str, Any] | None:
+        return self.window_states.get(window_id)
 
     def open_redmine(self, url: str) -> bool:
         return False
@@ -1118,6 +1128,20 @@ class RemiApi:
         if not self.window.open_detached(url):
             raise RpcError("not_supported")
         tabs.close(tabId)
+
+    @rpc
+    def getWindowState(self, windowId: int) -> dict[str, Any]:  # noqa: N802,N803
+        """切り離したRedmineのウィンドウの、ページの状態(URL・戻る/進む・読み込み中)。操作行の画面が使う。"""
+        if isinstance(windowId, bool) or not isinstance(windowId, int):
+            raise RpcError("invalid_input", "windowId")
+        return self.window.window_state(windowId) or {}
+
+    @rpc
+    def windowAction(self, windowId: int, action: str) -> None:  # noqa: N802,N803
+        """切り離したウィンドウの操作行のボタン: back / forward / reload / attach(タブに戻す)。"""
+        if isinstance(windowId, bool) or not isinstance(windowId, int) or action not in ("back", "forward", "reload", "attach"):
+            raise RpcError("invalid_input")
+        self.window.window_action(windowId, action)
 
     @rpc
     def setTabChromeHeight(self, height: float) -> None:  # noqa: N802

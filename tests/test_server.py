@@ -566,6 +566,29 @@ def test_open_redmine_in_a_tab_and_tab_operations(db, monkeypatch):
     assert opened == ["https://rm.example/issues/3"]
 
 
+def test_detached_window_chrome_api(db):
+    """切り離したウィンドウの上の操作行が使う API(ページの状態の取得と、ボタンの操作)。"""
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    win = NullWindow()
+    api = RemiApi(AppContext(db), window=win)
+    assert api.getWindowState(1) == {}
+    win.window_states[1] = {"url": "https://rm/issues/1", "canBack": True, "canForward": False, "loading": False,
+                            "attachable": True}
+    assert api.getWindowState(1)["url"] == "https://rm/issues/1"
+    for action in ("back", "forward", "reload", "attach"):
+        api.windowAction(1, action)
+    assert win.window_actions == [(1, "back"), (1, "forward"), (1, "reload"), (1, "attach")]
+    for bad in (("1", "back"), (1, "format c:"), (True, "back")):
+        with pytest.raises(Exception) as err:
+            api.windowAction(*bad)
+        assert err.value.code == "invalid_input"
+    with pytest.raises(Exception) as err:
+        api.getWindowState("x")
+    assert err.value.code == "invalid_input"
+
+
 def test_tab_failure_reason_is_announced(db, monkeypatch):
     """タブにできなかったときは、別ウィンドウで開き、その理由を画面に知らせる。"""
     from remi.context import AppContext

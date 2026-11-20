@@ -21,7 +21,7 @@ from remi.system import windows
 from remi.system.notifier import PROTOCOL, Notifier, parse_open_url
 from remi.system.single_instance import SingleInstance
 from remi.system.tabs import TabController
-from remi.system.tabs_win import WinTabHost, add_window_toolbar
+from remi.system.tabs_win import WinTabHost, WindowChrome
 from remi.system.tray import Tray
 from remi.system.webview2 import enable_browser_features
 
@@ -42,11 +42,19 @@ class WebviewWindow:
         self._tabs: TabController | None = None
         self._tabs_failed = False
         self.tabs_error: str | None = None  # タブを使えなかった理由(設定の画面に出す)
+        self._origin: str | None = None  # ローカルサーバーのオリジン(操作行の画面のURLに使う)
+        self._chromes: dict[int, WindowChrome] = {}  # Redmineのウィンドウごとの操作行
+        self._window_states: dict[int, dict] = {}
+        self._next_window_id = 1
         self.minimize_to_tray = False  # トレイが使えるときに True にする
         self._quitting = False
 
     def run(self, url: str) -> None:
         import webview
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        self._origin = f"{parsed.scheme}://{parsed.netloc}"
 
         self.window = webview.create_window(
             f"{APP_NAME} v{__version__}", url, width=1280, height=800, min_size=(900, 560), hidden=self.start_hidden,
@@ -209,12 +217,32 @@ class WebviewWindow:
             self.ctx.bus.publish("tabsChanged", **self._tabs.snapshot())
 
     def _add_toolbar(self, w) -> None:
-        """Redmineのウィンドウの上に、操作行(戻る・進む・再読み込み・URL・「タブに戻す」)を足す。"""
-        lang = resolve_language(self.ctx.settings.get("language"))
-        labels = {k: t(f"tabs.{k}", lang) for k in ("back", "forward", "reload", "attach")}
-        tabs_available = self.tabs is not None
-        add_window_toolbar(w, labels, on_attach=(lambda url: self._attach_window(w, url)) if tabs_available else None,
-                           dark=self._dark())
+        """Redmineのウィンドウの上に、操作行(戻る・進む・再読み込み・URL・「タブに戻す」。HTMLの画面)を足す。"""
+        if self._origin is None:
+            return
+        window_id = self._next_window_id
+        self._next_window_id += 1
+        attach = (lambda url: self._attach_window(w, url)) if self.tabs is not None else None
+        self._chromes[window_id] = WindowChrome(w, window_id, f"{self._origin}/chrome.html?w={window_id}",
+                                                self._on_window_state, attach)
+
+        def closed() -> None:
+            self._chromes.pop(window_id, None)
+            self._window_states.pop(window_id, None)
+
+        w.events.closed += closed
+
+    def _on_window_state(self, window_id: int, state: dict) -> None:
+        self._window_states[window_id] = state
+        self.ctx.bus.publish("windowState", windowId=window_id, **state)
+
+    def window_action(self, window_id: int, action: str) -> None:
+        chrome = self._chromes.get(window_id)
+        if chrome is not None:
+            chrome.action(action)
+
+    def window_state(self, window_id: int) -> dict | None:
+        return self._window_states.get(window_id)
 
     def _attach_window(self, w, url: str) -> None:
         """切り離したウィンドウを閉じて、同じページをタブで開く。"""

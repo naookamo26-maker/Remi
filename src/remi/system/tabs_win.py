@@ -200,86 +200,86 @@ class WinTabHost:
             self.controller.open(uri)
 
 
-def add_window_toolbar(window: Any, labels: dict[str, str], on_attach: Callable[[str], None] | None = None,
-                       dark: bool = False) -> None:
-    """Redmineを開いた別ウィンドウの上に、操作行(戻る・進む・再読み込み・URLの表示・「タブに戻す」)を足す。
+CHROME_HEIGHT = 40.0  # 切り離したウィンドウの上の操作行の高さ(CSSのpx)
 
+
+class WindowChrome:
+    """Redmineを開いた別ウィンドウの上の、操作行(HTMLの画面。web/chrome.html)。
+
+    ウィンドウのページの上に、もう1つの WebView2 を置き、操作行の画面を開く。ボタンの操作は、画面から API(windowAction)で
+    受けて、action() でページに伝える。ページの状態(URL・戻る/進む・読み込み中)は、変わるたびに on_state で知らせる。
     ウィンドウの準備ができたあとに、一度だけ足す。足せなくても、ページはそのまま見られる。Windows 以外では何もしない。
-    labels: back, forward, reload, attach(ボタンのツールチップ・文字)。
     """
-    if sys.platform != "win32":
-        return
-    state = {"done": False}
 
-    def on_loaded() -> None:
-        if state["done"]:
+    def __init__(self, window: Any, window_id: int, chrome_url: str,
+                 on_state: Callable[[int, dict[str, Any]], None], on_attach: Callable[[str], None] | None = None) -> None:
+        self.window = window
+        self.window_id = window_id
+        self.chrome_url = chrome_url
+        self.on_state = on_state
+        self.on_attach = on_attach
+        self._built = False
+        self._loading = False
+        self._form: Any = None
+        self._page: Any = None
+        if sys.platform == "win32":
+            window.events.loaded += self._on_loaded
+
+    def _on_loaded(self) -> None:
+        if self._built:
             return
-        state["done"] = True
+        self._built = True
         try:
-            wf, _webview2, action, _uri = _net()
-            from System.Drawing import Color, Point, Size  # type: ignore[import-not-found]
-
-            form = window.native
+            wf, webview2, action, uri = _net()
+            form = self.window.native
 
             def build() -> None:
-                wv = form.browser.webview
+                page = form.browser.webview
                 scale = float(getattr(form, "DeviceDpi", 96)) / 96.0
-                px = lambda v: int(v * scale)  # noqa: E731
-                panel = wf.Panel()
-                panel.Dock = wf.DockStyle.Top
-                panel.Height = px(36)
-                if dark:
-                    panel.BackColor = Color.FromArgb(255, 43, 45, 49)
-                    panel.ForeColor = Color.FromArgb(255, 230, 230, 230)
-
-                def button(text: str, x: int, width: int, tip: str) -> Any:
-                    b = wf.Button()
-                    b.Text = text
-                    b.Location = Point(px(x), px(4))
-                    b.Size = Size(px(width), px(28))
-                    tooltip.SetToolTip(b, tip)
-                    panel.Controls.Add(b)
-                    return b
-
-                tooltip = wf.ToolTip()
-                back = button("←", 8, 34, labels["back"])
-                forward = button("→", 46, 34, labels["forward"])
-                reload = button("⟳", 84, 34, labels["reload"])
-                width = form.ClientSize.Width
-                attach = None
-                right = 8
-                if on_attach is not None:
-                    attach = button(labels["attach"], 0, 96, labels["attach"])
-                    attach.Location = Point(width - px(96 + 8), px(4))
-                    attach.Anchor = wf.AnchorStyles.Top | wf.AnchorStyles.Right
-                    right = 8 + 96 + 8
-                url = wf.Label()
-                url.AutoSize = False
-                url.AutoEllipsis = True
-                url.Location = Point(px(126), px(9))
-                url.Size = Size(max(px(40), width - px(126 + right)), px(20))
-                url.Anchor = wf.AnchorStyles.Top | wf.AnchorStyles.Left | wf.AnchorStyles.Right
-                panel.Controls.Add(url)
-
-                def refresh(sender: Any = None, e: Any = None) -> None:
-                    url.Text = str(wv.Source) if wv.Source is not None else ""
-                    back.Enabled = bool(wv.CanGoBack)
-                    forward.Enabled = bool(wv.CanGoForward)
-
-                back.Click += lambda s, e: wv.GoBack() if wv.CanGoBack else None
-                forward.Click += lambda s, e: wv.GoForward() if wv.CanGoForward else None
-                reload.Click += lambda s, e: wv.Reload()
-                if attach is not None and on_attach is not None:
-                    attach.Click += lambda s, e: on_attach(str(wv.Source))
-                wv.SourceChanged += refresh
-                wv.NavigationCompleted += refresh
-                form.Controls.Add(panel)
+                chrome = webview2()
+                # ページと同じ設定(データの保存先)を使う。本体の画面が受け取った認証のCookieを、この画面も使える
+                chrome.CreationProperties = page.CreationProperties
+                chrome.Dock = wf.DockStyle.Top
+                chrome.Height = max(1, int(CHROME_HEIGHT * scale))
+                form.Controls.Add(chrome)
                 # Dock は後ろの部品から順に決まる。操作行を奥にして、ページを残りいっぱいに
-                form.Controls.SetChildIndex(panel, form.Controls.Count - 1)
-                refresh()
+                form.Controls.SetChildIndex(chrome, form.Controls.Count - 1)
+                chrome.Source = uri(self.chrome_url)
+                self._form, self._page = form, page
+                page.SourceChanged += lambda s, e: self._push()
+                page.NavigationStarting += lambda s, e: self._push(loading=True)
+                page.NavigationCompleted += lambda s, e: self._push(loading=False)
+                self._push()
 
             form.Invoke(action(build))
         except Exception:  # noqa: BLE001 - 足せなくても、ページは見られる
             log.warning("could not add the toolbar to the Redmine window", exc_info=True)
 
-    window.events.loaded += on_loaded
+    def _push(self, loading: bool | None = None) -> None:
+        if loading is not None:
+            self._loading = loading
+        page = self._page
+        if page is None:
+            return
+        self.on_state(self.window_id, {
+            "url": str(page.Source) if page.Source is not None else "", "canBack": bool(page.CanGoBack),
+            "canForward": bool(page.CanGoForward), "loading": self._loading, "attachable": self.on_attach is not None})
+
+    def action(self, name: str) -> None:
+        """操作行のボタン: back / forward / reload / attach。フォームのスレッドで動かす。"""
+        if self._form is None or self._page is None:
+            return
+        _wf, _w, action, _u = _net()
+
+        def run() -> None:
+            page = self._page
+            if name == "back" and page.CanGoBack:
+                page.GoBack()
+            elif name == "forward" and page.CanGoForward:
+                page.GoForward()
+            elif name == "reload":
+                page.Reload()
+            elif name == "attach" and self.on_attach is not None:
+                self.on_attach(str(page.Source))
+
+        self._form.Invoke(action(run))

@@ -566,6 +566,58 @@ def test_open_redmine_in_a_tab_and_tab_operations(db, monkeypatch):
     assert opened == ["https://rm.example/issues/3"]
 
 
+def test_detached_window_chrome_api(db):
+    """切り離したウィンドウの上の操作行が使う API(ページの状態の取得と、ボタンの操作)。"""
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    win = NullWindow()
+    api = RemiApi(AppContext(db), window=win)
+    assert api.getWindowState(1) == {}
+    win.window_states[1] = {"url": "https://rm/issues/1", "canBack": True, "canForward": False, "loading": False,
+                            "attachable": True}
+    assert api.getWindowState(1)["url"] == "https://rm/issues/1"
+    for action in ("back", "forward", "reload", "attach"):
+        api.windowAction(1, action)
+    assert win.window_actions == [(1, "back"), (1, "forward"), (1, "reload"), (1, "attach")]
+    for bad in (("1", "back"), (1, "format c:"), (True, "back")):
+        with pytest.raises(Exception) as err:
+            api.windowAction(*bad)
+        assert err.value.code == "invalid_input"
+    with pytest.raises(Exception) as err:
+        api.getWindowState("x")
+    assert err.value.code == "invalid_input"
+
+
+def test_tab_failure_reason_is_announced(db, monkeypatch):
+    """タブにできなかったときは、別ウィンドウで開き、その理由を画面に知らせる。"""
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+    from remi.system.tabs import TabController
+
+    class Broken:
+        def open(self, tab):
+            raise RuntimeError("boom")
+
+    class Win(NullWindow):
+        def open_redmine(self, url):
+            return True
+
+    win = Win(simulate_tabs=True)
+    win.tabs = TabController(host=Broken())
+    api = RemiApi(AppContext(db), window=win)
+    sub = api.ctx.bus.subscribe()
+    api.setSetting("redmine_open_in", "tab")
+    assert api.openRedmine("https://rm.example/issues/1") == "app"
+    events = []
+    while (e := sub.get(timeout=0.05)) is not None:
+        events.append(e)
+    assert [e["reason"] for e in events if e["type"] == "tabsUnavailable"] == ["RuntimeError: boom"]
+    # 設定の画面に出す理由(Windows でタブを使えなかったとき)
+    win.tabs_error = "ImportError: no WebView2"
+    assert api.bootstrap()["tabsError"] == "ImportError: no WebView2"
+
+
 def test_tabs_fall_back_when_not_supported(db, monkeypatch):
     from remi.context import AppContext
     from remi.server.api import NullWindow, RemiApi

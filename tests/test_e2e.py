@@ -361,6 +361,66 @@ def test_redmine_tabs(page, remi, fake, monkeypatch):
     assert not page.errors, page.errors
 
 
+def test_detached_window_chrome_page(page, remi, fake):
+    """切り離したウィンドウの上の操作行(chrome.html)。SVGのボタン、URLの表示のみ、ライト/ダークに追従する。"""
+    from remi.server.api import NullWindow
+
+    window = NullWindow()
+    window.window_states[1] = {"url": "https://rm.example/issues/10", "canBack": True, "canForward": False,
+                               "loading": False, "attachable": True}
+    remi.api.window = window
+    remi.ctx.settings.set("theme", "light")
+    page.goto(remi.server.start_url)  # 認証のCookieを受け取る(本物では、本体の画面が受け取ったものを共有する)
+    page.goto(f"{remi.server.origin}/chrome.html?w=1")
+    bar = page.locator(".tab-tools")
+    playwright_api.expect(bar).to_be_visible(timeout=10000)
+    playwright_api.expect(bar.locator(".tab-url")).to_have_text("rm.example/issues/10")
+    playwright_api.expect(bar.locator("input")).to_have_count(0)  # URLは表示のみ
+    # ボタンの記号は文字ではなく、SVGの図形
+    assert page.evaluate("() => [...document.querySelectorAll('.tab-tools .nb')].every((b) => b.querySelector('svg') && !b.textContent.trim())")
+    playwright_api.expect(page.get_by_role("button", name="戻る")).to_be_enabled()
+    playwright_api.expect(page.get_by_role("button", name="進む")).to_be_disabled()
+    page.get_by_role("button", name="戻る").click()
+    page.get_by_role("button", name="再読み込み").click()
+    page.get_by_role("button", name="タブに戻す").click()
+    for _ in range(50):
+        if len(window.window_actions) >= 3:
+            break
+        time.sleep(0.1)
+    assert window.window_actions == [(1, "back"), (1, "reload"), (1, "attach")]
+    # ページの状態が変わると、操作行も変わる
+    remi.ctx.bus.publish("windowState", windowId=1, url="https://rm.example/issues/11", canBack=False, canForward=True,
+                         loading=False, attachable=False)
+    playwright_api.expect(bar.locator(".tab-url")).to_have_text("rm.example/issues/11", timeout=10000)
+    playwright_api.expect(page.get_by_role("button", name="進む")).to_be_enabled()
+    playwright_api.expect(page.get_by_role("button", name="タブに戻す")).to_have_count(0)
+    # アプリの設定でライト/ダークを切り替えると、操作行も追従する
+    playwright_api.expect(page.locator("html")).to_have_class(re.compile("theme-light"))
+    remi.api.setSetting("theme", "dark")
+    playwright_api.expect(page.locator("html")).to_have_class(re.compile("theme-dark"), timeout=10000)
+    assert not page.errors, page.errors
+
+
+def test_tree_hides_all_and_unread_rows_when_nothing_is_shown(page, remi, fake):
+    """表示するチケットがなければ、プロジェクトが出ていても(「すべてを表示」)、「すべて」「未読のみ」は出さない。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    tree = page.locator(".tree")
+    playwright_api.expect(tree).to_contain_text("未読のみ", timeout=20000)
+    # すべてのフィルタを外し、チケットのないプロジェクトも出す
+    remi.ctx.servers.update_fields(1, visible_relations=[], show_all_projects=True)
+    remi.ctx.bus.publish("projectSettingsChanged", serverId=1)
+    playwright_api.expect(tree).not_to_contain_text("未読のみ", timeout=10000)
+    playwright_api.expect(tree).to_contain_text("基幹システム")
+    assert tree.locator(".node", has_text="すべて").filter(has_not_text="すべてを表示").count() == 0
+    # 戻すと、また出る
+    remi.ctx.servers.update_fields(1, visible_relations=None)
+    remi.ctx.bus.publish("projectSettingsChanged", serverId=1)
+    playwright_api.expect(tree).to_contain_text("未読のみ", timeout=10000)
+    assert not page.errors, page.errors
+
+
 def test_open_redmine_menu(page, remi, fake, monkeypatch):
     opened = []
     monkeypatch.setattr("webbrowser.open", opened.append)

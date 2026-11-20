@@ -4,12 +4,26 @@
 import { call } from "./api.js";
 import { debounce, h, spinner, toast } from "./dom.js";
 import { t } from "./i18n.js";
+import { icon } from "./icons.js";
 
 /** @typedef {{id: number, url: string, title: string, canBack: boolean, canForward: boolean, loading: boolean}} TabInfo */
 
 /** URLの表示用: 先頭の http(s):// を省く */
 export function displayUrl(url) {
   return String(url || "").replace(/^https?:\/\//i, "");
+}
+
+/**
+ * 戻る・進む・再読み込みのボタン(記号の文字ではなく、SVGの図形で描く。フォントや画面の拡大率に左右されない)。
+ * タブの操作行と、切り離したウィンドウの操作行(chrome.js)で共通に使う。
+ * @param {{canBack: boolean, canForward: boolean}} state
+ * @param {(action: "back"|"forward"|"reload") => void} onAction
+ */
+export function navButtons(state, onAction) {
+  const nav = (label, name, action, enabled) => h("button", { type: "button", class: "nb", "aria-label": label, title: label,
+    disabled: !enabled, onClick: () => onAction(action) }, icon(name));
+  return [nav(t("tabs.back"), "back", "back", state.canBack), nav(t("tabs.forward"), "forward", "forward", state.canForward),
+    nav(t("tabs.reload"), "reload", "reload", true)];
 }
 
 export class Tabs {
@@ -80,15 +94,11 @@ export class Tabs {
 
   /** @param {TabInfo} tab */
   renderTools(tab) {
-    const nav = (label, glyph, action, enabled) => h("button", { type: "button", class: "nb", "aria-label": label, title: label,
-      disabled: !enabled, onClick: () => call("tabAction", { tabId: tab.id, action }).catch(() => {}) }, glyph);
-    this.tools.replaceChildren(
-      nav(t("tabs.back"), "←", "back", tab.canBack),
-      nav(t("tabs.forward"), "→", "forward", tab.canForward),
-      nav(t("tabs.reload"), "⟳", "reload", true),
-      // URLは表示のみ(入力はしない)
-      h("span", { class: "tab-url", title: tab.url }, displayUrl(tab.url)),
-      h("button", { type: "button", class: "btn", title: t("tabs.detachHint"), onClick: () => this.detach(tab.id) }, t("tabs.detach")));
+    this.tools.replaceChildren(...navButtons({ canBack: tab.canBack, canForward: tab.canForward },
+      (action) => call("tabAction", { tabId: tab.id, action }).catch(() => {})),
+    // URLは表示のみ(入力はしない)
+    h("span", { class: "tab-url", title: tab.url }, displayUrl(tab.url)),
+    h("button", { type: "button", class: "btn", title: t("tabs.detachHint"), onClick: () => this.detach(tab.id) }, t("tabs.detach")));
   }
 
   onTabKey(e, id) {

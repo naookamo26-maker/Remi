@@ -120,6 +120,7 @@ class TabController:
         self.host = host
         self.on_changed = on_changed
         self.on_failed = on_failed  # ページを開けなかったタブのURL(既定のブラウザで開くために使う)
+        self.last_error: str | None = None  # タブにできなかった理由(画面で知らせ、原因を調べるために使う)
 
     def _changed(self) -> None:
         if self.on_changed is not None:
@@ -135,8 +136,11 @@ class TabController:
         if self.host is not None:
             try:
                 ok = self.host.open(tab)
-            except Exception:  # noqa: BLE001
+                if not ok:
+                    self.last_error = "the tab host could not open the page"
+            except Exception as e:  # noqa: BLE001
                 log.exception("could not open a Redmine tab")
+                self.last_error = f"{type(e).__name__}: {e}"
                 ok = False
             if not ok:
                 self.model.close(tab.id)
@@ -190,6 +194,7 @@ class TabController:
         tab = self.model.get(tab_id)
         if tab is None:
             return
+        self.last_error = "WebView2 for the tab could not start"
         self.close(tab_id)
         if self.on_failed is not None:
             self.on_failed(tab.url)

@@ -346,6 +346,9 @@ class App {
       case "serversChanged":
         this.onServersChanged();
         break;
+      case "tabsUnavailable":
+        toast(t("tabs.unavailable", { reason: e.reason }));
+        break;
       case "tabsChanged":
         this.tabs.set({ tabs: e.tabs, active: e.active });
         break;

@@ -21,6 +21,23 @@ export function fieldLabel(key, change) {
   return change?.name || t(FIELD_LABELS[key] || key);
 }
 
+/**
+ * 値が1つのリンクなら、開く先を返す(そうでなければ null)。本文の自動リンクと同じ種類:
+ * http(s)・www.(https を補う)・mailto・link_schemes.json のスキーム。
+ * @param {unknown} value @param {{scheme: string, slashes?: boolean}[]} [schemes]
+ */
+export function linkOf(value, schemes = []) {
+  const v = typeof value === "string" ? value.trim() : "";
+  if (!v || /\s/.test(v)) return null;
+  if (/^(?:https?:\/\/|mailto:)\S+$/i.test(v)) return v;
+  if (/^www\.\S+$/i.test(v)) return `https://${v}`;
+  const m = v.match(/^([a-z][a-z0-9+.-]*):/i);
+  const conf = m && schemes.find((x) => x.scheme === m[1].toLowerCase());
+  if (!conf) return null;
+  const rest = v.slice(m[0].length);
+  return (conf.slashes ? rest.startsWith("//") && rest.length > 2 : rest.length > 0) ? v : null;
+}
+
 const sameValue = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 export class IssueHeader {
@@ -135,15 +152,39 @@ export class IssueHeader {
       const reason = denied
         || (f.key === "parent_issue_id" && !p.subtasks ? t("conv.noSubtaskPermission") : null)
         || (!f.editable ? t(`conv.${f.reason === "custom_field_unknown" ? "cfUnknown" : "cfUnsupported"}`) : null);
-      box.append(h("label", { class: "detail" }, h("span", { class: "name" }, label), this.detailInput(f, label, reason)));
+      // 文字列のカスタムフィールドの値がリンクなら、右に「リンクを開く」ボタンを出す
+      const open = f.key.startsWith("cf:") && f.type === "text" ? this.linkButton() : null;
+      const input = this.detailInput(f, label, reason, open?.update);
+      open?.update(this.conv.changes[f.key] ? this.conv.changes[f.key].value : f.value);
+      box.append(h("label", { class: "detail" }, h("span", { class: "name" }, label), input, ...(open ? [open.el] : [])));
     }
     if (!det.customFieldsKnown && det.fields.some((f) => f.key.startsWith("cf:"))) {
       box.append(h("div", { class: "help" }, t("conv.cfUnknownHelp")));
     }
   }
 
-  /** 項目1つの入力欄。reason があれば、今の値だけを表示して操作できないようにする */
-  detailInput(f, label, reason) {
+  /** 「リンクを開く」ボタン。update(値) で、値がリンクのときだけ表示する */
+  linkButton() {
+    const app = this.conv.app;
+    let href = null;
+    const el = h("button", { type: "button", class: "link-open", hidden: true, title: t("conv.openLink"),
+      "aria-label": t("conv.openLink"),
+      onClick: (e) => {
+        e.preventDefault(); // ラベルの中にあるので、入力欄にフォーカスが移らないようにする
+        const d = this.conv.data;
+        if (href && d) app.openLink(href, { serverUrl: d.url.replace(/\/issues\/\d+$/, ""), external: e.shiftKey });
+      } }, icon("external"));
+    return {
+      el,
+      update: (value) => {
+        href = linkOf(value, app.boot?.linkSchemes || []);
+        el.hidden = !href;
+      },
+    };
+  }
+
+  /** 項目1つの入力欄。reason があれば、今の値だけを表示して操作できないようにする。onValue は、入力のたびに値を受け取る */
+  detailInput(f, label, reason, onValue = null) {
     const change = this.conv.changes[f.key];
     const chosen = change ? change.value : f.value;
     const display = (v) => this.displayValue(f, v);
@@ -180,7 +221,7 @@ export class IssueHeader {
         step: f.type === "float" ? "any" : f.type === "int" || f.type === "issue" ? "1" : null,
         min: f.type === "issue" ? "1" : null, placeholder: f.type === "issue" ? "#" : null,
         // 入力のたびに記録する(届いた更新でヘッダが描き直されても、書きかけの値が残るように)
-        onInput: () => { el.classList.toggle("changed", !!record(this.parseInput(f, el.value))); } });
+        onInput: () => { el.classList.toggle("changed", !!record(this.parseInput(f, el.value))); onValue?.(el.value); } });
     }
     el.setAttribute("aria-label", label);
     el.classList.toggle("changed", !!change);

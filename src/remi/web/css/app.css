@@ -349,6 +349,10 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .details-fields select, .details-fields input, .details-fields .multi { flex: 1; min-width: 0; height: 28px; padding: 0 6px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--window); color: var(--text); font-size: 12px; }
 .details-fields .multi { text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.details-fields .link-open { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--window); color: var(--link); cursor: pointer; }
+.details-fields .link-open[hidden] { display: none; }
+.details-fields .link-open:hover { background: var(--selection); }
 .details-fields .changed { border-color: var(--accent); background: var(--selection); }
 .details-fields .static { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .details-fields .static b { color: var(--text); font-weight: 500; }

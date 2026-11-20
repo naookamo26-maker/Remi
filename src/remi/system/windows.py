@@ -44,8 +44,14 @@ def set_dark_title_bar(hwnd: int, dark: bool) -> None:
         import ctypes
 
         value = ctypes.c_int(1 if dark else 0)
+        dwm = ctypes.windll.dwmapi
+        # 定期的に呼ばれるので、すでに同じ色なら何もしない(読めないとき・違うときだけ書き込む)
+        now = ctypes.c_int(-1)
+        if dwm.DwmGetWindowAttribute(ctypes.c_void_p(hwnd), DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(now),
+                                     ctypes.sizeof(now)) == 0 and now.value == value.value:
+            return
         for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
-            hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hr = dwm.DwmSetWindowAttribute(
                 ctypes.c_void_p(hwnd), attribute, ctypes.byref(value), ctypes.sizeof(value))
             if hr == 0:  # 成功(古いビルドでは、20 は失敗するので 19 を試す)
                 break

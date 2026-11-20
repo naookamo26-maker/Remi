@@ -57,6 +57,7 @@
   "conv.nothingToPreview": "プレビューする内容がありません",
   "conv.openFile": "開く",
   "conv.openInBrowser": "既定のブラウザで開く",
+  "conv.openLink": "リンクを開く",
   "conv.openRedmine": "Redmineで開く",
   "conv.openRedmineHint": "Shift+クリックで既定のブラウザで開きます",
   "conv.openUriBody": "{url} を、関連付けられたアプリで開きますか?",

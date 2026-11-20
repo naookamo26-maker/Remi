@@ -269,6 +269,16 @@ class App {
     return call("openRedmine", { url, external });
   }
 
+  /**
+   * リンクを開く。http(s) は、Redmine(serverUrl 以下)ならRedmineの開き方、それ以外は既定のブラウザ。
+   * ほかのスキーム(link_schemes.json・mailto)は、関連付けられたアプリで開く。
+   */
+  openLink(href, { serverUrl = "", external = false } = {}) {
+    if (!/^https?:\/\//i.test(href)) return this.openUri(href);
+    if (serverUrl && href.startsWith(serverUrl)) return this.openRedmine(href, { external });
+    return call("openExternal", { url: href });
+  }
+
   /** 本文の自動リンク(link_schemes.json のスキーム・mailto)を開く。指定に従って、開く前に確認する */
   async openUri(url) {
     const m = url.match(/^([a-z][a-z0-9+.-]*):/i);

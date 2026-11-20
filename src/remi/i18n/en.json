@@ -57,6 +57,7 @@
   "conv.nothingToPreview": "Nothing to preview",
   "conv.openFile": "Open",
   "conv.openInBrowser": "Open in default browser",
+  "conv.openLink": "Open link",
   "conv.openRedmine": "Open in Redmine",
   "conv.openRedmineHint": "Shift+click opens in your default browser",
   "conv.openUriBody": "Open {url} with the associated app?",

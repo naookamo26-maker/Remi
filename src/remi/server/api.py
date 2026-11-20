@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from remi import __version__
+from remi.api import client as redmine_client
 from remi.api.client import RedmineClient, normalize_url
 from remi.api.errors import ErrorCode, RedmineError
 from remi.api.probe import probe_server
@@ -285,7 +286,8 @@ class RemiApi:
         if not key:
             raise RpcError("unauthorized")
         try:
-            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None, min_interval=0.2)
+            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None,
+                                 min_interval=redmine_client.PROBE_MIN_INTERVAL)
         except RedmineError as e:
             raise RpcError(e.code.value, e.detail) from e
         try:

@@ -66,6 +66,13 @@ def format_redmine_datetime(value: str) -> str:
     return value.replace("+00:00", "Z")
 
 
+# 通信の最小間隔(秒)。Redmineへの負荷を抑えるため、リクエストの間をこれだけあける(設計書 §2.4)。
+# テストでは待たないよう、conftest で 0 にする(間隔そのものは test_throttle で確かめる)
+DEFAULT_MIN_INTERVAL = 0.5
+# 接続テスト(ユーザー操作の待ちなので短くする)
+PROBE_MIN_INTERVAL = 0.2
+
+
 class RedmineClient:
     def __init__(
         self,
@@ -75,11 +82,11 @@ class RedmineClient:
         proxy_mode: str = "system",
         proxy_url: str | None = None,
         timeout: tuple[float, float] = DEFAULT_TIMEOUT,
-        min_interval: float = 0.5,
+        min_interval: float | None = None,
     ) -> None:
         self.base_url = normalize_url(base_url)
         self.timeout = timeout
-        self.min_interval = min_interval
+        self.min_interval = DEFAULT_MIN_INTERVAL if min_interval is None else min_interval
         self._lock = threading.Lock()
         self._last_request = 0.0
         # 同期を止めたあとは、通信中だったものも含めて結果を返さない(切り替えた後に前のデータを書き戻させない)

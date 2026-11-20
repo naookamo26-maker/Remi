@@ -511,7 +511,8 @@ class FakeRedmine:
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.base_url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        # 終了(shutdown)は、この間隔のぶんだけ待つ。既定の0.5秒だと、偽Redmineを使うテストのたびに最大0.5秒かかる
+        threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         return self.base_url
 
     def stop(self) -> None:

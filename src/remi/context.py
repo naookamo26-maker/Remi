@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from remi.events import EventBus
 from remi.store.db import Database
-from remi.store.issues import RELATIONS, IssueStore, RelationScope
+from remi.store.issues import DEFAULT_RELATIONS, RELATIONS, IssueStore, RelationScope
 from remi.store.masters import MasterStore
 from remi.store.projects import ProjectStore
 from remi.store.servers import ServerStore
@@ -48,5 +48,5 @@ class AppContext:
             visible[s.server_id] = m
             defaults[s.server_id] = s.visible_relations
             for pid in self.issues.count_by_project(s.server_id):
-                in_use.update(m.get(pid, RELATIONS if s.visible_relations is None else s.visible_relations))
+                in_use.update(m.get(pid, DEFAULT_RELATIONS if s.visible_relations is None else s.visible_relations))
         return RelationScope.build(defaults, visible, in_use, relation_filter)

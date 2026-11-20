@@ -7,14 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from remi.store.db import Database
+from remi.store.issues import DEFAULT_RELATIONS
 
 PROJECT_STATUS_ACTIVE = 1
 PROJECT_STATUS_CLOSED = 5
 PROJECT_STATUS_ARCHIVED = 9
 
-SETTING_KEYS = ("notify", "watch_authored", "watch_versions")
+SETTING_KEYS = ("notify", "watch_versions")
 # ルートでの既定値(None = サーバー設定に従う)
-ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_authored": False, "watch_versions": False}
+ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_versions": False}
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,15 @@ class ProjectStore:
         return {r[0]: json.loads(r[1]) for r in self.db.query(
             "SELECT project_id, visible_relations FROM project_settings "
             "WHERE server_id = ? AND visible_relations IS NOT NULL", (server_id,))}
+
+    def projects_showing(self, server_id: int, relation: str, server_default: list[str] | None) -> set[int]:
+        """「表示するチケット」に relation を含むプロジェクトのID(継承を解決済み)。
+
+        「自分が作成」を含むプロジェクトでは、作成したチケットも取得する。server_default はサーバーの既定(None は標準の既定)。
+        """
+        default = DEFAULT_RELATIONS if server_default is None else tuple(server_default)
+        resolved = self.visible_relations_map(server_id)
+        return {p.project_id for p in self.list(server_id) if relation in resolved.get(p.project_id, default)}
 
     def visible_relations_map(self, server_id: int) -> dict[int, list[str]]:
         """プロジェクトごとの、継承を解決した「表示するチケット」。どこにも設定がない(すべて表示)プロジェクトは含めない。

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from remi.context import AppContext
-from remi.store.issues import RELATIONS
+from remi.store.issues import DEFAULT_RELATIONS, RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, Project
 
 
@@ -36,7 +36,7 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
         unread = ctx.issues.unread_by_project(sid, scope)
         counts = ctx.issues.count_by_project(sid, scope)
         relations = ctx.projects.visible_relations_map(sid)
-        server_relations = list(RELATIONS) if s.visible_relations is None else s.visible_relations  # サーバーの既定
+        server_relations = list(DEFAULT_RELATIONS) if s.visible_relations is None else s.visible_relations  # サーバーの既定
         own = ctx.projects.own_visible_relations(sid)
         # 表示するプロジェクトは、プロジェクトごとの「表示するチケット」に合うチケットがあるものと、ロードマップ
         # (バージョン)があるもの。一覧の絞り込みボタンでは変わらない(ボタンを押すたびにツリーの形が変わらないように)。

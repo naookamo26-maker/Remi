@@ -162,7 +162,6 @@
   "menu.openRedmine": "Open in Redmine",
   "menu.showAllProjects": "Show all projects (this server)",
   "menu.visibleRelations": "Issues to show…",
-  "menu.watchAuthored": "Follow issues I created",
   "menu.watchVersions": "Watch open versions",
   "notify.body": "{user}: {notes}",
   "notify.others": {
@@ -295,8 +294,8 @@
   "tree.versionNotFetched": "Issues are loaded when you open this version",
   "tree.visibleRelations": "Issues to show",
   "tree.visibleRelationsFor": "Issues to show — {name}",
-  "tree.visibleRelationsHint": "Also applies to subprojects. Affects the counts and unread numbers in the tree, the list, the tray and notifications",
-  "tree.visibleRelationsServerHint": "Default for this server. Applies to projects without their own setting",
+  "tree.visibleRelationsHint": "Check “Created by me” to fetch the issues you created too (more requests). Also applies to subprojects",
+  "tree.visibleRelationsServerHint": "Default for this server. Applies to projects without their own setting. Check “Created by me” to fetch the issues you created too (more requests)",
   "version.changes": "Version changes",
   "version.doneOf": "{done} / {total} done",
   "version.dueDate": "Due",

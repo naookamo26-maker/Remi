@@ -30,7 +30,7 @@ from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
 from remi.render.schemes import link_schemes, scheme_of
 from remi.server.tree import build_tree
-from remi.store.issues import REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
+from remi.store.issues import DEFAULT_RELATIONS, REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
 from remi.store.servers import POLL_INTERVALS, Server
 
@@ -364,7 +364,7 @@ class RemiApi:
             out[key] = {"value": self.ctx.projects.get_setting(serverId, projectId, key), "effective": bool(eff)}
         own = self.ctx.projects.get_visible_relations(serverId, projectId)
         eff_rel = self.ctx.projects.visible_relations_map(serverId).get(
-            projectId, server.visible_relations if server and server.visible_relations is not None else list(RELATIONS))
+            projectId, server.visible_relations if server and server.visible_relations is not None else list(DEFAULT_RELATIONS))
         out["visible_relations"] = {"value": own, "effective": [r for r in RELATIONS if r in eff_rel]}
         p = self.ctx.projects.get(serverId, projectId)
         out["url"] = f"{server.url}/projects/{p.identifier or p.project_id}" if server and p else None
@@ -376,8 +376,10 @@ class RemiApi:
         if key == "visible_relations":
             if value is not None and not _valid_relations(value):
                 raise RpcError("invalid_setting", key)
+            before = self._authored_projects(serverId)
             self.ctx.projects.set_visible_relations(
                 serverId, projectId, None if value is None else [r for r in RELATIONS if r in value])
+            self._refetch_if_authored_gained(serverId, before)
             self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)
             return self.getProjectSettings(serverId, projectId)
         if key not in SETTING_KEYS or value not in (None, True, False):
@@ -385,12 +387,19 @@ class RemiApi:
         self.ctx.projects.set_setting(serverId, projectId, key, value)
         if key == "watch_versions" and self.sync is not None:
             self.sync.sync_versions_now(serverId)  # バージョンをすぐ取得する(やめたときは、ツリーから消す)
-        if key == "watch_authored" and self.sync is not None:
-            # 作成したチケットを取り直すため、初回同期からやり直す
-            self.ctx.servers.update_fields(serverId, initial_sync_done=False)
-            self.sync.restart()
         self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)
         return self.getProjectSettings(serverId, projectId)
+
+    def _authored_projects(self, server_id: int) -> set[int]:
+        """「表示するチケット」に「自分が作成」を含む(作成したチケットを取得する)プロジェクトのID。"""
+        server = self.ctx.servers.get(server_id)
+        return self.ctx.projects.projects_showing(server_id, "authored", server.visible_relations if server else None)
+
+    def _refetch_if_authored_gained(self, server_id: int, before: set[int]) -> None:
+        """「自分が作成」を表示するプロジェクトが増えたら、作成したチケットを取得するため、初回同期からやり直す。"""
+        if self.sync is not None and self._authored_projects(server_id) - before:
+            self.ctx.servers.update_fields(server_id, initial_sync_done=False)
+            self.sync.restart()
 
     @rpc
     def setServerSetting(self, serverId: int, key: str, value: Any) -> None:  # noqa: N802,N803
@@ -402,8 +411,10 @@ class RemiApi:
         if key == "show_all_projects" and isinstance(value, bool):
             self.ctx.servers.update_fields(serverId, show_all_projects=value)
         elif key == "visible_relations" and (value is None or _valid_relations(value)):
+            before = self._authored_projects(serverId)
             self.ctx.servers.update_fields(
                 serverId, visible_relations=None if value is None else [r for r in RELATIONS if r in value])
+            self._refetch_if_authored_gained(serverId, before)
         else:
             raise RpcError("invalid_setting", key)
         self.ctx.bus.publish("projectSettingsChanged", serverId=serverId)

@@ -161,7 +161,6 @@
   "menu.openRedmine": "Redmineで開く",
   "menu.showAllProjects": "すべてのプロジェクトを表示(このサーバー)",
   "menu.visibleRelations": "表示するチケット…",
-  "menu.watchAuthored": "作成したチケットを監視",
   "menu.watchVersions": "未完了のバージョンをウォッチ",
   "notify.body": "{user}: {notes}",
   "notify.others": {
@@ -290,8 +289,8 @@
   "tree.versionNotFetched": "開いたときにチケットを取得します",
   "tree.visibleRelations": "表示するチケット",
   "tree.visibleRelationsFor": "表示するチケット — {name}",
-  "tree.visibleRelationsHint": "子プロジェクトにも適用されます。ツリーの件数・未読数、一覧、トレイの未読数、通知に反映されます",
-  "tree.visibleRelationsServerHint": "このサーバーの既定です。独自に設定していないプロジェクトに適用されます",
+  "tree.visibleRelationsHint": "「自分が作成」にチェックすると、作成したチケットも取得します(通信が増えます)。子プロジェクトにも適用されます",
+  "tree.visibleRelationsServerHint": "このサーバーの既定です。独自に設定していないプロジェクトに適用されます。「自分が作成」にチェックすると、作成したチケットも取得します(通信が増えます)",
   "version.changes": "バージョンの変化",
   "version.doneOf": "完了 {done} / {total}",
   "version.dueDate": "期日",

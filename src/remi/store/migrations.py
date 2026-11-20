@@ -214,6 +214,30 @@ CREATE TABLE notified (
 )
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3, V4, V5]
+# 「作成したチケットを監視」(プロジェクトごとの設定 watch_authored)をやめ、「表示するチケット」の「自分が作成」に一本化する。
+# 「自分が作成」を含むプロジェクトで、作成したチケットも取得する。既定は「自分が作成」を含まない(担当・グループ・ウォッチ)。
+# これまでの設定を、見え方が変わらないように引き継ぐ:
+# - 「作成したチケットを監視」をオンにしていたプロジェクトは、「自分が作成」を含める(これまでの既定は、すべてを含む)
+# - ほかは、「自分が作成」を外す(これまでは取得していなかったので、表示するチケットに含めていても何も出ていなかった)
+# watch_authored の列は、古いデータとの互換のため残す(使わない)
+V6 = """
+UPDATE project_settings
+    SET visible_relations = json_insert(visible_relations, '$[#]', 'authored')
+    WHERE watch_authored = 1 AND visible_relations IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM json_each(visible_relations) WHERE value = 'authored');
+UPDATE project_settings
+    SET visible_relations = '["assigned","group","watching","authored"]'
+    WHERE watch_authored = 1 AND visible_relations IS NULL;
+UPDATE project_settings
+    SET visible_relations = (SELECT json_group_array(value) FROM json_each(visible_relations) WHERE value <> 'authored')
+    WHERE COALESCE(watch_authored, 0) = 0 AND visible_relations IS NOT NULL
+        AND EXISTS (SELECT 1 FROM json_each(visible_relations) WHERE value = 'authored');
+UPDATE servers
+    SET visible_relations = (SELECT json_group_array(value) FROM json_each(visible_relations) WHERE value <> 'authored')
+    WHERE visible_relations IS NOT NULL
+        AND EXISTS (SELECT 1 FROM json_each(visible_relations) WHERE value = 'authored')
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6]
 
 SCHEMA_VERSION = len(MIGRATIONS)

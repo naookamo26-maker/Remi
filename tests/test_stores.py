@@ -66,15 +66,34 @@ def test_settings_inheritance(db):
         {"id": 3, "name": "grand", "parent": {"id": 2, "name": "child"}},
     ])
     sid = s.server_id
-    assert ps.effective_setting(sid, 3, "watch_authored") is False
+    assert ps.effective_setting(sid, 3, "watch_versions") is False
     assert ps.effective_setting(sid, 3, "notify") is None
-    ps.set_setting(sid, 1, "watch_authored", True)
-    assert ps.effective_setting(sid, 3, "watch_authored") is True
-    ps.set_setting(sid, 2, "watch_authored", False)
-    assert ps.effective_setting(sid, 3, "watch_authored") is False
-    assert ps.projects_with_setting(sid, "watch_authored") == {1}
-    ps.set_setting(sid, 2, "watch_authored", None)
-    assert ps.projects_with_setting(sid, "watch_authored") == {1, 2, 3}
+    ps.set_setting(sid, 1, "watch_versions", True)
+    assert ps.effective_setting(sid, 3, "watch_versions") is True
+    ps.set_setting(sid, 2, "watch_versions", False)
+    assert ps.effective_setting(sid, 3, "watch_versions") is False
+    assert ps.projects_with_setting(sid, "watch_versions") == {1}
+    ps.set_setting(sid, 2, "watch_versions", None)
+    assert ps.projects_with_setting(sid, "watch_versions") == {1, 2, 3}
+
+
+def test_projects_showing_a_relation_follow_inheritance_and_server_default(db):
+    """「自分が作成」を表示するプロジェクト(作成したチケットを取得する)は、継承とサーバーの既定で決まる。既定では、どこも表示しない。"""
+    s = make_server(db)
+    ps = ProjectStore(db)
+    ps.replace_all(s.server_id, [
+        {"id": 1, "name": "root"},
+        {"id": 2, "name": "child", "parent": {"id": 1, "name": "root"}},
+        {"id": 3, "name": "other"},
+    ])
+    sid = s.server_id
+    assert ps.projects_showing(sid, "authored", None) == set()
+    ps.set_visible_relations(sid, 1, ["assigned", "authored"])  # 親で設定すると、子にも効く
+    assert ps.projects_showing(sid, "authored", None) == {1, 2}
+    ps.set_visible_relations(sid, 2, ["assigned"])  # 子で外すと、子だけ外れる
+    assert ps.projects_showing(sid, "authored", None) == {1}
+    # サーバーの既定に含めると、独自に設定していないプロジェクトに効く
+    assert ps.projects_showing(sid, "authored", ["assigned", "authored"]) == {1, 3}
 
 
 def test_masters(db):

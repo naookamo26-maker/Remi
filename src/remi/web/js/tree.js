@@ -7,6 +7,9 @@ import { contextMenu } from "./ui.js";
 
 /** 表示するチケットの関係(プロジェクトごとの設定)。src/remi/store/issues.py の RELATIONS と同じ */
 export const RELATIONS = ["assigned", "group", "watching", "authored"];
+/** 「表示するチケット」の既定。「自分が作成」は含めない(含めたプロジェクトでは、作成したチケットも取得する)。issues.py の DEFAULT_RELATIONS と同じ */
+export const DEFAULT_RELATIONS = ["assigned", "group", "watching"];
+const sameRelations = (a, b) => a.length === b.length && a.every((r) => b.includes(r));
 
 export function selectionKey(sel) {
   return `${sel.kind}:${sel.serverId ?? ""}:${sel.projectId ?? ""}:${sel.versionId ?? ""}`;
@@ -229,7 +232,7 @@ export class Tree {
   // p を省略するとサーバー(既定)のボタン
   relationsButton(server, p = null, depth = 0) {
     const target = p || server;
-    const restricted = target.relations.length < RELATIONS.length;
+    const restricted = !sameRelations(target.relations, DEFAULT_RELATIONS);
     const list = target.relations.length ? target.relations.map((r) => t(`tree.relation.${r}`)).join("、") : t("tree.relationsNone");
     const summary = t("tree.relationsSummary", { list });
     const from = depth === 1 ? "tree.relationsFromServer" : "tree.relationsInherited";
@@ -290,7 +293,6 @@ export class Tree {
       { label: t("tree.projectSettings", { name: target?.name ?? "" }), hint: true },
       { sep: true },
       seg("notify", t("menu.notifications")),
-      seg("watch_authored", t("menu.watchAuthored"), t("menu.appliesToSubprojects")),
       seg("watch_versions", t("menu.watchVersions"), t("menu.appliesToSubprojects")),
     ], { focusLabel });
   }
@@ -329,9 +331,9 @@ export class Tree {
     const reopen = (label) => this.relationsMenu(x, y, serverId, projectId, isRoot, label);
     const save = async (value, label) => {
       if (projectId === null) {
-        // サーバーの既定: すべてを選んだら「既定から変えていない」として保存する
+        // サーバーの既定: 標準の既定(担当・グループ・ウォッチ)にしたら「既定から変えていない」として保存する
         await call("setServerSetting", { serverId, key: "visible_relations",
-          value: value && value.length === RELATIONS.length ? null : value });
+          value: value && sameRelations(value, DEFAULT_RELATIONS) ? null : value });
       } else {
         await call("setProjectSetting", { serverId, projectId, key: "visible_relations", value });
       }

@@ -139,7 +139,8 @@ class ServerSync:
     def _fetch_lists(self, extra: dict[str, Any]) -> tuple[dict[int, dict], dict[int, int]]:
         """担当・ウォッチ・(作成)のクエリを別々に呼び、IDで統合する(設計書 §4.2)。"""
         server = self.server
-        authored_projects = self.projects.projects_with_setting(self.server_id, "watch_authored")
+        # 作成したチケットは、「表示するチケット」に「自分が作成」を含むプロジェクトの分だけ取得する
+        authored_projects = self.projects.projects_showing(self.server_id, "authored", server.visible_relations)
         queries: list[tuple[int, dict[str, Any]]] = [
             (REL_ASSIGNED, {"assigned_to_id": "me"}),
             (REL_WATCHING, {"watcher_id": "me"}),

@@ -11,6 +11,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 APP_VALUE = "Remi"
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19  # Windows 10 の古いビルド(2004 より前)
 
 
 def _read_dword(value: str) -> int | None:
@@ -43,8 +44,11 @@ def set_dark_title_bar(hwnd: int, dark: bool) -> None:
         import ctypes
 
         value = ctypes.c_int(1 if dark else 0)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            ctypes.c_void_p(hwnd), DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
+        for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
+            hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), attribute, ctypes.byref(value), ctypes.sizeof(value))
+            if hr == 0:  # 成功(古いビルドでは、20 は失敗するので 19 を試す)
+                break
     except Exception:  # noqa: BLE001
         log.debug("DwmSetWindowAttribute failed", exc_info=True)
 

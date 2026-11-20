@@ -66,6 +66,8 @@ _ID_FIELDS = ("status_id", "assigned_to_id", "priority_id", "tracker_id", "categ
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # カスタムフィールドの定義を覚えておく時間
 CUSTOM_FIELDS_TTL = 600
+# トラッカーで使える標準項目(Redmine 側で非表示にした項目を出さないために使う)を覚えておく時間
+TRACKER_FIELDS_TTL = 600
 # 「詳細」で編集できるカスタムフィールドの形式。ほか(長文・リンク・添付など)は表示だけにする
 CF_EDITABLE_FORMATS = ("string", "int", "float", "date", "bool", "list", "enumeration", "user", "version")
 MEMBERS_TTL = 600
@@ -212,6 +214,7 @@ class RemiApi:
         self._members_lock = threading.Lock()
         # server_id → (取得した時刻, カスタムフィールドの定義。管理者でなく取得できなければ None)
         self._custom_fields: dict[int, tuple[float, list[dict[str, Any]] | None]] = {}
+        self._tracker_fields: dict[int, tuple[float, dict[int, set[str] | None]]] = {}
 
     def methods(self) -> dict[str, Callable]:
         return {name: getattr(self, name) for name in dir(self)
@@ -365,6 +368,7 @@ class RemiApi:
             for key in [k for k in self._role_perms if k[0] == server_id]:
                 del self._role_perms[key]
             self._my_roles.pop(server_id, None)
+            self._tracker_fields.pop(server_id, None)
             self._custom_fields.pop(server_id, None)  # 前のユーザー(管理者など)の権限で取得した定義
         if self.open_issue is not None and self.open_issue[0] == server_id:
             # 同期を動かし直したときに、前のユーザーで開いていたチケットを取りに行かない
@@ -830,6 +834,29 @@ class RemiApi:
             log.info("permissions unavailable for server %s project %s: %s", server_id, project_id, e)
             return None
 
+    def _enabled_fields(self, server_id: int, tracker_id: int | None) -> set[str] | None:
+        """トラッカーで使える標準項目(Redmineのトラッカーの設定「標準項目」)。分からなければ None(制限しない)。
+
+        Redmine 5.0 以降は trackers.json の enabled_standard_fields で分かる。古いRedmineでは None。
+        """
+        if tracker_id is None:
+            return None
+        with self._members_lock:
+            cached = self._tracker_fields.get(server_id)
+        if cached and time.monotonic() - cached[0] < TRACKER_FIELDS_TTL:
+            table = cached[1]
+        else:
+            table = {}
+            try:
+                for t in self._client(server_id).trackers():
+                    fields = t.get("enabled_standard_fields")
+                    table[int(t["id"])] = {str(x) for x in fields} if isinstance(fields, list) else None
+            except (RedmineError, RpcError, KeyError, TypeError, ValueError) as e:
+                log.info("tracker fields unavailable for server %s: %s", server_id, e)
+            with self._members_lock:
+                self._tracker_fields[server_id] = (time.monotonic(), table)
+        return table.get(int(tracker_id))
+
     def _write_permissions(self, server: Server, row, allowed: list[dict[str, Any]] | None) -> dict[str, Any]:
         """このチケットに書き込めるか(設計書 §6.2)。画面は、できない操作の入力欄を無効にする。
 
@@ -841,10 +868,11 @@ class RemiApi:
         project = self.ctx.projects.get(server.server_id, row.project_id)
         if project is not None and project.status != PROJECT_STATUS_ACTIVE:
             return {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                    "attach": False, "editNotes": "none", "reason": "project_closed"}
+                    "attach": False, "editNotes": "none", "assignee": False, "subtasks": False,
+                    "watchAdd": False, "watchRemove": False, "reason": "project_closed"}
         perms = self._project_permissions(server.server_id, row.project_id)
         if perms is None or "admin" in perms:
-            edit = comment = private = True
+            edit = comment = private = subtasks = watch_add = watch_remove = True
             # 管理者なら、すべてのコメントを編集できる。権限が分からないときは、自分のコメントだけを出す
             edit_notes = "all" if perms is not None else "own"
         else:
@@ -852,11 +880,18 @@ class RemiApi:
             edit = "edit_issues" in perms or ("edit_own_issues" in perms and own)
             comment = "add_issue_notes" in perms
             private = "set_notes_private" in perms
+            subtasks = "manage_subtasks" in perms  # 親チケットを変えるのに要る(Issue の safe_attributes)
+            watch_add = "add_issue_watchers" in perms
+            watch_remove = "delete_issue_watchers" in perms
             # コメントの編集・削除(Redmineの Journal#editable_by? と同じ): すべて / 自分のものだけ / できない
             edit_notes = "all" if "edit_issue_notes" in perms else "own" if "edit_own_issue_notes" in perms else "none"
         # ワークフロー上、今のステータスから移れる先がなければ、ステータスは変えられない(Redmine 5.0 以降)
         transitions = allowed is None or any(int(x["id"]) != row.status_id for x in allowed)
+        # トラッカーの設定で担当者を使わない(非表示にしている)ときは、担当者を変えられない
+        enabled = self._enabled_fields(server.server_id, row.tracker_id)
         return {
+            "assignee": enabled is None or "assigned_to_id" in enabled, "subtasks": edit and subtasks,
+            "watchAdd": watch_add, "watchRemove": watch_remove,
             "editFields": edit, "changeStatus": edit and transitions, "comment": comment,
             "privateNotes": comment and private, "attach": edit or comment, "editNotes": edit_notes,
             "reason": None if (edit or comment) else "no_permission",
@@ -973,6 +1008,10 @@ class RemiApi:
              "display": "" if data.get("estimated_hours") is None else str(data["estimated_hours"]),
              "editable": True},
         ]
+        # トラッカーの設定で使わない(Redmineで非表示にしている)標準項目は出さない。分からなければ、すべて出す
+        enabled = self._enabled_fields(serverId, tracker[0])
+        if enabled is not None:
+            fields = [f for f in fields if f["key"] == "tracker_id" or f["key"] in enabled]
         for cf in data.get("custom_fields") or []:
             fields.append(self._custom_field(cf, (defs or {}).get(int(cf["id"])), defs is not None,
                                              members, versions))

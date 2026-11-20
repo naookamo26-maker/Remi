@@ -589,6 +589,24 @@ def test_detached_window_chrome_api(db):
     assert err.value.code == "invalid_input"
 
 
+def test_redmine_opens_in_a_tab_by_default_and_falls_back_quietly(db, monkeypatch):
+    """既定は「タブ」。タブにできない環境(Windows 以外)では、エラーのように知らせず、別のウィンドウ→ブラウザの順に戻る。"""
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    api = RemiApi(AppContext(db), window=NullWindow())
+    assert api.getSettings()["redmine_open_in"] == "tab"
+    sub = api.ctx.bus.subscribe()
+    assert api.openRedmine("https://rm.example/issues/1") == "browser"
+    assert sub.get(timeout=0.05) is None  # 「タブで開けなかった」とは知らせない
+    # タブを使える環境では、設定を変えなくても、タブで開く
+    api2 = RemiApi(AppContext(db), window=NullWindow(simulate_tabs=True))
+    assert api2.openRedmine("https://rm.example/issues/2") == "tab"
+    assert opened == ["https://rm.example/issues/1"]
+
+
 def test_tab_failure_reason_is_announced(db, monkeypatch):
     """タブにできなかったときは、別ウィンドウで開き、その理由を画面に知らせる。"""
     from remi.context import AppContext

@@ -60,3 +60,57 @@ def test_closing_the_redmine_window_while_hidden_does_not_reopen_it():
     w._redmine_hidden = False
     w.show()
     assert w.redmine_window is None
+
+
+class _Hook:
+    """pywebview のイベント(`events.shown += 関数`)の偽物。足した関数を記録する。"""
+
+    def __init__(self) -> None:
+        self.handlers = []
+
+    def __iadd__(self, fn):
+        self.handlers.append(fn)
+        return self
+
+
+class FakeEvents:
+    def __init__(self) -> None:
+        self.shown = _Hook()
+
+
+class FakeNative:
+    def __init__(self, hwnd: int) -> None:
+        self.Handle = type("H", (), {"ToInt64": lambda self_: hwnd})()
+
+
+def test_title_bar_follows_the_app_theme_for_every_window(monkeypatch):
+    """タイトルバー(最小化などのボタンがある部分)の色を、本体とRedmineのすべてのウィンドウで、アプリのテーマに合わせる。"""
+    from remi import app as app_module
+
+    calls = []
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+    monkeypatch.setattr(app_module.windows, "set_dark_title_bar", lambda hwnd, dark: calls.append((hwnd, dark)))
+    w = make()
+    w.window.native = FakeNative(1)
+    w.redmine_window.native = FakeNative(2)
+    detached = FakeWindow()
+    detached.native = FakeNative(3)
+    w._detached = [detached]
+    w._dark = lambda: True
+    w.apply_theme("dark")
+    assert sorted(calls) == [(1, True), (2, True), (3, True)]
+    # テーマを切り替えると、すべてのウィンドウが追従する
+    calls.clear()
+    w._dark = lambda: False
+    w.apply_theme("light")
+    assert sorted(calls) == [(1, False), (2, False), (3, False)]
+    # 新しく開いたウィンドウは、表示されたときに、アプリのテーマの色になる
+    calls.clear()
+    new = FakeWindow()
+    new.native = FakeNative(4)
+    new.events = FakeEvents()
+    w._dark = lambda: True
+    w._style_redmine_window(new)
+    for handler in new.events.shown.handlers:
+        handler()
+    assert calls == [(4, True)]

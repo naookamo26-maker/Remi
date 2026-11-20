@@ -1076,7 +1076,8 @@ class RemiApi:
                     return "tab"
                 # タブにできなければ、別ウィンドウで開く。理由を画面に知らせる(原因を調べられるように)
                 reason = (tabs.last_error if tabs is not None else None) or getattr(self.window, "tabs_error", None)
-                self.ctx.bus.publish("tabsUnavailable", reason=reason or "unknown")
+                if reason:  # Windows 以外など、そもそもタブを使えない環境では、知らせない
+                    self.ctx.bus.publish("tabsUnavailable", reason=reason)
                 mode = "app"
             if mode == "app" and self.window.open_redmine(url):
                 return "app"

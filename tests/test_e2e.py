@@ -421,6 +421,34 @@ def test_tree_hides_all_and_unread_rows_when_nothing_is_shown(page, remi, fake):
     assert not page.errors, page.errors
 
 
+def test_overlays_are_hidden_while_a_redmine_tab_is_selected(page, remi, fake):
+    """タブを選んでいる間は、本体の画面が細くなるので、ダイアログなどの重ねて表示する要素は隠す(残骸を出さない)。"""
+    from remi.server.api import NullWindow
+
+    seed(fake)
+    add_server(remi, fake)
+    window = NullWindow(simulate_tabs=True)
+    window.tabs.on_changed = lambda: remi.ctx.bus.publish("tabsChanged", **window.tabs.snapshot())
+    remi.api.window = window
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue").first).to_be_visible(timeout=20000)
+    page.get_by_role("button", name="設定", exact=True).click()
+    dialog = page.get_by_role("dialog")
+    playwright_api.expect(dialog).to_be_visible()
+    # 切り離したウィンドウの「タブに戻す」などで、設定を開いたままタブが開かれた
+    window.tabs.open(f"{fake.base_url}/issues/10")
+    playwright_api.expect(page.locator(".atab")).to_have_count(2, timeout=10000)
+    playwright_api.expect(page.locator(".backdrop")).to_be_hidden()
+    playwright_api.expect(dialog).to_be_hidden()
+    # 通知(トースト)も、細くなった画面に出さない
+    page.evaluate("() => { const d = document.createElement('div'); d.className = 'toast'; d.textContent = 'x'; document.body.append(d); }")
+    playwright_api.expect(page.locator(".toast")).to_be_hidden()
+    # 「Remi」のタブに戻ると、そのまま戻る
+    page.locator(".atab.fixed").click()
+    playwright_api.expect(dialog).to_be_visible(timeout=10000)
+    assert not page.errors, page.errors
+
+
 def test_open_redmine_menu(page, remi, fake, monkeypatch):
     opened = []
     monkeypatch.setattr("webbrowser.open", opened.append)

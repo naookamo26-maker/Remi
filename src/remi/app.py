@@ -168,6 +168,7 @@ class WebviewWindow:
             w.events.closed += closed
             # パスワードの保存・自動入力、右クリックメニューなど、標準的なブラウザと同じ機能を使えるようにする
             enable_browser_features(w)
+            self._style_redmine_window(w)
             self._add_toolbar(w)
             self.redmine_window = w
             return True
@@ -190,6 +191,7 @@ class WebviewWindow:
 
             w.events.closed += closed
             enable_browser_features(w)
+            self._style_redmine_window(w)
             self._add_toolbar(w)
             self._detached.append(w)
             return True
@@ -256,13 +258,26 @@ class WebviewWindow:
         self.show()
 
     def apply_theme(self, theme: str) -> None:
-        if self.window is None or sys.platform != "win32":
+        """タイトルバー(最小化などのボタンがある部分)の色を、アプリのテーマ(システムに従う設定を含む)に合わせる。
+        本体と、Redmineを開いた別のウィンドウのすべてに適用する。"""
+        if sys.platform != "win32":
+            return
+        for w in (self.window, *self._redmine_windows()):
+            self._set_title_bar(w)
+
+    def _set_title_bar(self, w) -> None:
+        if w is None:
             return
         try:
-            hwnd = int(self.window.native.Handle.ToInt64())
+            hwnd = int(w.native.Handle.ToInt64())
         except Exception:  # noqa: BLE001
             return
         windows.set_dark_title_bar(hwnd, self._dark())
+
+    def _style_redmine_window(self, w) -> None:
+        """Redmineを開いたウィンドウのタイトルバーを、アプリのテーマの色にする(開いたとき)。"""
+        if sys.platform == "win32":
+            w.events.shown += lambda: self._set_title_bar(w)
 
 
 class BrowserWindow:

@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -61,6 +62,66 @@ def test_throttle(fake):
     c.issue_statuses()
     c.issue_statuses()
     assert time.monotonic() - t >= 0.4
+
+
+def test_interactive_requests_are_not_throttled(fake):
+    """画面の操作の通信は、最小間隔を空けない(背景の同期は空ける)。"""
+    from remi.api.client import interactive
+
+    c = RedmineClient(fake.base_url, "test-key", min_interval=0.3)
+    t = time.monotonic()
+    with interactive():
+        for _ in range(4):
+            c.issue_statuses()
+    assert time.monotonic() - t < 0.3
+    t = time.monotonic()
+    c.issue_statuses()
+    c.issue_statuses()
+    assert time.monotonic() - t >= 0.3
+
+
+def test_background_requests_yield_to_interactive_ones(fake):
+    """画面の操作の通信が続いている間は、背景の同期は先に送らず、譲る。"""
+    from remi.api.client import interactive
+
+    c = RedmineClient(fake.base_url, "test-key", min_interval=0)
+    fake.delay = 0.3
+
+    def ui(call):
+        with interactive():
+            call()
+
+    threads = [threading.Thread(target=ui, args=(c.issue_statuses,))]  # 通信中
+    threads[0].start()
+    time.sleep(0.1)
+    threads.append(threading.Thread(target=c.projects))  # 背景の同期(順番待ちになる)
+    threads[1].start()
+    time.sleep(0.1)
+    threads.append(threading.Thread(target=ui, args=(c.trackers,)))  # 後から来た画面の操作
+    threads[2].start()
+    for t in threads:
+        t.join()
+    order = [p.split("?")[0] for _m, p in fake.requests]
+    assert order == ["/issue_statuses.json", "/trackers.json", "/projects.json"]
+
+
+def test_cancel_wakes_a_background_request_waiting_for_its_turn(fake):
+    c = RedmineClient(fake.base_url, "test-key", min_interval=60)
+    c.issue_statuses()  # 次の背景の通信は、60秒待たされる
+    errors = []
+
+    def background():
+        try:
+            c.issue_statuses()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=background)
+    t.start()
+    time.sleep(0.2)
+    c.cancel()
+    t.join(2.0)
+    assert not t.is_alive() and errors and errors[0].code == ErrorCode.CANCELLED
 
 
 def test_add_note_and_validation(fake, client):

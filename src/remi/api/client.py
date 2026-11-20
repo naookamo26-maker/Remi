@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -66,11 +67,26 @@ def format_redmine_datetime(value: str) -> str:
     return value.replace("+00:00", "Z")
 
 
-# 通信の最小間隔(秒)。Redmineへの負荷を抑えるため、リクエストの間をこれだけあける(設計書 §2.4)。
+# 通信の最小間隔(秒)。Redmineへの負荷を抑えるため、背景の同期は、リクエストの間をこれだけあける(設計書 §2.4)。
 # テストでは待たないよう、conftest で 0 にする(間隔そのものは test_throttle で確かめる)
 DEFAULT_MIN_INTERVAL = 0.5
-# 接続テスト(ユーザー操作の待ちなので短くする)
-PROBE_MIN_INTERVAL = 0.2
+
+_local = threading.local()
+
+
+@contextlib.contextmanager
+def interactive() -> Iterator[None]:
+    """画面の操作(チケットを開く・コメントの送信・項目の変更など)のための通信にする(設計書 §2.4)。
+
+    このスレッドからの通信は、最小間隔を空けずに送り、背景の同期に先んじる(背景の同期は、その間だけ譲る)。
+    人が操作した分だけで、通信の量は増えない。一括で取得するもの(初回同期・バージョンのチケット)には使わない。
+    """
+    before = getattr(_local, "interactive", False)
+    _local.interactive = True
+    try:
+        yield
+    finally:
+        _local.interactive = before
 
 
 class RedmineClient:
@@ -87,7 +103,9 @@ class RedmineClient:
         self.base_url = normalize_url(base_url)
         self.timeout = timeout
         self.min_interval = DEFAULT_MIN_INTERVAL if min_interval is None else min_interval
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # 同時に送るのは1つだけ
+        self._turn = threading.Condition()  # 背景の同期の順番待ち(画面の操作に譲る・最小間隔を空ける)
+        self._interactive = 0  # 送信中・待機中の、画面の操作の通信の数
         self._last_request = 0.0
         # 同期を止めたあとは、通信中だったものも含めて結果を返さない(切り替えた後に前のデータを書き戻させない)
         self._cancelled = threading.Event()
@@ -110,6 +128,8 @@ class RedmineClient:
     def cancel(self) -> None:
         """これ以降のリクエストを送らず、通信中のリクエストの結果も捨てる(CANCELLED)。どのスレッドから呼んでもよい。"""
         self._cancelled.set()
+        with self._turn:
+            self._turn.notify_all()  # 順番待ちをしている背景の同期を起こす
 
     @property
     def cancelled(self) -> bool:
@@ -121,10 +141,22 @@ class RedmineClient:
             return path
         return urljoin(self.base_url + "/", path.lstrip("/"))
 
-    def _throttle(self) -> None:
-        wait = self._last_request + self.min_interval - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
+    def _wait_for_turn(self) -> None:
+        """背景の同期の順番待ち: 画面の操作の通信があるあいだは譲り、前の通信から最小間隔を空ける。
+
+        待つのは送信の鍵の外で行う(鍵を持ったまま待つと、画面の操作まで待たされる)。
+        """
+        with self._turn:
+            while True:
+                if self.cancelled:
+                    raise RedmineError(ErrorCode.CANCELLED)
+                if self._interactive:
+                    self._turn.wait()
+                    continue
+                wait = self._last_request + self.min_interval - time.monotonic()
+                if wait <= 0:
+                    return
+                self._turn.wait(wait)
 
     def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         """リクエストを送る。APIキーを付けるので、登録したRedmine以外へは送らない。
@@ -158,8 +190,27 @@ class RedmineClient:
     def _send(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         if self.cancelled:
             raise RedmineError(ErrorCode.CANCELLED)
+        mine = getattr(_local, "interactive", False)
+        if mine:
+            with self._turn:
+                self._interactive += 1
+        else:
+            self._wait_for_turn()
+        try:
+            resp = self._send_locked(method, url, **kwargs)
+        finally:
+            if mine:
+                with self._turn:
+                    self._interactive -= 1
+                    self._turn.notify_all()
+        if self.cancelled and method in ("GET", "HEAD"):
+            # 取得した結果は捨てる(止めた後に書き込ませない)。変更を送った結果は、送れたかを伝えるために返す
+            resp.close()
+            raise RedmineError(ErrorCode.CANCELLED)
+        return resp
+
+    def _send_locked(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         with self._lock:
-            self._throttle()
             try:
                 resp = self.session.request(method, url, **kwargs)
             except requests.exceptions.SSLError as e:
@@ -177,10 +228,6 @@ class RedmineClient:
                 raise RedmineError(ErrorCode.CONNECTION_FAILED, detail=str(e)) from e
             finally:
                 self._last_request = time.monotonic()
-        if self.cancelled and method in ("GET", "HEAD"):
-            # 取得した結果は捨てる(止めた後に書き込ませない)。変更を送った結果は、送れたかを伝えるために返す
-            resp.close()
-            raise RedmineError(ErrorCode.CANCELLED)
         return resp
 
     def get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:

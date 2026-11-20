@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from remi.api.client import RedmineClient
+from remi.api.client import RedmineClient, interactive
 from remi.api.errors import ErrorCode, RedmineError
 from remi.events import EventBus
 from remi.paths import attachment_cache_dir
@@ -51,8 +51,7 @@ INACTIVE_FACTOR = 2
 BACKOFF_BASE = 30
 BACKOFF_MAX = 1800
 JITTER = 0.15  # 間隔のばらつき(±15%)
-STARTUP_DELAY_MAX = 60.0  # アプリの起動時に最初の同期をずらす最大の秒数(SyncManager.restart(startup=True))
-JOURNAL_QUEUE_INTERVAL = 3.0  # コメントの遅延取得の間隔(秒)。開いているチケットは別に、すぐ取得する
+JOURNAL_QUEUE_INTERVAL = 1.0  # コメントの遅延取得の間隔(秒)。開いているチケットは別に、すぐ取得する
 SYNC_NOW_MIN_INTERVAL = 30.0  # 「今すぐ同期」の最短間隔(秒)。連打してもサーバーへは送らない
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp"}
@@ -84,7 +83,7 @@ def jittered(seconds: float) -> float:
 
 
 class ServerWorker(threading.Thread):
-    def __init__(self, db: Database, server_id: int, bus: EventBus, start_delay: float = 0.0) -> None:
+    def __init__(self, db: Database, server_id: int, bus: EventBus) -> None:
         super().__init__(name=f"sync-{server_id}", daemon=True)
         self.db = db
         self.server_id = server_id
@@ -96,7 +95,6 @@ class ServerWorker(threading.Thread):
         self.open_issue_full = False
         self.active = True
         self.visible = True  # 画面が見えているか(トレイに格納・最小化していない)
-        self.start_delay = start_delay  # 最初の同期をずらす最大の秒数
         self.sync: ServerSync | None = None
         self._commands: queue.Queue[tuple[str, tuple[Any, ...]]] = queue.Queue()
         self._stopping = threading.Event()
@@ -132,14 +130,21 @@ class ServerWorker(threading.Thread):
                         self._stopping.set()
                     except Exception:  # noqa: BLE001 - 予期しないエラーでもワーカーは止めない
                         log.exception("unexpected error in sync worker %s (%s)", self.server_id, cmd)
-                    if cmd in ("sync_now", "sync_versions"):
-                        next_tick = 0.0  # 次の刻みを待たず、すぐ同期を始める
+                    if cmd in ("sync_now", "sync_versions", "open"):
+                        next_tick = 0.0  # 次の刻みを待たず、すぐ始める(開いたチケットは、すぐ取得する)
                     continue  # 続けて届いた依頼を先に処理する
                 try:
                     self.tick()
                 finally:
                     self.bus.set_activity(self.server_id, "sync", False)
-                next_tick = time.monotonic() + TICK_SECONDS
+                now = time.monotonic()
+                next_tick = now + TICK_SECONDS
+                if now >= self.sched.backoff_until:
+                    # 順番待ちのものは、刻みを待たずに続けて取る(画像は、すぐ。コメントは、先読みの間隔どおりに)
+                    if self.sched.attachments:
+                        next_tick = now
+                    elif self.sched.queue:
+                        next_tick = min(next_tick, max(self.sched.journal_next, now + 0.05))
         finally:
             if self.sync is not None:
                 self.sync.client.close()
@@ -166,11 +171,6 @@ class ServerWorker(threading.Thread):
             meta_age = max(0.0, time.time() - float(settings.get(f"last_metadata:{self.server_id}") or 0))
             self.sched.metadata_at = now - meta_age
             self.sched.metadata = now + max(0.0, METADATA_INTERVAL - meta_age)
-        # アプリの起動時は、最初の同期を少しずらす(初回同期がまだなら、待たせない)
-        if self.start_delay > 0 and server.initial_sync_done:
-            first = now + random.uniform(0, self.start_delay)
-            self.sched.identity = self.sched.changes = self.sched.versions = first
-            self.sched.metadata = max(self.sched.metadata, first)
         return True
 
     def _has_metadata(self) -> bool:
@@ -221,15 +221,18 @@ class ServerWorker(threading.Thread):
             if aid not in self.sched.attachments:
                 self.sched.attachments.append(aid)
         elif cmd == "update":
-            self._update_issue(*args)
+            with interactive():  # コメントの送信・項目の変更は、人が待っている
+                self._update_issue(*args)
         elif cmd == "refetch":
             (issue_id,) = args
             try:
-                self._emit(self.sync.fetch_journals(issue_id, notify=False), extra={issue_id})
+                with interactive():
+                    self._emit(self.sync.fetch_journals(issue_id, notify=False), extra={issue_id})
             except RedmineError as e:
                 log.info("refetch #%s failed: %s", issue_id, e)
         elif cmd == "watch":
-            self._set_watching(*args)
+            with interactive():
+                self._set_watching(*args)
         elif cmd == "version":
             (version_id,) = args
             try:
@@ -334,6 +337,18 @@ class ServerWorker(threading.Thread):
         server = sync.server
         did_network = False
 
+        # 開いているチケットを、いちばん先に取得する(ほかの同期より先。待たせない)。
+        # 画面が見えていない間は確かめない(そのチケットの新着は、下の差分同期で見つかる)
+        if self.open_issue is not None and self.visible and now >= self.sched.open_issue:
+            if self.open_issue_full:
+                with interactive():  # 開いた直後の1回目は、人が待っている(最小間隔を空けず、背景の同期に先んじる)
+                    self._emit(sync.fetch_journals(self.open_issue))
+                self.open_issue_full = False  # 失敗したら(例外)、次の確認でもコメントごと取り直す
+            else:
+                self._emit(sync.check_issue(self.open_issue))
+            self.sched.open_issue = now + jittered(self._interval(OPEN_ISSUE_INTERVAL))
+            did_network = True
+
         if now >= self.sched.identity:
             sync.refresh_identity()
             self.sched.identity = now + jittered(IDENTITY_INTERVAL)
@@ -373,15 +388,6 @@ class ServerWorker(threading.Thread):
             if rest:
                 self.bus.publish("versionsChanged", serverId=self.server_id, versionIds=sorted(rest))
             self.sched.versions = now + jittered(self._interval(max(server.poll_interval, VERSIONS_MIN_INTERVAL)))
-            did_network = True
-        # 画面が見えていない間は確かめない(そのチケットの新着は、上の差分同期で見つかる)
-        if self.open_issue is not None and self.visible and now >= self.sched.open_issue:
-            if self.open_issue_full:
-                self._emit(sync.fetch_journals(self.open_issue))
-                self.open_issue_full = False  # 失敗したら(例外)、次の確認でもコメントごと取り直す
-            else:
-                self._emit(sync.check_issue(self.open_issue))
-            self.sched.open_issue = now + jittered(self._interval(OPEN_ISSUE_INTERVAL))
             did_network = True
         if now >= self.sched.reconcile:
             self._emit(sync.reconcile())
@@ -425,7 +431,8 @@ class ServerWorker(threading.Thread):
         ext = mimetypes.guess_extension(a.content_type or "") or ""
         dest = attachment_cache_dir(self.server_id) / f"{attachment_id}{ext}"
         try:
-            sync.client.download(sync.client.attachment_url(attachment_id, a.filename), dest, MAX_ATTACHMENT_BYTES)
+            with interactive():  # 会話に表示する画像など。開いた人が待っている
+                sync.client.download(sync.client.attachment_url(attachment_id, a.filename), dest, MAX_ATTACHMENT_BYTES)
         except RedmineError as e:
             if e.code == ErrorCode.TOO_LARGE or not e.retryable:
                 ready(False)
@@ -497,13 +504,12 @@ class SyncManager:
         self._visible = True
         self._open: tuple[int | None, int | None] = (None, None)
 
-    def restart(self, startup: bool = False) -> None:
-        """同期スレッドを作り直す。startup(アプリの起動時)なら、最初の同期をサーバーごとにランダムにずらす。"""
+    def restart(self) -> None:
+        """同期スレッドを作り直す。"""
         self.stop_all()
         with self._lock:
             for server in ServerStore(self.db).list(enabled_only=True):
-                w = ServerWorker(self.db, server.server_id, self.bus,
-                                 start_delay=STARTUP_DELAY_MAX if startup else 0.0)
+                w = ServerWorker(self.db, server.server_id, self.bus)
                 w.active = self._active
                 w.visible = self._visible
                 self._workers[server.server_id] = w

@@ -1030,3 +1030,20 @@ def test_save_server_rejects_one_minute_poll_interval(app, fake):
         "name": "S", "url": fake.base_url, "apiKey": API_KEY, "textFormat": "common_mark",
         "pollInterval": 60, "userId": probe["userId"], "login": probe["login"], "userName": probe["name"]})
     assert err["code"] == "invalid_input"
+
+
+def test_same_definition_is_fetched_once_when_requested_at_the_same_time(app, fake):
+    """「詳細」と編集の選択肢が同時に同じ定義(トラッカー・カスタムフィールド)を求めても、取得は1回だけ。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "x")
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None)
+    fake.delay = 0.2  # 同時に来たものが重なるように、応答を遅らせる
+    before = len(fake.requests)
+    threads = [threading.Thread(target=lambda: app.api._enabled_fields(sid, 1)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    paths = [p.split("?")[0] for _m, p in fake.requests[before:]]
+    assert paths.count("/trackers.json") == 1

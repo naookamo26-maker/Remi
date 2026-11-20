@@ -174,13 +174,13 @@ def _assigned_queries(fake):
     return _count(fake, lambda m, p: p.startswith("/issues.json") and "assigned_to_id=me" in p)
 
 
-def _start(db, fake, issues=(1,), bus=None, **kw):
+def _start(db, fake, issues=(1,), bus=None):
     fake.add_project(1, "A")
     for iid in issues:
         fake.add_issue(iid, 1, f"担当{iid}")
     sid = ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
     mgr = SyncManager(db, bus or EventBus())
-    mgr.restart(**kw)
+    mgr.restart()
     return sid, mgr
 
 
@@ -315,24 +315,36 @@ def test_backoff_respects_retry_after(db, fake):
         mgr.stop_all()
 
 
-def test_first_sync_is_delayed_at_app_start(db, fake, monkeypatch):
-    """アプリの起動時は、最初の同期をランダムにずらす(朝の一斉起動で集中しない)。初回同期は待たせない。"""
-    from remi.sync import worker
-
-    monkeypatch.setattr(worker, "STARTUP_DELAY_MAX", 600.0)
-    monkeypatch.setattr(worker.random, "uniform", lambda a, b: b)  # いちばん遅くなる場合
+def test_first_sync_starts_immediately_at_app_start(db, fake):
+    """アプリを起動したら、すぐ同期する(起動直後の新着・通知を遅らせない)。"""
     fake.add_project(1, "A")
     fake.add_issue(1, 1, "担当")
     servers = ServerStore(db)
     synced = servers.save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
     servers.update_fields(synced, initial_sync_done=True, last_sync_cursor="2026-01-01T00:00:00Z")
-    fresh = servers.save(Server(name="T", url=fake.base_url), api_key="test-key").server_id
     mgr = SyncManager(db, EventBus())
-    mgr.restart(startup=True)
+    mgr.restart()
     try:
-        assert wait_until(lambda: servers.get(fresh).initial_sync_done)  # まだ同期していないサーバーはすぐ
-        assert mgr._worker(synced).sched.changes - time.monotonic() > 500
-        assert servers.get(synced).last_synced_at is None
+        assert wait_until(lambda: servers.get(synced).last_synced_at is not None, timeout=5.0)
+    finally:
+        mgr.stop_all()
+
+
+def test_opening_an_issue_fetches_it_without_waiting_for_the_next_tick(db, fake, monkeypatch):
+    """チケットを開いたら、刻み(TICK_SECONDS)も先読みの間隔も待たず、すぐコメントを取得する。"""
+    from remi.sync import worker
+
+    monkeypatch.setattr(worker, "TICK_SECONDS", 30.0)
+    monkeypatch.setattr(worker, "JOURNAL_QUEUE_INTERVAL", 30.0)
+    sid, mgr = _start(db, fake, issues=(1, 2))
+    try:
+        store = IssueStore(db)
+        assert wait_until(lambda: store.get(sid, 1) is not None and store.get(sid, 2) is not None)
+        assert wait_until(lambda: store.journals_synced(sid, 1) or store.journals_synced(sid, 2))
+        target = 2 if store.journals_synced(sid, 1) else 1  # 先読みが済んでいない方(次の先読みは30秒後)
+        assert not store.journals_synced(sid, target)
+        mgr.set_open_issue(sid, target)
+        assert wait_until(lambda: store.journals_synced(sid, target), timeout=3.0)
     finally:
         mgr.stop_all()
 

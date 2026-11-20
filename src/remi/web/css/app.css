@@ -55,8 +55,30 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 .dot.changed { background: var(--accent); }
 
 /* ---- レイアウト ---- */
-#app { height: 100%; }
-.layout { display: flex; height: 100%; overflow: hidden; }
+#app { height: 100%; display: flex; flex-direction: column; }
+.layout { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* ---- ウィンドウ全体のタブ(固定の「Remi」と、Redmineのタブ) ---- */
+.tabs-chrome { flex: none; background: var(--surface); border-bottom: 1px solid var(--border); }
+.tabs-chrome[hidden] { display: none; }
+.apptabs { display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; overflow: hidden; }
+.atab { display: flex; align-items: center; gap: 7px; min-width: 120px; max-width: 240px; padding: 7px 10px 7px 12px; border: 1px solid transparent;
+  border-bottom: 0; border-radius: 8px 8px 0 0; font-size: 12px; color: var(--text-muted); white-space: nowrap; cursor: pointer; user-select: none; }
+.atab.fixed { min-width: 0; padding-right: 14px; }
+.atab:hover { background: color-mix(in srgb, var(--selection) 60%, transparent); }
+.atab.on { background: var(--window); border-color: var(--border); color: var(--text); font-weight: 600; margin-bottom: -1px; }
+.atab .t { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+.atab .x { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 4px; border-radius: 4px; font-size: 13px; line-height: 16px; }
+.atab .x:hover { background: var(--surface); color: var(--text); }
+.tab-tools { display: flex; align-items: center; gap: 4px; padding: 5px 8px; background: var(--window); border-top: 1px solid var(--border); }
+.tab-tools[hidden] { display: none; }
+.tab-tools .nb { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--text);
+  font-size: 14px; cursor: pointer; }
+.tab-tools .nb:hover:not(:disabled) { background: var(--surface); }
+.tab-tools .nb:disabled { color: var(--text-muted); opacity: .45; cursor: default; }
+.tab-tools .tab-url { flex: 1; min-width: 0; margin: 0 6px; color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-tools .btn { min-height: 28px; padding: 0 10px; font-size: 12px; flex: none; }
+/* Redmineのタブを選んでいる間は、本体の画面(ツリー・一覧・チケット)を隠す。ページは、Windows側の部品がこの下に広がる */
+body.browse .layout { display: none; }
 .pane { display: flex; flex-direction: column; min-width: 0; height: 100%; }
 /* ツリーと一覧の幅は、利用者が仕切りで変えたとき(とウィンドウが狭すぎるとき)以外は変わらない。
    会話ペインは残りの幅を使う。基準の幅を 0 にして、表示中のチケットの内容(長い行・表など)で

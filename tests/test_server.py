@@ -517,6 +517,78 @@ def test_open_redmine_falls_back_to_browser(db, monkeypatch):
     assert opened == ["https://rm.example/issues/1", "https://rm.example/issues/2"]
 
 
+def test_open_redmine_in_a_tab_and_tab_operations(db, monkeypatch):
+    """設定が「タブ」なら、Redmineをタブで開く。タブにできなければ、別ウィンドウ→ブラウザの順に戻る。"""
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    win = NullWindow(simulate_tabs=True)
+    api = RemiApi(AppContext(db), window=win)
+    sub = api.ctx.bus.subscribe()
+    assert api.bootstrap()["tabsSupported"] is True
+    assert api.setSetting("redmine_open_in", "tab")["redmine_open_in"] == "tab"
+    assert api.openRedmine("https://rm.example/issues/1") == "tab"
+    assert api.openRedmine("https://rm.example/issues/2") == "tab"
+    assert api.openRedmine("https://rm.example/issues/3", external=True) == "browser"  # Shift+クリックはブラウザ
+    state = api.getTabs()
+    assert [x["url"] for x in state["tabs"]] == ["https://rm.example/issues/1", "https://rm.example/issues/2"]
+    assert state["active"] == 2
+    events = []
+    while (e := sub.get(timeout=0.05)) is not None:
+        events.append(e)
+    assert [e["type"] for e in events if e["type"] == "tabsChanged"]  # タブが変わると、画面に知らせる
+    assert events[-1]["active"] == 2 and len(events[-1]["tabs"]) == 2
+    api.activateTab(1)
+    assert api.getTabs()["active"] == 1
+    api.activateTab(None)  # 固定の「Remi」のタブ
+    assert api.getTabs()["active"] is None
+    api.tabAction(1, "reload")
+    for bad in (("x", "back"), (1, "format c:")):
+        with pytest.raises(Exception) as err:
+            api.tabAction(*bad)
+        assert getattr(err.value, "code", "") == "invalid_input"
+    with pytest.raises(Exception) as err:
+        api.activateTab("1")
+    assert err.value.code == "invalid_input"
+    api.setTabChromeHeight(76)
+    for bad in (0, -1, 1000, "x", True):
+        with pytest.raises(Exception) as err:
+            api.setTabChromeHeight(bad)
+        assert err.value.code == "invalid_input"
+    # タブを切り離すと、タブを閉じて、同じページを別のウィンドウで開く
+    api.detachTab(1)
+    assert win.detached == ["https://rm.example/issues/1"]
+    assert [x["id"] for x in api.getTabs()["tabs"]] == [2]
+    api.closeTab(2)
+    assert api.getTabs() == {"tabs": [], "active": None}
+    assert opened == ["https://rm.example/issues/3"]
+
+
+def test_tabs_fall_back_when_not_supported(db, monkeypatch):
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+
+    class Win(NullWindow):
+        def open_redmine(self, url):
+            return True  # 別ウィンドウは使える
+
+    api = RemiApi(AppContext(db), window=Win())
+    assert api.bootstrap()["tabsSupported"] is False
+    api.setSetting("redmine_open_in", "tab")
+    assert api.openRedmine("https://rm.example/issues/1") == "app"  # タブにできなければ、別ウィンドウ
+    assert api.getTabs() == {"tabs": [], "active": None}
+    for call in (lambda: api.activateTab(1), lambda: api.closeTab(1), lambda: api.detachTab(1)):
+        with pytest.raises(Exception) as err:
+            call()
+        assert err.value.code == "not_supported"
+    assert opened == []
+
+
 def _save(app, fake, key, server_id=None, name="社内"):
     probe = app.rpc("testConnection", url=fake.base_url, apiKey=key, serverId=server_id)
     return app.rpc("saveServer", data={

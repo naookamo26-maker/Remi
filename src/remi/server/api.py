@@ -33,6 +33,7 @@ from remi.server.tree import build_tree
 from remi.store.issues import DEFAULT_RELATIONS, REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
 from remi.store.servers import POLL_INTERVALS, Server
+from remi.system.tabs import TabController
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "mine_side": lambda v: v in ("right", "left"),
     "pane_sizes": lambda v: isinstance(v, list) and len(v) <= 3 and all(isinstance(x, int | float) for x in v),
     "tree_collapsed": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
-    "redmine_open_in": lambda v: v in ("app", "browser"),
+    "redmine_open_in": lambda v: v in ("app", "browser", "tab"),  # app は別ウィンドウ
     "relation_filter": lambda v: v in RELATION_FILTERS,
     "issue_details_open": lambda v: isinstance(v, bool),
 }
@@ -118,18 +119,35 @@ class RpcError(Exception):
 
 
 class WindowController(Protocol):
+    # Redmineをタブで開く窓口。タブにできない環境(Windows 以外・部品を作れなかったとき)は None
+    tabs: TabController | None
+
     def show(self) -> None: ...
     def hide(self) -> None: ...
     def open_redmine(self, url: str) -> bool: ...
+    def open_detached(self, url: str) -> bool: ...
     def quit(self) -> None: ...
     def apply_theme(self, theme: str) -> None: ...
 
 
 class NullWindow:
-    """ウィンドウがない場合(ブラウザでの開発モード、テスト)。"""
+    """ウィンドウがない場合(ブラウザでの開発モード、テスト)。
+
+    simulate_tabs なら、Redmineのタブをモデルだけで動かす(ページは表示しない。画面の操作の確認用)。
+    """
+
+    def __init__(self, simulate_tabs: bool = False) -> None:
+        self.tabs: TabController | None = TabController() if simulate_tabs else None
+        self.detached: list[str] = []
 
     def open_redmine(self, url: str) -> bool:
         return False
+
+    def open_detached(self, url: str) -> bool:
+        if self.tabs is None:
+            return False
+        self.detached.append(url)
+        return True
 
     def show(self) -> None:
         pass
@@ -167,6 +185,10 @@ class RemiApi:
         self.sync = sync
         self.window: WindowController = window or NullWindow()
         self.autostart = autostart
+        # タブの変化を画面に知らせる(WebviewWindow は、自分で作る窓口に同じ通知をつなぐ)
+        tabs = getattr(self.window, "tabs", None)
+        if tabs is not None and tabs.on_changed is None:
+            tabs.on_changed = lambda: self.ctx.bus.publish("tabsChanged", **tabs.snapshot())
         # 通知の判定に使う: 画面で開いているチケットと、ウィンドウがアクティブか
         self.open_issue: tuple[int, int] | None = None
         self.active = True
@@ -203,6 +225,8 @@ class RemiApi:
             "hasServers": bool(self.ctx.servers.list()),
             # 本文で自動リンクにするスキーム(src/remi/link_schemes.json)。画面は開く前の確認に使う
             "linkSchemes": [{"scheme": x.scheme, "confirm": x.confirm} for x in link_schemes()],
+            # Redmineをタブで開けるか(設定の選択肢に出す)
+            "tabsSupported": getattr(self.window, "tabs", None) is not None,
         }
 
     # --- 設定 -------------------------------------------------------------------
@@ -1032,10 +1056,72 @@ class RemiApi:
         """Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザで開く(設計書 §5.4)。"""
         if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
             raise RpcError("invalid_url")
-        if not external and self.ctx.settings.get("redmine_open_in") == "app" and self.window.open_redmine(url):
-            return "app"
+        mode = self.ctx.settings.get("redmine_open_in")
+        if not external:
+            if mode == "tab":
+                tabs = getattr(self.window, "tabs", None)
+                if tabs is not None and tabs.open(url):
+                    return "tab"
+                mode = "app"  # タブにできなければ、別ウィンドウで開く
+            if mode == "app" and self.window.open_redmine(url):
+                return "app"
         webbrowser.open(url)
         return "browser"
+
+    # --- Redmineのタブ(設計書 §5.4) ----------------------------------------------------
+    def _tabs(self) -> TabController:
+        tabs = getattr(self.window, "tabs", None)
+        if tabs is None:
+            raise RpcError("not_supported")
+        return tabs
+
+    @rpc
+    def getTabs(self) -> dict[str, Any]:  # noqa: N802
+        """Redmineのタブの一覧と、選んでいるタブ(active が None なら、固定の「Remi」のタブ)。"""
+        tabs = getattr(self.window, "tabs", None)
+        return tabs.snapshot() if tabs is not None else {"tabs": [], "active": None}
+
+    @rpc
+    def activateTab(self, tabId: int | None) -> None:  # noqa: N802,N803
+        if tabId is not None and (isinstance(tabId, bool) or not isinstance(tabId, int)):
+            raise RpcError("invalid_input", "tabId")
+        self._tabs().activate(tabId)
+
+    @rpc
+    def closeTab(self, tabId: int) -> None:  # noqa: N802,N803
+        if isinstance(tabId, bool) or not isinstance(tabId, int):
+            raise RpcError("invalid_input", "tabId")
+        self._tabs().close(tabId)
+
+    @rpc
+    def tabAction(self, tabId: int, action: str) -> None:  # noqa: N802,N803
+        """タブのページの、戻る(back)・進む(forward)・再読み込み(reload)。"""
+        if isinstance(tabId, bool) or not isinstance(tabId, int) or action not in ("back", "forward", "reload"):
+            raise RpcError("invalid_input")
+        self._tabs().action(tabId, action)
+
+    @rpc
+    def detachTab(self, tabId: int) -> None:  # noqa: N802,N803
+        """タブを閉じて、同じページを別ウィンドウで開く。開けなければ、タブのまま残す。"""
+        if isinstance(tabId, bool) or not isinstance(tabId, int):
+            raise RpcError("invalid_input", "tabId")
+        tabs = self._tabs()
+        tab = tabs.model.get(tabId)
+        if tab is None:
+            return
+        url = tab.url
+        if not self.window.open_detached(url):
+            raise RpcError("not_supported")
+        tabs.close(tabId)
+
+    @rpc
+    def setTabChromeHeight(self, height: float) -> None:  # noqa: N802
+        """画面の上のタブの列・操作行の高さ(CSSのpx)。Redmineのタブを選んでいる間、本体の画面をこの高さだけにする。"""
+        if isinstance(height, bool) or not isinstance(height, int | float) or not 0 < height < 400:
+            raise RpcError("invalid_input", "height")
+        tabs = getattr(self.window, "tabs", None)
+        if tabs is not None:
+            tabs.set_chrome_height(float(height))
 
     @rpc
     def openAttachment(self, serverId: int, attachmentId: int) -> None:  # noqa: N802,N803

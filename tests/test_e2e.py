@@ -48,9 +48,10 @@ def remi(db, fake):
     ctx = AppContext(db)
     ctx.settings.set("language", "ja")
     sync = SyncManager(db, ctx.bus)
-    server = LocalServer(RemiApi(ctx, sync))
+    api = RemiApi(ctx, sync)
+    server = LocalServer(api)
     server.start()
-    yield type("Remi", (), {"ctx": ctx, "sync": sync, "server": server})()
+    yield type("Remi", (), {"ctx": ctx, "sync": sync, "server": server, "api": api})()
     sync.stop_all()
     server.stop()
 
@@ -305,6 +306,58 @@ def test_change_status_paste_image_and_watch(page, remi, fake):
     watch.click()
     playwright_api.expect(conv.get_by_role("button", name="ウォッチする")).to_be_visible(timeout=15000)
     assert ME not in fake.watchers[11]
+    assert not page.errors, page.errors
+
+
+def test_redmine_tabs(page, remi, fake, monkeypatch):
+    """Redmineをタブで開く。ウィンドウ全体のタブの列(固定の「Remi」とRedmineのタブ)と、操作行。"""
+    from remi.server.api import NullWindow
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    seed(fake)
+    add_server(remi, fake)
+    # ページを表示する部品がない環境なので、タブの状態だけを動かす窓口に差し替える
+    window = NullWindow(simulate_tabs=True)
+    window.tabs.on_changed = lambda: remi.ctx.bus.publish("tabsChanged", **window.tabs.snapshot())
+    remi.api.window = window
+    remi.ctx.settings.set("redmine_open_in", "tab")
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    # タブがないときは、タブの列を出さない(これまでと同じ画面)
+    playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden()
+    conv.get_by_role("button", name="Redmineで開く").click()
+    tabs = page.locator(".apptabs .atab")
+    playwright_api.expect(tabs).to_have_count(2, timeout=10000)
+    playwright_api.expect(tabs.nth(0)).to_have_text("Remi")
+    playwright_api.expect(tabs.nth(1)).to_have_attribute("aria-selected", "true")
+    # Redmineのタブを選んでいる間は、本体の画面を隠し、操作行を出す(URLは表示のみ)
+    assert page.evaluate("() => document.body.classList.contains('browse')")
+    playwright_api.expect(page.locator(".layout")).to_be_hidden()
+    url = f"{fake.base_url}/issues/10".replace("http://", "")
+    playwright_api.expect(page.locator(".tab-tools .tab-url")).to_have_text(url)
+    playwright_api.expect(page.locator(".tab-tools input")).to_have_count(0)
+    playwright_api.expect(page.get_by_role("button", name="戻る")).to_be_disabled()
+    # 固定の「Remi」のタブを選ぶと、本体の画面に戻る
+    tabs.nth(0).click()
+    playwright_api.expect(page.locator(".layout")).to_be_visible()
+    playwright_api.expect(page.locator(".tab-tools")).to_be_hidden()
+    # 同じ操作で、もう1つ開ける。Ctrl+W で、選んでいるタブを閉じる
+    conv.get_by_role("button", name="Redmineで開く").click()
+    playwright_api.expect(tabs).to_have_count(3, timeout=10000)
+    page.keyboard.press("Control+w")
+    playwright_api.expect(tabs).to_have_count(2, timeout=10000)
+    # 「別ウィンドウへ」で、タブを閉じて、別のウィンドウで開く
+    page.get_by_role("button", name="別ウィンドウへ").click()
+    playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden(timeout=10000)
+    assert window.detached == [f"{fake.base_url}/issues/10"] and opened == []
+    playwright_api.expect(page.locator(".layout")).to_be_visible()
+    # ×で閉じる
+    conv.get_by_role("button", name="Redmineで開く").click()
+    playwright_api.expect(tabs).to_have_count(2, timeout=10000)
+    page.get_by_role("button", name="閉じる").click()
+    playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden(timeout=10000)
     assert not page.errors, page.errors
 
 

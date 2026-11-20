@@ -240,9 +240,10 @@ class ServerSync:
 
     # --- 差分同期 ---------------------------------------------------------------
     def initial_sync(self) -> SyncResult:
-        """初回同期: 未完了のチケットを全件取得し、すべて既読として扱う(設計書 §4.4)。"""
+        """初回同期: クローズ済みを含むチケットを全件取得し、すべて既読として扱う(設計書 §4.4)。
+        アプリを使う前にクローズされたチケットも、「クローズ済みを表示」で見られるように取り込む。"""
         result = SyncResult()
-        issues, flags = self._fetch_lists({"status_id": "open"})
+        issues, flags = self._fetch_lists({"status_id": "*"})
         closed_ids = self._closed_ids()
         cursor = None
         for iid, data in issues.items():

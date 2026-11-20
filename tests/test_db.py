@@ -228,3 +228,30 @@ def test_migrate_v6_merges_watch_authored_into_visible_relations(tmp_path):
         assert ServerStore(d).get(2).visible_relations is None
     finally:
         d.close_all()
+
+
+def test_migrate_v7_redoes_initial_sync_once(tmp_path):
+    """初回同期でクローズ済みも取得するようにしたので、使い始めている利用者も初回同期をやり直す(キャッシュは消さない)。"""
+    import sqlite3
+
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v6.db"
+    c = sqlite3.connect(p)
+    for sql in MIGRATIONS[:6]:
+        c.executescript(sql)
+    c.execute("PRAGMA user_version = 6")
+    c.execute("INSERT INTO servers(server_id, name, url, initial_sync_done, last_sync_cursor) "
+              "VALUES(1, 'S', 'http://s', 1, '2026-01-01T00:00:00Z')")
+    c.execute("INSERT INTO projects(server_id, project_id, parent_id, name) VALUES(1, 1, NULL, 'P')")
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.servers import ServerStore
+
+        assert d.schema_version() == SCHEMA_VERSION
+        assert ServerStore(d).get(1).initial_sync_done is False
+        assert d.query_one("SELECT COUNT(*) FROM projects")[0] == 1  # キャッシュは残る
+    finally:
+        d.close_all()

@@ -238,6 +238,12 @@ UPDATE servers
         AND EXISTS (SELECT 1 FROM json_each(visible_relations) WHERE value = 'authored')
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6]
+# V7: 初回同期でクローズ済みのチケットも取得するようにしたので、使い始めている利用者も、1回だけ初回同期をやり直す
+# (キャッシュは消さない。既読・下書き・取得済みのコメントはそのまま残り、過去のクローズ済みだけが加わる)
+V7 = """
+UPDATE servers SET initial_sync_done = 0
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7]
 
 SCHEMA_VERSION = len(MIGRATIONS)

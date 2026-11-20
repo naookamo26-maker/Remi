@@ -150,17 +150,13 @@ def test_connection_of_finished_thread_is_really_closed(db):
     t = threading.Thread(target=lambda: got.append(db.conn()))
     t.start()
     t.join()
-    threading.Thread(target=lambda: db.query("SELECT 1")).start()  # 別のスレッドが接続を作ると閉じられる
-    import time
-
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            got[0].execute("SELECT 1")
-        except sqlite3.ProgrammingError:
-            return  # 閉じられた
-        time.sleep(0.01)
-    raise AssertionError("connection of a finished thread was not closed")
+    # 別のスレッドが接続を作るときに、終了したスレッドの接続を閉じる。そのスレッドの終了を待ってから確かめる
+    # (閉じている最中に、同じ接続を別のスレッドで使うと、Python 3.14 では異常終了することがある)
+    t2 = threading.Thread(target=lambda: db.query("SELECT 1"))
+    t2.start()
+    t2.join()
+    with pytest.raises(sqlite3.ProgrammingError):
+        got[0].execute("SELECT 1")  # 閉じられた
 
 
 def test_migrate_v4_drops_one_minute_poll_interval(tmp_path):

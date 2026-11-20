@@ -48,9 +48,10 @@ def remi(db, fake):
     ctx = AppContext(db)
     ctx.settings.set("language", "ja")
     sync = SyncManager(db, ctx.bus)
-    server = LocalServer(RemiApi(ctx, sync))
+    api = RemiApi(ctx, sync)
+    server = LocalServer(api)
     server.start()
-    yield type("Remi", (), {"ctx": ctx, "sync": sync, "server": server})()
+    yield type("Remi", (), {"ctx": ctx, "sync": sync, "server": server, "api": api})()
     sync.stop_all()
     server.stop()
 
@@ -207,7 +208,7 @@ def test_theme_and_language_switch(page, remi, fake):
     playwright_api.expect(page.locator(".tree")).to_contain_text("Unread only")
 
 
-def test_project_menu_sets_watch_authored(page, remi, fake):
+def test_project_menu_and_authored_in_the_filter(page, remi, fake):
     seed(fake)
     add_server(remi, fake)
     page.goto(remi.server.start_url)
@@ -215,20 +216,29 @@ def test_project_menu_sets_watch_authored(page, remi, fake):
     row = page.locator(".tree .node", has_text="基幹システム").first
     row.click(button="right")
     playwright_api.expect(page.get_by_role("menu")).to_contain_text("すべて既読にする")
-    playwright_api.expect(page.get_by_role("menu").get_by_role("group", name="作成したチケットを監視")).to_have_count(0)
+    playwright_api.expect(page.get_by_role("menu").get_by_role("group", name="通知")).to_have_count(0)
     page.keyboard.press("Escape")
     playwright_api.expect(page.get_by_role("menu")).to_have_count(0)
     row.hover()
     row.locator(".node-gear").click()
     menu = page.get_by_role("menu")
-    group = menu.get_by_role("group", name="作成したチケットを監視")
-    group.get_by_role("button", name="オン").click()
+    playwright_api.expect(menu.get_by_role("group", name="通知")).to_be_visible()
+    # 「作成したチケットを監視」はなくなり、「表示するチケット」の「自分が作成」に一本化した
+    playwright_api.expect(menu.get_by_role("group", name="作成したチケットを監視")).to_have_count(0)
+    page.keyboard.press("Escape")
+    # 「自分が作成」にチェックすると、作成したチケットも取得する(親で設定すると子にも効く)
+    row.hover()
+    page.get_by_role("button", name="表示するチケット: 基幹システム").click()
+    page.get_by_role("menu").get_by_role("button", name="独自").click()
+    menu = page.get_by_role("menu")
+    playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="自分が作成")).to_have_attribute("aria-checked", "false")
+    menu.get_by_role("menuitemcheckbox", name="自分が作成").click()
     for _ in range(50):
-        if remi.ctx.projects.get_setting(1, 1, "watch_authored"):
+        if "authored" in (remi.ctx.projects.own_visible_relations(1).get(1) or []):
             break
         time.sleep(0.1)
-    assert remi.ctx.projects.get_setting(1, 1, "watch_authored") is True
-    assert remi.ctx.projects.effective_setting(1, 2, "watch_authored") is True
+    assert remi.ctx.projects.own_visible_relations(1)[1] == ["assigned", "group", "watching", "authored"]
+    assert remi.ctx.projects.projects_showing(1, "authored", None) == {1, 2}
 
 
 PASTE_JS = """(b64) => {
@@ -243,6 +253,8 @@ PASTE_JS = """(b64) => {
 def test_relation_filter(page, remi, fake):
     seed(fake)
     add_server(remi, fake)
+    # 「作成」のボタンは、どこかのプロジェクトが「自分が作成」を表示しているときだけ出る(既定では表示しない)
+    remi.ctx.servers.update_fields(1, visible_relations=["assigned", "group", "watching", "authored"])
     page.goto(remi.server.start_url)
     playwright_api.expect(page.locator(".issue")).to_have_count(2)
     filters = page.get_by_role("group", name="関係で絞り込み")
@@ -294,6 +306,58 @@ def test_change_status_paste_image_and_watch(page, remi, fake):
     watch.click()
     playwright_api.expect(conv.get_by_role("button", name="ウォッチする")).to_be_visible(timeout=15000)
     assert ME not in fake.watchers[11]
+    assert not page.errors, page.errors
+
+
+def test_redmine_tabs(page, remi, fake, monkeypatch):
+    """Redmineをタブで開く。ウィンドウ全体のタブの列(固定の「Remi」とRedmineのタブ)と、操作行。"""
+    from remi.server.api import NullWindow
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    seed(fake)
+    add_server(remi, fake)
+    # ページを表示する部品がない環境なので、タブの状態だけを動かす窓口に差し替える
+    window = NullWindow(simulate_tabs=True)
+    window.tabs.on_changed = lambda: remi.ctx.bus.publish("tabsChanged", **window.tabs.snapshot())
+    remi.api.window = window
+    remi.ctx.settings.set("redmine_open_in", "tab")
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    conv = page.locator(".pane-conv")
+    # タブがないときは、タブの列を出さない(これまでと同じ画面)
+    playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden()
+    conv.get_by_role("button", name="Redmineで開く").click()
+    tabs = page.locator(".apptabs .atab")
+    playwright_api.expect(tabs).to_have_count(2, timeout=10000)
+    playwright_api.expect(tabs.nth(0)).to_have_text("Remi")
+    playwright_api.expect(tabs.nth(1)).to_have_attribute("aria-selected", "true")
+    # Redmineのタブを選んでいる間は、本体の画面を隠し、操作行を出す(URLは表示のみ)
+    assert page.evaluate("() => document.body.classList.contains('browse')")
+    playwright_api.expect(page.locator(".layout")).to_be_hidden()
+    url = f"{fake.base_url}/issues/10".replace("http://", "")
+    playwright_api.expect(page.locator(".tab-tools .tab-url")).to_have_text(url)
+    playwright_api.expect(page.locator(".tab-tools input")).to_have_count(0)
+    playwright_api.expect(page.get_by_role("button", name="戻る")).to_be_disabled()
+    # 固定の「Remi」のタブを選ぶと、本体の画面に戻る
+    tabs.nth(0).click()
+    playwright_api.expect(page.locator(".layout")).to_be_visible()
+    playwright_api.expect(page.locator(".tab-tools")).to_be_hidden()
+    # 同じ操作で、もう1つ開ける。Ctrl+W で、選んでいるタブを閉じる
+    conv.get_by_role("button", name="Redmineで開く").click()
+    playwright_api.expect(tabs).to_have_count(3, timeout=10000)
+    page.keyboard.press("Control+w")
+    playwright_api.expect(tabs).to_have_count(2, timeout=10000)
+    # 「別ウィンドウへ」で、タブを閉じて、別のウィンドウで開く
+    page.get_by_role("button", name="別ウィンドウへ").click()
+    playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden(timeout=10000)
+    assert window.detached == [f"{fake.base_url}/issues/10"] and opened == []
+    playwright_api.expect(page.locator(".layout")).to_be_visible()
+    # ×で閉じる
+    conv.get_by_role("button", name="Redmineで開く").click()
+    playwright_api.expect(tabs).to_have_count(2, timeout=10000)
+    page.get_by_role("button", name="閉じる").click()
+    playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden(timeout=10000)
     assert not page.errors, page.errors
 
 
@@ -531,7 +595,7 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     menu = page.get_by_role("menu")
     playwright_api.expect(menu.get_by_role("menuitemcheckbox", name="ウォッチ中")).to_have_attribute("aria-checked", "false")
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count-inline")).to_have_text("(1)")
-    assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group", "authored"]}
+    assert remi.ctx.projects.own_visible_relations(1) == {1: ["assigned", "group"]}
     # 子プロジェクトは親の設定を継承していることを示す(担当のチケットが残るので、ツリーにも残る)
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 受注管理")).to_have_class(re.compile("inherited"))
     playwright_api.expect(page.get_by_role("button", name="表示するチケット: 基幹システム")).to_have_class(re.compile("own"))

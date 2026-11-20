@@ -20,6 +20,8 @@ from remi.sync.worker import SyncManager
 from remi.system import windows
 from remi.system.notifier import PROTOCOL, Notifier, parse_open_url
 from remi.system.single_instance import SingleInstance
+from remi.system.tabs import TabController
+from remi.system.tabs_win import WinTabHost, add_window_toolbar
 from remi.system.tray import Tray
 from remi.system.webview2 import enable_browser_features
 
@@ -35,6 +37,10 @@ class WebviewWindow:
         self.start_hidden = start_hidden
         self.window = None
         self.redmine_window = None  # Redmineのページを開くウィンドウ(設計書 §5.4)
+        self._redmine_hidden = False  # 本体と一緒に隠している(本体を開いたら戻す)
+        self._detached: list = []  # タブから切り離した、Redmineのウィンドウ
+        self._tabs: TabController | None = None
+        self._tabs_failed = False
         self.minimize_to_tray = False  # トレイが使えるときに True にする
         self._quitting = False
 
@@ -85,17 +91,48 @@ class WebviewWindow:
             self.window.show()
             self.window.restore()
             self.sync.set_visible(True)
+            self._show_redmine_window()
 
     def hide(self) -> None:
         if self.window is not None:
             self.window.hide()
+            self._hide_redmine_window()  # 本体をトレイに格納したら、Redmineのウィンドウだけが残らないようにする
             self.sync.set_visible(False)  # トレイに格納している間は、開いているチケットを確かめない
+
+    def _redmine_windows(self) -> list:
+        """Redmineを開いているウィンドウ(別ウィンドウと、タブから切り離したもの)。"""
+        return [w for w in (self.redmine_window, *self._detached) if w is not None]
+
+    def _hide_redmine_window(self) -> None:
+        """本体と一緒に、Redmineのウィンドウも隠す(本体を開いたとき戻す)。"""
+        windows_ = self._redmine_windows()
+        if not windows_ or self._redmine_hidden:
+            return
+        for w in windows_:
+            try:
+                w.hide()
+                self._redmine_hidden = True
+            except Exception:  # noqa: BLE001 - 隠せなくても、本体の格納は続ける
+                log.debug("could not hide the Redmine window", exc_info=True)
+
+    def _show_redmine_window(self) -> None:
+        if not self._redmine_hidden:
+            return
+        self._redmine_hidden = False
+        for w in self._redmine_windows():
+            try:
+                w.show()
+                w.restore()
+            except Exception:  # noqa: BLE001
+                log.debug("could not show the Redmine window", exc_info=True)
 
     def quit(self) -> None:
         self._quitting = True
-        if self.redmine_window is not None:
+        if self._tabs is not None:
+            self._tabs.dispose()
+        for w in self._redmine_windows():
             try:
-                self.redmine_window.destroy()
+                w.destroy()
             except Exception:  # noqa: BLE001
                 pass
         if self.window is not None:
@@ -110,22 +147,83 @@ class WebviewWindow:
                 self.redmine_window.load_url(url)
                 self.redmine_window.show()
                 self.redmine_window.restore()
+                self._redmine_hidden = False
                 return True
             w = webview.create_window(f"{APP_NAME} — Redmine", url, width=1100, height=800, min_size=(640, 480),
                                       text_select=True)
 
             def closed() -> None:
                 self.redmine_window = None
+                self._redmine_hidden = False
 
             w.events.closed += closed
             # パスワードの保存・自動入力、右クリックメニューなど、標準的なブラウザと同じ機能を使えるようにする
             enable_browser_features(w)
+            self._add_toolbar(w)
             self.redmine_window = w
             return True
         except Exception:  # noqa: BLE001 - 開けなければ既定のブラウザで開く
             log.exception("could not open the Redmine window")
             self.redmine_window = None
             return False
+
+    def open_detached(self, url: str) -> bool:
+        """タブから切り離したRedmineのページを、新しいウィンドウで開く(ウィンドウは、いくつでも開ける)。"""
+        import webview
+
+        try:
+            w = webview.create_window(f"{APP_NAME} — Redmine", url, width=1100, height=800, min_size=(640, 480),
+                                      text_select=True)
+
+            def closed() -> None:
+                if w in self._detached:
+                    self._detached.remove(w)
+
+            w.events.closed += closed
+            enable_browser_features(w)
+            self._add_toolbar(w)
+            self._detached.append(w)
+            return True
+        except Exception:  # noqa: BLE001
+            log.exception("could not open a detached Redmine window")
+            return False
+
+    # --- タブ(設計書 §5.4) ---------------------------------------------------------------
+    @property
+    def tabs(self) -> TabController | None:
+        """Redmineをタブで開く窓口。Windows 以外、または部品を作れなかったときは None(別ウィンドウで開く)。"""
+        if self._tabs is None and not self._tabs_failed and sys.platform == "win32" and self.window is not None:
+            try:
+                controller = TabController(on_changed=self._publish_tabs, on_failed=webbrowser.open)
+                controller.host = WinTabHost(self.window.native, controller)
+                self._tabs = controller
+            except Exception:  # noqa: BLE001 - タブにできなければ、別ウィンドウで開く
+                log.warning("could not set up the Redmine tabs", exc_info=True)
+                self._tabs_failed = True
+        return self._tabs
+
+    def _publish_tabs(self) -> None:
+        if self._tabs is not None:
+            self.ctx.bus.publish("tabsChanged", **self._tabs.snapshot())
+
+    def _add_toolbar(self, w) -> None:
+        """Redmineのウィンドウの上に、操作行(戻る・進む・再読み込み・URL・「タブに戻す」)を足す。"""
+        lang = resolve_language(self.ctx.settings.get("language"))
+        labels = {k: t(f"tabs.{k}", lang) for k in ("back", "forward", "reload", "attach")}
+        tabs_available = self.tabs is not None
+        add_window_toolbar(w, labels, on_attach=(lambda url: self._attach_window(w, url)) if tabs_available else None,
+                           dark=self._dark())
+
+    def _attach_window(self, w, url: str) -> None:
+        """切り離したウィンドウを閉じて、同じページをタブで開く。"""
+        tabs = self.tabs
+        if tabs is None or not tabs.open(url):
+            return
+        try:
+            w.destroy()
+        except Exception:  # noqa: BLE001
+            log.debug("could not close the detached window", exc_info=True)
+        self.show()
 
     def apply_theme(self, theme: str) -> None:
         if self.window is None or sys.platform != "win32":

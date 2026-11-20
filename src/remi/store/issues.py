@@ -25,6 +25,9 @@ _RELATION_SQL = {
 }
 
 
+# 「表示するチケット」の既定。「自分が作成」は含めない(含めたプロジェクトでは、作成したチケットも取得する。通信が増えるため)
+DEFAULT_RELATIONS = ("assigned", "group", "watching")
+
 # 一覧の絞り込みボタン(設定 relation_filter)が選ぶ関係。グループ経由の担当は「担当」に含める
 FILTER_RELATIONS: dict[str, tuple[str, ...] | None] = {
     "all": None, "assigned": ("assigned", "group"), "watching": ("watching",), "authored": ("authored",),
@@ -42,7 +45,7 @@ class RelationScope:
     in_use は、監視中のチケットがあるプロジェクトで表示している関係の和(画面で出す絞り込みボタンを決める)。
     """
 
-    default: tuple[str, ...] = RELATIONS
+    default: tuple[str, ...] = DEFAULT_RELATIONS
     servers: dict[int, tuple[str, ...]] = field(default_factory=dict)
     projects: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
     in_use: tuple[str, ...] = RELATIONS
@@ -64,7 +67,7 @@ class RelationScope:
             return tuple(r for r in RELATIONS if r in rels and (want is None or r in want))
 
         return cls(
-            default=narrow(RELATIONS),
+            default=narrow(DEFAULT_RELATIONS),
             servers={sid: narrow(rels) for sid, rels in server_defaults.items() if rels is not None},
             projects={(sid, pid): narrow(rels) for sid, m in visible.items() for pid, rels in m.items()},
             in_use=used,

@@ -6,6 +6,7 @@ import { serverDialog, settingsDialog } from "./dialogs.js";
 import { confirmDialog } from "./ui.js";
 import { setCatalog, t } from "./i18n.js";
 import { IssueList } from "./list.js";
+import { Tabs } from "./tabs.js";
 import { selectionKey, Tree } from "./tree.js";
 
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
@@ -23,6 +24,7 @@ class App {
     this.tree = new Tree(this);
     this.list = new IssueList(this);
     this.conv = new Conversation(this);
+    this.tabs = new Tabs(this);
     this.settingsDialog = null;
   }
 
@@ -30,7 +32,8 @@ class App {
     const splitter = (index) => h("div", { class: "splitter", role: "separator", "aria-orientation": "vertical",
       onPointerdown: (e) => this.dragSplitter(e, index) });
     this.layout = h("div", { class: "layout" }, this.tree.root, splitter(0), this.list.root, splitter(1), this.conv.root);
-    root.replaceChildren(this.layout);
+    root.replaceChildren(this.tabs.el, this.layout);
+    this.tabs.load();
     root.removeAttribute("aria-busy");
     root.classList.remove("app-loading");
     this.applyLayout();
@@ -126,7 +129,9 @@ class App {
   // --- キー操作 ---------------------------------------------------------------------
   onGlobalKey(e) {
     const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey;
-    if (e.key === "F5" || (ctrl && e.key.toLowerCase() === "r")) {
+    if (ctrl && !e.shiftKey && e.key.toLowerCase() === "w" && this.tabs.closeActive()) {
+      e.preventDefault(); // Redmineのタブを閉じる
+    } else if (e.key === "F5" || (ctrl && e.key.toLowerCase() === "r")) {
       // 画面の再読み込み(送信前の添付などを失う)はせず、Redmineから読み込み直す。Shift・Ctrl付きも同じ
       e.preventDefault();
       if (!e.repeat) this.syncNow();
@@ -152,6 +157,7 @@ class App {
     this.selection = sel;
     // 終了したバージョン・まだ取得していないバージョンは、開いたときにチケットを取得する(届いたら versionsChanged)
     if (sel.kind === "version") {
+      this.tree.failedVersions.delete(sel.versionId); // 選び直したら、取得をもう一度試す
       call("fetchVersion", { serverId: sel.serverId, versionId: sel.versionId }).catch(() => {});
     }
     // 開いていた会話は閉じる(別のプロジェクトなどを選んだのに、前のチケットが残って見えると紛らわしいので)
@@ -340,12 +346,18 @@ class App {
       case "serversChanged":
         this.onServersChanged();
         break;
+      case "tabsChanged":
+        this.tabs.set({ tabs: e.tabs, active: e.active });
+        break;
       case "serverCacheCleared":
         // 接続先や認証ユーザーが変わった: 前のユーザーのデータ(入力中の内容・添付を含む)を残さない
         if (this.current?.serverId === e.serverId) this.closeIssue();
         break;
       case "versionFetchFailed": {
         const sel = this.selection;
+        this.tree.failedVersions.add(e.versionId); // 「取得中」の表示を止める
+        this.tree.render();
+        this.list.render();
         if (sel.kind === "version" && sel.serverId === e.serverId && sel.versionId === e.versionId) {
           toast(t(`errors.${e.error}`));
         }

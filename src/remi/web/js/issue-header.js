@@ -1,6 +1,6 @@
 // 会話ビューのヘッダ: 件名・パンくず・ウォッチ・Redmineで開く、ステータス・担当者・優先度の選択(設計書 §6.2)
 import { call } from "./api.js";
-import { clear, h, toast } from "./dom.js";
+import { clear, h, spinner, toast } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { contextMenu } from "./ui.js";
@@ -29,6 +29,8 @@ export class IssueHeader {
     this.conv = conv;
     /** @type {Record<FieldKey, HTMLSelectElement>|null} */
     this.selects = null;
+    /** 選択肢を読み込めなかったチケット(「読み込み中」を消すため。"サーバー:チケット") */
+    this.optionsFailedFor = null;
   }
 
   /**
@@ -62,6 +64,8 @@ export class IssueHeader {
       } }, icon("star"));
     /** 書き込めないときの説明(選択肢を読み込んでから表示する) */
     this.readOnlyNote = h("span", { class: "read-only-note", hidden: true });
+    /** 選択肢(ステータス・担当者など)をRedmineから読み込んでいる間の表示 */
+    this.optionsLoading = h("span", { class: "muted loading" }, spinner(), t("conv.optionsLoading"));
     this.selects = {
       status_id: this.fieldSelect("status_id", d.status, d.statusId),
       assigned_to_id: this.fieldSelect("assigned_to_id", d.assignee || t("conv.none"), d.assignedToId),
@@ -86,6 +90,7 @@ export class IssueHeader {
         h("span", { class: "static" }, `${t("conv.updated")} `, h("b", {}, formatTime(d.updatedOn))),
         rel ? h("span", { class: "static" }, `${t("conv.yourRelation")} `, h("b", {}, rel)) : null,
         this.detailsToggle,
+        this.optionsLoading,
         this.readOnlyNote),
       this.detailsBox);
     this.fill();
@@ -108,7 +113,7 @@ export class IssueHeader {
 
   showDetailsLoading() {
     if (this.detailsBox && !this.conv.details) {
-      this.detailsBox.replaceChildren(h("span", { class: "muted" }, t("conv.detailsLoading")));
+      this.detailsBox.replaceChildren(h("span", { class: "muted loading" }, spinner(), t("conv.detailsLoading")));
     }
   }
 
@@ -212,10 +217,16 @@ export class IssueHeader {
     return sel;
   }
 
+  currentKey() {
+    const d = this.conv.data;
+    return d ? `${d.serverId}:${d.issueId}` : null;
+  }
+
   /** 読み込んだ選択肢と、送信前の変更を選択欄に反映する(選択肢がまだなければ何もしない) */
   fill() {
     const o = this.conv.editOptions;
     const changes = this.conv.changes;
+    this.optionsLoading.hidden = !!o || this.optionsFailedFor === this.currentKey();
     this.fillDetails();
     if (!o || !this.selects) return;
     const lists = {
@@ -260,6 +271,8 @@ export class IssueHeader {
 
   /** 選択肢を読み込めなかった: 理由をツールチップで示す(選択欄は操作できないまま) */
   showError(code) {
+    this.optionsFailedFor = this.currentKey();
+    if (this.optionsLoading) this.optionsLoading.hidden = true;
     for (const sel of Object.values(this.selects || {})) sel.title = t(`errors.${code}`);
   }
 

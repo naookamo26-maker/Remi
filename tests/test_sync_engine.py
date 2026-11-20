@@ -94,12 +94,13 @@ def test_newly_assigned_issue_history_is_read_but_new_comments_unread(setup, fak
     assert issues.unread_count(sid, 9) == 1
 
 
-def test_authored_issues_follow_project_setting(setup, fake, db):
+def test_authored_issues_are_fetched_for_projects_showing_them(setup, fake, db):
     sync, issues, sid = setup
     fake.add_issue(5, 2, "自分が作成", assigned_to=7, author=ME, updated_on=ts(10))
     sync.sync_changes()
     assert issues.get(sid, 5) is None
-    ProjectStore(db).set_setting(sid, 1, "watch_authored", True)  # 親で有効にすると子にも効く
+    # 「自分が作成」を表示するプロジェクトだけ、作成したチケットを取得する(親で設定すると子にも効く)
+    ProjectStore(db).set_visible_relations(sid, 1, ["assigned", "group", "watching", "authored"])
     sync.servers.update_fields(sid, initial_sync_done=False)
     sync.sync_changes()
     assert issues.get(sid, 5).relation_flags == REL_AUTHORED

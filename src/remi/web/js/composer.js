@@ -1,6 +1,6 @@
 // 会話ビューの入力欄: 下書き・プレビュー・添付・送信前の変更のチップ・送信ボタンの状態(設計書 §5.3, §6)
 import { call } from "./api.js";
-import { clear, debounce, h, html } from "./dom.js";
+import { clear, debounce, h, html, spinner } from "./dom.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { fieldLabel } from "./issue-header.js";
@@ -150,7 +150,7 @@ export class Composer {
       const cls = `chip${u.state === "uploading" ? " busy" : ""}${u.state === "error" ? " error" : ""}`;
       this.chips.append(h("span", { class: cls, title: u.error || null },
         u.isImage && u.url ? h("img", { src: u.url, alt: "" }) : null,
-        u.state === "uploading" ? t("conv.uploading", { name: u.filename })
+        u.state === "uploading" ? [spinner(), t("conv.uploading", { name: u.filename })]
           : u.state === "error" ? t("conv.uploadFailed", { name: u.filename, reason: u.error }) : u.filename,
         h("button", { type: "button", "aria-label": t("conv.removeAttachment"), onClick: () => this.removeUpload(u) }, "×")));
     }
@@ -232,6 +232,7 @@ export class Composer {
     this.preview.hidden = !on;
     if (on) {
       const pending = this.uploads.filter((u) => u.id).map((u) => ({ filename: u.filename, id: u.id }));
+      this.preview.replaceChildren(h("span", { class: "muted loading" }, spinner(), t("conv.previewLoading")));
       const out = await call("preview", { serverId: this.serverId, issueId: this.issueId, text: this.textarea.value, pending });
       html(this.preview, out || "");
       if (!out) this.preview.append(h("span", { class: "muted" }, t("conv.nothingToPreview")));

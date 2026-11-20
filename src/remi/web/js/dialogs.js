@@ -1,6 +1,6 @@
 // サーバー登録・設定のダイアログ(設計書 §3.1、モック「サーバー登録ダイアログ」)
 import { call } from "./api.js";
-import { clear, h } from "./dom.js";
+import { clear, h, spinner } from "./dom.js";
 import { t } from "./i18n.js";
 import { confirmDialog, modal } from "./ui.js";
 
@@ -52,6 +52,7 @@ export function serverDialog(app, server = null) {
     result.hidden = false;
     result.className = `result ${kind}`;
     result.textContent = text;
+    if (kind === "busy") result.prepend(spinner()); // 接続している間は、回転する印を出す
   };
   for (const el of [name, url, key]) el.addEventListener("input", update);
   proxySystem.addEventListener("change", () => (proxyUrl.disabled = true));
@@ -155,7 +156,8 @@ export function settingsDialog(app) {
       h("span", { class: "label" }, t("settings.startup")), check("autostart", t("settings.autostart")),
       field(t("settings.retention"), retention, t("settings.retentionHelp")),
       h("span", { class: "label" }, t("settings.images")), check("allow_external_images", t("settings.externalImages")),
-      field(t("settings.redmineOpenIn"), select("redmine_open_in", [["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
+      field(t("settings.redmineOpenIn"), select("redmine_open_in", [...(app.boot.tabsSupported ? [["tab", t("settings.openInTab")]] : []),
+        ["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
         t("settings.redmineOpenInHelp")));
   };
 

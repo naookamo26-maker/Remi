@@ -212,7 +212,8 @@ def test_relation_filter(app, fake):
     assert ids("all") == [10, 11, 12, 13]
     assert ids("assigned") == [10, 12, 13]
     assert ids("watching") == [11, 12]
-    assert ids("authored") == []
+    # どのプロジェクトでも「自分が作成」を表示していないので、「作成」での絞り込みは、「すべて」として扱う(画面ではボタンが隠れる)
+    assert ids("authored") == [10, 11, 12, 13]
     assert app.rpc_error("listIssues", relation="x")["code"] == "invalid_input"
     assert app.rpc("setSetting", key="relation_filter", value="watching")["relation_filter"] == "watching"
 
@@ -234,7 +235,7 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     ids = lambda **kw: sorted(i["issueId"] for i in app.rpc("listIssues", **kw)["issues"])  # noqa: E731
     assert ids() == [10, 11, 13, 20, 30]
     projects = lambda: {p["projectId"]: p for p in app.rpc("getTree")["servers"][0]["projects"]}  # noqa: E731
-    assert projects()[1]["relations"] == ["assigned", "group", "watching", "authored"]
+    assert projects()[1]["relations"] == ["assigned", "group", "watching"]  # 既定は、「自分が作成」を含まない
     assert projects()[1]["relationsOwn"] is False
 
     # A でウォッチ中を表示しない: A と子プロジェクトのウォッチだけのチケットが、一覧からも、ツリーの件数・
@@ -294,6 +295,21 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     # グローバル設定としては、もう受け付けない
     for key in ("visible_relations", "show_all_projects"):
         assert app.rpc_error("setSetting", key=key, value=True)["code"] == "invalid_setting"
+
+
+def test_authored_issues_are_fetched_when_the_filter_shows_them(app, fake):
+    """「表示するチケット」の「自分が作成」にチェックすると、作成したチケットも取得する(通信が増えるので、既定は含めない)。"""
+    fake.add_project(1, "A")
+    fake.add_issue(10, 1, "担当")
+    fake.add_issue(20, 1, "自分が作成", assigned_to=7, author=ME)
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10) is not None)
+    time.sleep(1.5)
+    assert app.ctx.issues.get(sid, 20) is None  # 既定では、作成したチケットは取得しない
+    app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations",
+            value=["assigned", "group", "watching", "authored"])
+    assert wait_until(lambda: app.ctx.issues.get(sid, 20) is not None, timeout=20)
+    assert [i["issueId"] for i in app.rpc("listIssues", relation="authored")["issues"]] == [20]
 
 
 def test_show_all_projects_per_server(app, fake):
@@ -499,6 +515,78 @@ def test_open_redmine_falls_back_to_browser(db, monkeypatch):
     assert api.openRedmine("https://rm.example/issues/2") == "browser"
     assert win.urls == ["https://rm.example/issues/1"]
     assert opened == ["https://rm.example/issues/1", "https://rm.example/issues/2"]
+
+
+def test_open_redmine_in_a_tab_and_tab_operations(db, monkeypatch):
+    """設定が「タブ」なら、Redmineをタブで開く。タブにできなければ、別ウィンドウ→ブラウザの順に戻る。"""
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+    win = NullWindow(simulate_tabs=True)
+    api = RemiApi(AppContext(db), window=win)
+    sub = api.ctx.bus.subscribe()
+    assert api.bootstrap()["tabsSupported"] is True
+    assert api.setSetting("redmine_open_in", "tab")["redmine_open_in"] == "tab"
+    assert api.openRedmine("https://rm.example/issues/1") == "tab"
+    assert api.openRedmine("https://rm.example/issues/2") == "tab"
+    assert api.openRedmine("https://rm.example/issues/3", external=True) == "browser"  # Shift+クリックはブラウザ
+    state = api.getTabs()
+    assert [x["url"] for x in state["tabs"]] == ["https://rm.example/issues/1", "https://rm.example/issues/2"]
+    assert state["active"] == 2
+    events = []
+    while (e := sub.get(timeout=0.05)) is not None:
+        events.append(e)
+    assert [e["type"] for e in events if e["type"] == "tabsChanged"]  # タブが変わると、画面に知らせる
+    assert events[-1]["active"] == 2 and len(events[-1]["tabs"]) == 2
+    api.activateTab(1)
+    assert api.getTabs()["active"] == 1
+    api.activateTab(None)  # 固定の「Remi」のタブ
+    assert api.getTabs()["active"] is None
+    api.tabAction(1, "reload")
+    for bad in (("x", "back"), (1, "format c:")):
+        with pytest.raises(Exception) as err:
+            api.tabAction(*bad)
+        assert getattr(err.value, "code", "") == "invalid_input"
+    with pytest.raises(Exception) as err:
+        api.activateTab("1")
+    assert err.value.code == "invalid_input"
+    api.setTabChromeHeight(76)
+    for bad in (0, -1, 1000, "x", True):
+        with pytest.raises(Exception) as err:
+            api.setTabChromeHeight(bad)
+        assert err.value.code == "invalid_input"
+    # タブを切り離すと、タブを閉じて、同じページを別のウィンドウで開く
+    api.detachTab(1)
+    assert win.detached == ["https://rm.example/issues/1"]
+    assert [x["id"] for x in api.getTabs()["tabs"]] == [2]
+    api.closeTab(2)
+    assert api.getTabs() == {"tabs": [], "active": None}
+    assert opened == ["https://rm.example/issues/3"]
+
+
+def test_tabs_fall_back_when_not_supported(db, monkeypatch):
+    from remi.context import AppContext
+    from remi.server.api import NullWindow, RemiApi
+
+    opened = []
+    monkeypatch.setattr("webbrowser.open", opened.append)
+
+    class Win(NullWindow):
+        def open_redmine(self, url):
+            return True  # 別ウィンドウは使える
+
+    api = RemiApi(AppContext(db), window=Win())
+    assert api.bootstrap()["tabsSupported"] is False
+    api.setSetting("redmine_open_in", "tab")
+    assert api.openRedmine("https://rm.example/issues/1") == "app"  # タブにできなければ、別ウィンドウ
+    assert api.getTabs() == {"tabs": [], "active": None}
+    for call in (lambda: api.activateTab(1), lambda: api.closeTab(1), lambda: api.detachTab(1)):
+        with pytest.raises(Exception) as err:
+            call()
+        assert err.value.code == "not_supported"
+    assert opened == []
 
 
 def _save(app, fake, key, server_id=None, name="社内"):

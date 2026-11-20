@@ -150,17 +150,13 @@ def test_connection_of_finished_thread_is_really_closed(db):
     t = threading.Thread(target=lambda: got.append(db.conn()))
     t.start()
     t.join()
-    threading.Thread(target=lambda: db.query("SELECT 1")).start()  # 別のスレッドが接続を作ると閉じられる
-    import time
-
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            got[0].execute("SELECT 1")
-        except sqlite3.ProgrammingError:
-            return  # 閉じられた
-        time.sleep(0.01)
-    raise AssertionError("connection of a finished thread was not closed")
+    # 別のスレッドが接続を作るときに、終了したスレッドの接続を閉じる。そのスレッドの終了を待ってから確かめる
+    # (閉じている最中に、同じ接続を別のスレッドで使うと、Python 3.14 では異常終了することがある)
+    t2 = threading.Thread(target=lambda: db.query("SELECT 1"))
+    t2.start()
+    t2.join()
+    with pytest.raises(sqlite3.ProgrammingError):
+        got[0].execute("SELECT 1")  # 閉じられた
 
 
 def test_migrate_v4_drops_one_minute_poll_interval(tmp_path):
@@ -183,5 +179,52 @@ def test_migrate_v4_drops_one_minute_poll_interval(tmp_path):
         assert servers.get(1).poll_interval == 180
         assert servers.get(2).poll_interval == 300
         assert 60 not in POLL_INTERVALS
+    finally:
+        d.close_all()
+
+
+def test_migrate_v6_merges_watch_authored_into_visible_relations(tmp_path):
+    """「作成したチケットを監視」を「表示するチケット」の「自分が作成」に移す(見え方が変わらないように)。"""
+    import json
+    import sqlite3
+
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v5.db"
+    c = sqlite3.connect(p)
+    for sql in MIGRATIONS[:5]:
+        c.executescript(sql)
+    c.execute("PRAGMA user_version = 5")
+    c.execute("INSERT INTO servers(server_id, name, url, visible_relations) VALUES(1, 'S', 'http://s', ?)",
+              (json.dumps(["assigned", "authored"]),))
+    c.execute("INSERT INTO servers(server_id, name, url) VALUES(2, 'T', 'http://t')")
+    for pid in range(1, 6):
+        c.execute("INSERT INTO projects(server_id, project_id, parent_id, name) VALUES(1, ?, NULL, ?)", (pid, f"P{pid}"))
+    rows = [
+        (1, 1, None),                                  # 監視オン・既定(すべて) → 「自分が作成」を含める
+        (2, 1, json.dumps(["assigned"])),              # 監視オン・独自 → 「自分が作成」を足す
+        (3, 0, json.dumps(["watching", "authored"])),  # 監視オフ・独自 → 「自分が作成」を外す(これまで取得していなかった)
+        (4, None, json.dumps(["authored"])),           # 未設定 → 外す
+        (5, 0, None),                                  # 何もなければ、そのまま(継承)
+    ]
+    for pid, watch, rel in rows:
+        c.execute("INSERT INTO project_settings(server_id, project_id, watch_authored, visible_relations) VALUES(1, ?, ?, ?)",
+                  (pid, watch, rel))
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.projects import ProjectStore
+        from remi.store.servers import ServerStore
+
+        assert d.schema_version() == SCHEMA_VERSION
+        own = ProjectStore(d).own_visible_relations(1)
+        assert own[1] == ["assigned", "group", "watching", "authored"]
+        assert own[2] == ["assigned", "authored"]
+        assert own[3] == ["watching"]
+        assert own[4] == []
+        assert 5 not in own
+        assert ServerStore(d).get(1).visible_relations == ["assigned"]  # サーバーの既定からも外す
+        assert ServerStore(d).get(2).visible_relations is None
     finally:
         d.close_all()

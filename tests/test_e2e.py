@@ -401,6 +401,26 @@ def test_detached_window_chrome_page(page, remi, fake):
     assert not page.errors, page.errors
 
 
+def test_tree_hides_all_and_unread_rows_when_nothing_is_shown(page, remi, fake):
+    """表示するチケットがなければ、プロジェクトが出ていても(「すべてを表示」)、「すべて」「未読のみ」は出さない。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    tree = page.locator(".tree")
+    playwright_api.expect(tree).to_contain_text("未読のみ", timeout=20000)
+    # すべてのフィルタを外し、チケットのないプロジェクトも出す
+    remi.ctx.servers.update_fields(1, visible_relations=[], show_all_projects=True)
+    remi.ctx.bus.publish("projectSettingsChanged", serverId=1)
+    playwright_api.expect(tree).not_to_contain_text("未読のみ", timeout=10000)
+    playwright_api.expect(tree).to_contain_text("基幹システム")
+    assert tree.locator(".node", has_text="すべて").filter(has_not_text="すべてを表示").count() == 0
+    # 戻すと、また出る
+    remi.ctx.servers.update_fields(1, visible_relations=None)
+    remi.ctx.bus.publish("projectSettingsChanged", serverId=1)
+    playwright_api.expect(tree).to_contain_text("未読のみ", timeout=10000)
+    assert not page.errors, page.errors
+
+
 def test_open_redmine_menu(page, remi, fake, monkeypatch):
     opened = []
     monkeypatch.setattr("webbrowser.open", opened.append)

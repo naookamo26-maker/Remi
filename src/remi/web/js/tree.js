@@ -156,13 +156,13 @@ export class Tree {
           children: [...roadmap(p, depth + 1), ...p.children.map((c) => project(c, depth + 1))],
         });
       };
-      // 表示するものがない(プロジェクトが1つもない)サーバーには、「すべて」「未読のみ」も出さない
-      const kids = s.projects.length ? [
+      // 表示するチケットがない(プロジェクトが1つもない・すべてのフィルタを外した)サーバーには、「すべて」「未読のみ」も出さない
+      const kids = s.projects.length && s.count > 0 ? [
         node(t("tree.all"), { kind: "server", serverId: s.serverId }, { depth: 1, count: s.count || null }),
         node(t("tree.unreadOnly"), { kind: "unread", serverId: s.serverId }, { depth: 1, count: s.unread || null,
           dot: s.unread ? { kind: "changed", label: t("tree.unreadCount", { count: s.unread }) } : null }),
         ...s.projects.map((p) => project(p, 1)),
-      ] : [];
+      ] : s.projects.map((p) => project(p, 1));
       // Teams の「非表示のチャネル」のように、プロジェクトの下に、隠れているプロジェクトを出す・隠すリンクを置く
       if (s.showAllProjects || s.hiddenProjects) {
         kids.push(node(s.showAllProjects ? t("tree.hideEmptyProjects") : t("tree.showAllProjects"),

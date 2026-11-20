@@ -19,3 +19,15 @@ def test_activity_is_recorded_and_announced_only_when_it_changes():
     while (e := sub.get(timeout=0.05)) is not None:
         events.append(e)
     assert [e["type"] for e in events] == ["syncState"] * 3  # sync オン, versions オン, sync オフ
+
+
+def test_overflow_drops_old_events_and_keeps_only_resync():
+    bus = EventBus()
+    sub = bus.subscribe()
+    for i in range(sub.queue.maxsize):
+        bus.publish("issue", issueId=i)
+    bus.publish("issue", issueId=-1)  # あふれる
+    assert sub.get(timeout=0.05) == {"type": "resync"}
+    assert sub.get(timeout=0.05) is None  # 古いイベントは残らない
+    bus.publish("syncState", serverId=1)  # その後は普通に届く
+    assert sub.get(timeout=0.05)["type"] == "syncState"

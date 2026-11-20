@@ -311,7 +311,25 @@ def test_backoff_respects_retry_after(db, fake):
     try:
         assert wait_until(lambda: ServerStore(db).get(sid).last_error == "rate_limited")
         w = mgr._worker(sid)
-        assert w.sched.backoff_until - time.monotonic() > 2900
+        left = w.sched.backoff_until - time.monotonic()
+        assert 2900 < left < 3000 * 1.25  # 指定より短くならず、上乗せは2割まで
+    finally:
+        mgr.stop_all()
+
+
+def test_restart_does_not_start_new_workers_while_old_ones_are_alive(db, fake, monkeypatch):
+    """旧ワーカーが止まりきらないときは、新しいワーカーを並行して動かさない。"""
+    sid, mgr = _start(db, fake)
+    try:
+        old = mgr._worker(sid)
+        monkeypatch.setattr(old, "join", lambda timeout=None: None)
+        monkeypatch.setattr(old, "is_alive", lambda: True)
+        assert mgr.restart() is False
+        assert mgr._worker(sid) is old  # 見失わず、管理に残っている
+        monkeypatch.undo()  # 止まった後は、自動で再試行して起動する
+        monkeypatch.setattr("remi.sync.worker.RESTART_RETRY_INTERVAL", 0.05)
+        assert wait_until(lambda: mgr._worker(sid) is not old)
+        assert mgr.restart() is True
     finally:
         mgr.stop_all()
 

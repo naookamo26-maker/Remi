@@ -303,9 +303,6 @@ class LocalServer:
                     self.wfile.flush()
                     while not server._stopping.is_set():
                         event = sub.get(timeout=1.0)
-                        if sub.overflowed:
-                            sub.overflowed = False
-                            event = {"type": "resync"}
                         if event is not None:
                             data = json.dumps(event, ensure_ascii=False)
                             self.wfile.write(f"data: {data}\n\n".encode("utf-8"))

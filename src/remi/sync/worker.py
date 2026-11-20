@@ -51,6 +51,9 @@ INACTIVE_FACTOR = 2
 BACKOFF_BASE = 30
 BACKOFF_MAX = 1800
 JITTER = 0.15  # 間隔のばらつき(±15%)
+RESTART_RETRY_INTERVAL = 1.0  # 旧スレッドが止まりきらず restart を見送ったとき、再試行する間隔(秒)
+RESTART_RETRY_MAX = 60  # その再試行の回数の上限
+RETRY_AFTER_SPREAD = 0.2  # Retry-After に、最大でこの割合を上乗せして待つ(再試行の集中を避ける)
 JOURNAL_QUEUE_INTERVAL = 1.0  # コメントの遅延取得の間隔(秒)。開いているチケットは別に、すぐ取得する
 SYNC_NOW_MIN_INTERVAL = 30.0  # 「今すぐ同期」の最短間隔(秒)。連打してもサーバーへは送らない
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -473,7 +476,9 @@ class ServerWorker(threading.Thread):
             delay = BACKOFF_MAX  # キーの誤りなどはすぐには直らないので、長めに待つ
         delay = jittered(delay)  # 障害から回復したとき、全員が同時に問い合わせないようにする
         if err.retry_after is not None:
-            delay = max(delay, err.retry_after)  # サーバーが指定した時間は必ず待つ(流量制限)
+            # サーバーが指定した時間は必ず待つ(流量制限)。多数のクライアントが同じ時刻に
+            # 再試行しないよう、指定より短くならない範囲でランダムに少し長く待つ
+            delay = max(delay, err.retry_after * random.uniform(1.0, 1.0 + RETRY_AFTER_SPREAD))
         self.sched.backoff_until = time.monotonic() + delay
         log.warning("sync error on server %s: %s; retrying in %ss", self.server_id, err, delay)
         ServerStore(self.db).update_fields(self.server_id, last_error=err.code.value)
@@ -508,10 +513,42 @@ class SyncManager:
         self._active = True
         self._visible = True
         self._open: tuple[int | None, int | None] = (None, None)
+        self._retry_gen = 0  # restart の再試行の世代。変わったら、待っている再試行は取り消し
 
-    def restart(self) -> None:
-        """同期スレッドを作り直す。"""
-        self.stop_all()
+    def restart(self) -> bool:
+        """同期スレッドを作り直す。旧スレッドが止まりきらなかったときは、並行して動かさないよう
+        起動を見送り False を返す(止まるのを待って、自動で再試行する)。"""
+        with self._lock:
+            self._retry_gen += 1  # 待っている再試行があれば取り消す
+            gen = self._retry_gen
+        if not self._stop_workers():
+            log.warning("sync restart postponed: old sync threads are still running")
+            self._schedule_retry(gen, RESTART_RETRY_MAX)
+            return False
+        self._start_workers()
+        return True
+
+    def _schedule_retry(self, gen: int, left: int) -> None:
+        if left <= 0:
+            log.error("sync restart given up: old sync threads did not stop")
+            return
+        t = threading.Timer(RESTART_RETRY_INTERVAL, self._retry, (gen, left - 1))
+        t.daemon = True
+        t.start()
+
+    def _retry(self, gen: int, left: int) -> None:
+        with self._lock:
+            if gen != self._retry_gen:  # 新しい restart や stop_all で取り消された
+                return
+        if self._stop_workers():
+            with self._lock:
+                if gen != self._retry_gen:
+                    return
+            self._start_workers()
+        else:
+            self._schedule_retry(gen, left)
+
+    def _start_workers(self) -> None:
         with self._lock:
             for server in ServerStore(self.db).list(enabled_only=True):
                 w = ServerWorker(self.db, server.server_id, self.bus)
@@ -531,6 +568,11 @@ class SyncManager:
         True を返したときはスレッドが終わっているので、この後にDBへ書き込まれることはない。
         """
         with self._lock:
+            self._retry_gen += 1  # 待っている restart の再試行は、取り消す(止めた後に起動しない)
+        return self._stop_workers(timeout)
+
+    def _stop_workers(self, timeout: float = 5.0) -> bool:
+        with self._lock:
             workers = list(self._workers.values())
             self._workers.clear()
         for w in workers:
@@ -542,6 +584,9 @@ class SyncManager:
             if w.is_alive():
                 log.warning("sync thread %s did not stop in time", w.name)
                 stopped = False
+                with self._lock:
+                    # 止まりきらないものは管理に残す(見失って、新しいスレッドと並行して動かさない)
+                    self._workers.setdefault(w.server_id, w)
         return stopped
 
     def _worker(self, server_id: int) -> ServerWorker | None:

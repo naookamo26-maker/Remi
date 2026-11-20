@@ -22,7 +22,18 @@ Event = dict[str, Any]
 class Subscription:
     def __init__(self, maxsize: int = 1000) -> None:
         self.queue: queue.Queue[Event] = queue.Queue(maxsize)
-        self.overflowed = False
+
+    def overflow(self) -> None:
+        """あふれたとき: 溜まった古いイベントをすべて捨て、全体の再読み込み(resync)だけを残す。"""
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
+        try:
+            self.queue.put_nowait({"type": "resync"})
+        except queue.Full:  # 空にした直後に他のスレッドが詰めた。その中身は古いので、もう一度空にする
+            self.overflow()
 
     def get(self, timeout: float | None = None) -> Event | None:
         try:
@@ -76,8 +87,8 @@ class EventBus:
             try:
                 sub.queue.put_nowait(event)
             except queue.Full:
-                # 画面が長く止まっている: 古いイベントを捨て、全体の再読み込みを促す
-                sub.overflowed = True
+                # 画面が長く止まっている: 古いイベントを捨て、全体の再読み込みだけを残す
+                sub.overflow()
         for cb in callbacks:
             try:
                 cb(event)

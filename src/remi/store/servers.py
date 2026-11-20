@@ -36,6 +36,8 @@ class Server:
     show_all_projects: bool = False  # チケットのないプロジェクトもツリーに表示する
     # 表示するチケットの既定(プロジェクトで設定していなければこれを使う)。None はすべて
     visible_relations: list[str] | None = None
+    # マイルストーンを表示するかの既定(プロジェクトの設定が「継承」のときに使う)
+    watch_versions: bool = False
 
     def issue_url(self, issue_id: int) -> str:
         return f"{self.url}/issues/{issue_id}"
@@ -53,7 +55,7 @@ _COLUMNS = (
     "name", "url", "enabled", "poll_interval", "notify_enabled", "text_format", "proxy_mode",
     "proxy_url", "my_user_id", "my_login", "my_name", "my_group_ids", "last_sync_cursor",
     "initial_sync_done", "last_synced_at", "last_error", "sort_order", "show_all_projects",
-    "visible_relations",
+    "visible_relations", "watch_versions",
 )
 
 
@@ -79,6 +81,7 @@ def _from_row(row) -> Server:
         sort_order=row["sort_order"],
         show_all_projects=bool(row["show_all_projects"]),
         visible_relations=json.loads(row["visible_relations"]) if row["visible_relations"] else None,
+        watch_versions=bool(row["watch_versions"]),
     )
 
 
@@ -88,6 +91,7 @@ def _values(s: Server) -> list:
         s.proxy_mode, s.proxy_url, s.my_user_id, s.my_login, s.my_name, json.dumps(s.my_group_ids),
         s.last_sync_cursor, int(s.initial_sync_done), s.last_synced_at, s.last_error, s.sort_order,
         int(s.show_all_projects), json.dumps(s.visible_relations) if s.visible_relations is not None else None,
+        int(s.watch_versions),
     ]
 
 

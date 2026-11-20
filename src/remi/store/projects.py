@@ -14,8 +14,8 @@ PROJECT_STATUS_CLOSED = 5
 PROJECT_STATUS_ARCHIVED = 9
 
 SETTING_KEYS = ("notify", "watch_versions")
-# ルートでの既定値(None = サーバー設定に従う)
-ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_versions": False}
+# ルートでの既定値(None = サーバー設定に従う)。watch_versions(マイルストーンを表示する)は、サーバーの既定(servers.watch_versions)に従う
+ROOT_DEFAULTS: dict[str, bool | None] = {"notify": None, "watch_versions": None}
 
 
 @dataclass(frozen=True)
@@ -161,11 +161,14 @@ class ProjectStore:
 
     def effective_setting(self, server_id: int, project_id: int, key: str,
                           parents: dict[int, int | None] | None = None) -> bool | None:
-        """自分 → 祖先の順にたどり、最初に見つかった オン/オフ を返す。なければルートの既定値。"""
+        """自分 → 祖先の順にたどり、最初に見つかった オン/オフ を返す。なければサーバーの既定(通知は None)。"""
         for pid in [project_id, *self.ancestors(server_id, project_id, parents)]:
             v = self.get_setting(server_id, pid, key)
             if v is not None:
                 return v
+        if key == "watch_versions":
+            r = self.db.query_one("SELECT watch_versions FROM servers WHERE server_id = ?", (server_id,))
+            return bool(r[0]) if r else False
         return ROOT_DEFAULTS[key]
 
     def projects_with_setting(self, server_id: int, key: str) -> set[int]:

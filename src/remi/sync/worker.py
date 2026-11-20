@@ -151,7 +151,7 @@ class ServerWorker(threading.Thread):
             log.warning("server %s has no API key; worker not started", self.server_id)
             return False
         client = RedmineClient(server.url, key, proxy_mode=server.proxy_mode, proxy_url=server.proxy_url)
-        self.sync = ServerSync(self.db, self.server_id, client, self._retention())
+        self.sync = ServerSync(self.db, self.server_id, client)
         if self._stopping.is_set():
             client.cancel()  # 作る前に stop() が呼ばれていた
         settings = Settings(self.db)
@@ -290,9 +290,6 @@ class ServerWorker(threading.Thread):
         self.bus.publish("dataChanged", serverId=self.server_id, issueIds=[issue_id])
 
     # --- tick ----------------------------------------------------------------
-    def _retention(self) -> int:
-        return int(Settings(self.db).get("closed_retention_days"))
-
     def _interval(self, base: float) -> float:
         return base * (1 if self.active else INACTIVE_FACTOR)
 
@@ -334,7 +331,6 @@ class ServerWorker(threading.Thread):
     def _run_due(self, now: float) -> None:
         sync = self.sync
         assert sync is not None
-        sync.closed_retention_days = self._retention()
         server = sync.server
         did_network = False
 

@@ -106,3 +106,21 @@ def test_masters(db):
     ms.remember(s.server_id, "user", 7, "田中")
     ms.remember(s.server_id, "user", 7, "田中 一郎")
     assert ms.names(s.server_id, "user") == {7: "田中 一郎"}
+
+
+def test_watch_versions_inherits_server_default(db):
+    """プロジェクトの「マイルストーンを表示する」は、親 → サーバーの既定の順に継承する。"""
+    from remi.store.projects import ProjectStore
+
+    servers = ServerStore(db)
+    sid = servers.save(Server(name="S", url="http://s"), api_key="k").server_id
+    projects = ProjectStore(db)
+    projects.replace_all(sid, [{"id": 1, "name": "親"}, {"id": 2, "name": "子", "parent": {"id": 1}},
+                               {"id": 3, "name": "別"}])
+    assert projects.projects_with_setting(sid, "watch_versions") == set()  # サーバーの既定はオフ
+    servers.update_fields(sid, watch_versions=True)
+    assert projects.projects_with_setting(sid, "watch_versions") == {1, 2, 3}
+    projects.set_setting(sid, 1, "watch_versions", False)  # 親でオフにすると、子もオフ(サーバーの既定より優先)
+    assert projects.projects_with_setting(sid, "watch_versions") == {3}
+    projects.set_setting(sid, 2, "watch_versions", True)
+    assert projects.projects_with_setting(sid, "watch_versions") == {2, 3}

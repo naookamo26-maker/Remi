@@ -83,12 +83,10 @@ class SyncResult:
 
 
 class ServerSync:
-    def __init__(self, db: Database, server_id: int, client: RedmineClient,
-                 closed_retention_days: int = 7) -> None:
+    def __init__(self, db: Database, server_id: int, client: RedmineClient) -> None:
         self.db = db
         self.server_id = server_id
         self.client = client
-        self.closed_retention_days = closed_retention_days
         self.servers = ServerStore(db)
         self.issues = IssueStore(db)
         self.projects = ProjectStore(db)
@@ -122,19 +120,12 @@ class ServerSync:
     def _closed_ids(self) -> set[int]:
         return self.masters.closed_status_ids(self.server_id)
 
-    def _is_monitored(self, data: dict[str, Any], flags: int, closed_ids: set[int],
-                      now: datetime | None = None) -> bool:
+    def _is_monitored(self, data: dict[str, Any], flags: int, closed_ids: set[int]) -> bool:
+        """自分と関係があり、クローズされていないチケットだけを監視する(クローズ済みは保存するが、監視はしない)。"""
         if not flags:
             return False
         status = data.get("status") or {}
-        closed = bool(status.get("is_closed")) or status.get("id") in closed_ids
-        if not closed:
-            return True
-        closed_on = parse_ts(data.get("closed_on") or data.get("updated_on"))
-        if closed_on is None:
-            return False
-        now = now or datetime.now(UTC)
-        return now - closed_on <= timedelta(days=self.closed_retention_days)
+        return not (bool(status.get("is_closed")) or status.get("id") in closed_ids)
 
     def _fetch_lists(self, extra: dict[str, Any]) -> tuple[dict[int, dict], dict[int, int]]:
         """担当・ウォッチ・(作成)のクエリを別々に呼び、IDで統合する(設計書 §4.2)。"""
@@ -361,15 +352,8 @@ class ServerSync:
             if row is None or row.relation_flags != flags[iid] or not row.monitored:
                 self._store_issue(data, flags[iid], closed_ids, baseline=self.server.last_sync_cursor)
                 result.changed_issue_ids.add(iid)
-        now = datetime.now(UTC)
-        drop = []
-        for iid in self.issues.monitored_ids(self.server_id) - set(issues):
-            row = self.issues.get(self.server_id, iid)
-            closed = row.status_id in closed_ids
-            closed_on = parse_ts(row.closed_on or row.updated_on)
-            if closed and closed_on and now - closed_on <= timedelta(days=self.closed_retention_days):
-                continue  # クローズ後の保持期間内
-            drop.append(iid)
+        # 監視対象で、未完了の一覧に出なくなったもの: 関係が外れたか、クローズされた(クローズは差分同期で監視対象から外れる)
+        drop = list(self.issues.monitored_ids(self.server_id) - set(issues))
         if drop:
             self.issues.set_monitored(self.server_id, drop, False)
             result.unmonitored_issue_ids |= set(drop)

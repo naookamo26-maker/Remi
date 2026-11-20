@@ -14,7 +14,6 @@ DEFAULTS: dict[str, Any] = {
     "autostart": False,
     "show_closed": False,
     "version_show_closed": True,  # マイルストーン(バージョン)を開いたときの「クローズ済みも表示」。一覧とは別
-    "closed_retention_days": 7,
     "unread_first": True,
     "allow_external_images": False,
     "image_cache_limit_mb": 500,

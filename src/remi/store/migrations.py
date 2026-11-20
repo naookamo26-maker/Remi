@@ -244,6 +244,13 @@ V7 = """
 UPDATE servers SET initial_sync_done = 0
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7]
+# V8: マイルストーンを表示するかの、サーバーごとの既定(プロジェクトの設定が「継承」のときに使う。初期値はオフ)。
+# クローズ済みを残す日数の設定は廃止した(クローズ済みは「クローズ済みも表示」のときだけ見える)ので、保存していた値を消す
+V8 = """
+ALTER TABLE servers ADD COLUMN watch_versions INTEGER NOT NULL DEFAULT 0;
+DELETE FROM settings WHERE key = 'closed_retention_days'
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7, V8]
 
 SCHEMA_VERSION = len(MIGRATIONS)

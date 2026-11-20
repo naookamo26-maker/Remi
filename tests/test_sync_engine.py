@@ -122,21 +122,26 @@ def test_reconcile_unmonitors_unassigned(setup, fake):
     assert {i.issue_id for i in issues.list_issues([sid])} == {1}
 
 
-def test_closed_issue_retention(setup, fake):
+def test_closed_issue_is_not_monitored_but_kept(setup, fake):
+    """クローズしたチケットは、すぐ監視対象から外れる(一覧には出ない)が、保存は残り、「クローズ済みも表示」で見える。再オープンで戻る。"""
     sync, issues, sid = setup
     fake.add_issue(1, 2, "担当", updated_on=ts(60))
     sync.sync_changes()
+    assert issues.get(sid, 1).monitored
     fake.set_status(1, 5)
     sync.sync_changes()
-    assert issues.get(sid, 1).monitored  # 7日以内は残る
-    fake.issues[1]["closed_on"] = ts(60 * 24 * 8)
-    fake.issues[1]["updated_on"] = ts(0)
-    sync.sync_changes()
     assert not issues.get(sid, 1).monitored
+    assert {i.issue_id for i in issues.list_issues([sid])} == set()
+    assert {i.issue_id for i in issues.list_issues([sid], include_unmonitored=True)} == {1}
+    sync.reconcile()  # 未完了の一覧に出ないだけでは、消えない
+    assert issues.get(sid, 1) is not None
+    fake.set_status(1, 2)  # 再オープン
+    sync.sync_changes()
+    assert issues.get(sid, 1).monitored
 
 
 def test_initial_sync_imports_old_closed_issues(setup, fake):
-    """アプリを使う前にクローズされたチケットも取り込む。保持期間を過ぎているので一覧には出ず、「クローズ済みを表示」で見える。"""
+    """アプリを使う前にクローズされたチケットも取り込む。クローズ済みは監視しないので一覧には出ず、「クローズ済みも表示」で見える。"""
     sync, issues, sid = setup
     fake.add_issue(1, 2, "未完了", updated_on=ts(60))
     fake.add_issue(2, 2, "昔クローズ", status_id=5, updated_on=ts(60 * 24 * 100))
@@ -146,8 +151,8 @@ def test_initial_sync_imports_old_closed_issues(setup, fake):
     sync.sync_changes()
     assert issues.get(sid, 4) is None
     assert issues.get(sid, 2).monitored is False
-    assert issues.get(sid, 3).monitored is True
-    assert {i.issue_id for i in issues.list_issues([sid])} == {1, 3}
+    assert issues.get(sid, 3).monitored is False
+    assert {i.issue_id for i in issues.list_issues([sid])} == {1}
     assert {i.issue_id for i in issues.list_issues([sid], include_unmonitored=True)} == {1, 2, 3}
     # 開いたときにコメントを取得できる(既読扱い。通知は出ない)
     assert sync.fetch_journals(2).new_comments == []

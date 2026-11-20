@@ -17,7 +17,7 @@ function radio(name, value, label, checked) {
 
 export function serverDialog(app, server = null) {
   const s = server || { name: "", url: "", textFormat: "common_mark", pollInterval: 180, notifyEnabled: true,
-    proxyMode: "system", proxyUrl: "", enabled: true };
+    proxyMode: "system", proxyUrl: "", enabled: true, watchVersions: false };
   const group = `g${++uid}`;
   const name = h("input", { type: "text", value: s.name, autocomplete: "off" });
   const url = h("input", { type: "url", value: s.url, placeholder: "https://redmine.example.com", autocomplete: "off" });
@@ -34,6 +34,7 @@ export function serverDialog(app, server = null) {
   const poll = h("select", {}, [180, 300].map((sec) =>
     h("option", { value: sec, selected: sec === s.pollInterval }, t("server.minutes", { count: sec / 60 }))));
   const notify = h("input", { type: "checkbox", checked: s.notifyEnabled });
+  const versions = h("input", { type: "checkbox", checked: !!s.watchVersions });
   const proxySystem = h("input", { type: "radio", name: `${group}-proxy`, checked: s.proxyMode !== "manual" });
   const proxyManual = h("input", { type: "radio", name: `${group}-proxy`, checked: s.proxyMode === "manual" });
   const proxyUrl = h("input", { type: "text", value: s.proxyUrl || "", placeholder: "http://proxy.example.com:8080",
@@ -92,7 +93,7 @@ export function serverDialog(app, server = null) {
       serverId: server?.serverId ?? null, name: name.value.trim(), url: url.value.trim(),
       apiKey: key.value.trim() || null,
       textFormat: formats.map((r) => r.querySelector("input")).find((i) => i.checked).value,
-      pollInterval: Number(poll.value), notifyEnabled: notify.checked, enabled: enabled.checked,
+      pollInterval: Number(poll.value), notifyEnabled: notify.checked, watchVersions: versions.checked, enabled: enabled.checked,
       proxyMode: proxyManual.checked ? "manual" : "system", proxyUrl: proxyUrl.value.trim() || null,
     };
     if (probe) Object.assign(data, { userId: probe.userId, login: probe.login, userName: probe.name, groupIds: probe.groupIds });
@@ -117,6 +118,7 @@ export function serverDialog(app, server = null) {
       h("div", { class: "form" },
         field(t("server.pollInterval"), poll),
         h("span", { class: "label" }, t("server.notifications")), h("label", {}, notify, t("server.notifyNew")),
+        h("span", { class: "label" }, t("server.milestones")), h("label", {}, versions, t("server.showVersions")),
         h("span", { class: "label" }, t("server.proxy")),
         h("div", { class: "inline" }, h("label", {}, proxySystem, t("server.proxySystem")),
           h("label", {}, proxyManual, t("server.proxyManual")), proxyUrl))),
@@ -146,20 +148,17 @@ export function settingsDialog(app) {
     const s = app.settings;
     const note = h("div", { class: "help", hidden: true }, t("settings.languageNote"));
     const langs = [["system", t("settings.followSystem")], ...Object.entries(app.boot.languages)];
-    const retention = h("input", { type: "number", min: "0", max: "365", value: s.closed_retention_days,
-      onChange: () => set("closed_retention_days", Math.max(0, Math.min(365, Number(retention.value) || 0))) });
     return h("div", { class: "form" },
       field(t("settings.language"), select("language", langs, () => { note.hidden = false; })), note,
       field(t("settings.appearance"), select("theme", [["system", t("settings.followSystem")], ["light", t("settings.light")], ["dark", t("settings.dark")]])),
       field(t("settings.myComments"), select("mine_side", [["right", t("settings.right")], ["left", t("settings.left")]])),
       h("span", { class: "label" }, t("settings.notifications")), check("notify_enabled", t("settings.showNotifications")),
       h("span", { class: "label" }, t("settings.startup")), check("autostart", t("settings.autostart")),
-      field(t("settings.retention"), retention, t("settings.retentionHelp")),
       h("span", { class: "label" }, t("settings.images")), check("allow_external_images", t("settings.externalImages")),
       field(t("settings.redmineOpenIn"), select("redmine_open_in", [...(app.boot.tabsSupported ? [["tab", t("settings.openInTab")]] : []),
         ["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
         // Windows でタブを使えなかったときは、その理由を出す(原因を調べられるように)
-        [t("settings.redmineOpenInHelp"), app.boot.tabsError ? ` ${t("settings.tabsError", { reason: app.boot.tabsError })}` : ""].join("")));
+        app.boot.tabsError ? t("settings.tabsError", { reason: app.boot.tabsError }) : null));
   };
 
   const servers = () => {

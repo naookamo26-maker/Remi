@@ -36,8 +36,8 @@ export class IssueList {
     // 関係での絞り込み(すべて / 担当 / ウォッチ / 作成)
     this.relationButtons = ["all", "assigned", "watching", "authored"].map((value) =>
       h("button", { type: "button", dataset: { value }, "aria-pressed": "false",
-        // ツリーの件数・未読数も絞り込みに合わせるので、ツリーも読み直す
-        onClick: () => app.saveSetting("relation_filter", value).then(() => Promise.all([this.refresh(), app.tree.refresh()])) },
+        // 絞り込みは、真ん中の一覧だけに効く(ツリーの件数・未読数は変えない)
+        onClick: () => app.saveSetting("relation_filter", value).then(() => this.refresh()) },
         t(`list.filter.${value}`)));
     this.relationGroup = h("div", { class: "segmented", role: "group", "aria-label": t("list.filter.label") }, this.relationButtons);
     this.el = h("ul", { class: "issue-list", role: "listbox", "aria-label": t("list.label"), tabindex: "0",

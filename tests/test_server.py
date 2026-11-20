@@ -266,13 +266,14 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     tray = Tray(app.ctx, on_open=lambda: None, on_settings=lambda: None, on_sync=lambda: None, on_quit=lambda: None)
     app.rpc("setProjectSetting", serverId=sid, projectId=1, key="visible_relations", value=None)
     app.rpc("setProjectSetting", serverId=sid, projectId=2, key="visible_relations", value=None)
-    app.rpc("setSetting", key="relation_filter", value="watching")
+    # 一覧の絞り込みボタンは、真ん中の一覧だけに効く。ツリーの件数・未読数とトレイの未読数は変わらない
     assert ids(relation="watching") == [11, 20, 30]
-    server = app.rpc("getTree")["servers"][0]
-    assert server["count"] == 3 and server["unread"] == 1 and tray.unread_total() == 1
+    for value in ("watching", "assigned", "all"):
+        app.rpc("setSetting", key="relation_filter", value=value)
+        server = app.rpc("getTree")["servers"][0]
+        assert server["count"] == 5 and server["unread"] == 1 and tray.unread_total() == 1, value
     app.rpc("setSetting", key="relation_filter", value="assigned")
-    server = app.rpc("getTree")["servers"][0]
-    assert server["count"] == 2 and server["unread"] == 0 and tray.unread_total() == 0
+    assert ids() == [10, 11, 13, 20, 30]  # relation を渡さない一覧は、絞らない
     # 絞り込みは、各プロジェクトの表示するチケットの中で効く(表示しない関係のチケットは出さない)
     app.rpc("setProjectSetting", serverId=sid, projectId=3, key="visible_relations", value=["assigned"])
     app.rpc("setSetting", key="relation_filter", value="watching")

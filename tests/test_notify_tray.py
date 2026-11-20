@@ -95,7 +95,7 @@ def test_snooze(db):
     assert len(backend.shown) == 1
 
 
-def test_follows_visible_relations_and_filter(db):
+def test_follows_visible_relations_not_the_list_filter(db):
     from remi.store.issues import REL_ASSIGNED, REL_WATCHING
 
     ctx, sid, n, backend, api, opened = setup(db)
@@ -107,9 +107,10 @@ def test_follows_visible_relations_and_filter(db):
     [shown] = backend.shown
     assert shown.issue_id == 5 and "ほか" not in shown.body
     ctx.projects.set_visible_relations(sid, 1, None)
+    # 真ん中の一覧の絞り込みボタンは、通知に影響しない
     ctx.settings.set("relation_filter", "watching")
     ctx.bus.publish("newComments", serverId=sid, comments=[comment(5)])
-    assert len(backend.shown) == 1
+    assert len(backend.shown) == 2 and backend.shown[-1].issue_id == 5
     ctx.bus.publish("newComments", serverId=sid, comments=[comment(6)])
     assert backend.shown[-1].issue_id == 6
 

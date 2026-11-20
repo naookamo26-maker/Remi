@@ -22,7 +22,7 @@ DEFAULTS: dict[str, Any] = {
     "window_geometry": None,
     "splitter_state": None,
     "tree_collapsed": [],
-    "redmine_open_in": "app",  # app / browser(設計書 §5.4)
+    "redmine_open_in": "tab",  # tab / app(別のウィンドウ) / browser(設計書 §5.4)。タブにできない環境では、別のウィンドウで開く
     "issue_details_open": False,  # 会話ビューのヘッダで「詳細」(ほかの項目)を開いているか
     "relation_filter": "all",  # 一覧の絞り込み: all / assigned / watching / authored
     # 「すべてのプロジェクトを表示」はサーバーごと(servers.show_all_projects)、

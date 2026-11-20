@@ -34,12 +34,11 @@ class AppContext:
         self.versions = VersionStore(self.db)
 
     def relation_scope(self, relation_filter: str | None = None) -> RelationScope:
-        """一覧に出すチケット(プロジェクトごとの「表示するチケット」と、一覧の絞り込みボタン)。
+        """出すチケットの範囲(プロジェクトごとの「表示するチケット」)。
 
-        relation_filter を省略すると、保存してある絞り込み(設定 relation_filter)を使う。
+        relation_filter(一覧の絞り込みボタン)を渡すと、その中でさらに絞る。これは、真ん中の一覧だけに使う。
+        省略すると絞らない(ツリーの件数・未読数、トレイ、通知は、絞り込みボタンの影響を受けない)。
         """
-        if relation_filter is None:
-            relation_filter = self.settings.get("relation_filter")
         visible: dict[int, dict[int, list[str]]] = {}
         defaults: dict[int, list[str] | None] = {}
         in_use: set[str] = set()

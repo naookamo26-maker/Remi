@@ -83,6 +83,9 @@ body.chrome-page .tab-tools { height: 100%; box-sizing: border-box; border-top: 
 .tab-tools .btn { min-height: 28px; padding: 0 10px; font-size: 12px; flex: none; }
 /* Redmineのタブを選んでいる間は、本体の画面(ツリー・一覧・チケット)を隠す。ページは、Windows側の部品がこの下に広がる */
 body.browse .layout { display: none; }
+/* 重ねて表示する要素(設定・サーバーの追加などのダイアログ、メニュー、画像の拡大、通知)も隠す。
+   本体の画面が細くなるので、残ると、タブの列の上に残骸が出る。「Remi」のタブに戻ると、そのまま戻る */
+body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important; }
 .pane { display: flex; flex-direction: column; min-width: 0; height: 100%; }
 /* ツリーと一覧の幅は、利用者が仕切りで変えたとき(とウィンドウが狭すぎるとき)以外は変わらない。
    会話ペインは残りの幅を使う。基準の幅を 0 にして、表示中のチケットの内容(長い行・表など)で

@@ -190,6 +190,7 @@ class ServerWorker(threading.Thread):
                 self.sched.manual_sync_at = now
                 if now - self.sched.metadata_at >= MANUAL_METADATA_MIN_AGE:
                     self.sched.metadata = 0
+                self.sched.reconcile = 0  # 関係が外れたチケットの検出も、すぐ行う(担当を渡した直後に押したとき)
                 # 同期している間、画面の状態欄に「同期しています…」を出す(受け付けたときだけ。tick の後で消す)
                 self.bus.set_activity(self.server_id, "sync", True)
             self.sched.changes = 0
@@ -369,6 +370,10 @@ class ServerWorker(threading.Thread):
                 if iid not in self.sched.queue:
                     self._enqueue(iid)
             self._emit(result)
+            # 担当替え・ウォッチ解除・クローズは差分に出ないことがある。件数が違うときだけ、すぐ全件を突き合わせる
+            if sync.count_mismatch():
+                self._emit(sync.reconcile())
+                self.sched.reconcile = now + jittered(RECONCILE_INTERVAL)
             self.sched.changes = now + jittered(self._interval(server.poll_interval))
             did_network = True
         if now >= self.sched.versions:

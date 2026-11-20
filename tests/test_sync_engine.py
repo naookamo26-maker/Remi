@@ -173,6 +173,29 @@ def test_purge_stale_keeps_closed_issues(setup, fake):
     assert issues.get(sid, 2) is None
 
 
+def test_count_mismatch_notices_reassigned_issue(setup, fake):
+    """担当替えは差分に出ない。件数の違いで気づき、突き合わせで監視対象から外す。直らない同じ食い違いは繰り返さない。"""
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "担当", updated_on=ts(60))
+    fake.add_issue(2, 2, "担当2", updated_on=ts(60))
+    fake.add_issue(3, 2, "ウォッチ", assigned_to=7, watchers={ME}, updated_on=ts(60))
+    sync.sync_changes()
+    assert issues.monitored_relation_counts(sid) == (2, 1)
+    assert sync.count_mismatch() is False
+    fake.issues[2]["assigned_to"] = {"id": 7, "name": "田中"}  # 担当を渡した
+    fake.issues[2]["updated_on"] = ts(0)
+    sync.sync_changes()
+    assert issues.get(sid, 2).monitored  # 差分には出ない
+    assert sync.count_mismatch() is True
+    assert sync.count_mismatch() is False  # 突き合わせる前に、もう一度確かめても繰り返さない
+    sync.reconcile()
+    assert not issues.get(sid, 2).monitored
+    assert sync.count_mismatch() is False
+    # 別の食い違いが起きたら、また気づく
+    fake.watchers[3] = set()
+    assert sync.count_mismatch() is True
+
+
 def test_detect_deleted(setup, fake):
     sync, issues, sid = setup
     fake.add_issue(1, 2, "担当", updated_on=ts(60))

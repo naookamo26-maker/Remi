@@ -114,3 +114,26 @@ def test_title_bar_follows_the_app_theme_for_every_window(monkeypatch):
     for handler in new.events.shown.handlers:
         handler()
     assert calls == [(4, True)]
+
+
+def test_title_bar_is_applied_again_and_again(monkeypatch):
+    """タイトルバーの色が、しばらくして既定の色に戻っても、付け直す(設定しているなら、同じ値を渡すだけ)。"""
+    from remi import app as app_module
+
+    calls = []
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+    monkeypatch.setattr(app_module.windows, "set_dark_title_bar", lambda hwnd, dark: calls.append((hwnd, dark)))
+    w = make()
+    w.window.native = FakeNative(1)
+    w._dark = lambda: True
+    ticks = []
+
+    def fake_sleep(seconds):
+        ticks.append(seconds)
+        if len(ticks) == 3:  # 3回目の待ちのあとで終わる
+            w._quitting = True
+
+    monkeypatch.setattr(app_module.time, "sleep", fake_sleep)
+    w._keep_title_bar()
+    assert ticks == [w.TITLE_BAR_INTERVAL] * 3
+    assert (1, True) in calls and len([c for c in calls if c[0] == 1]) >= 3

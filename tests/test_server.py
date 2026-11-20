@@ -421,10 +421,12 @@ def test_write_permissions(app, fake):
 
     # コメントだけできるロール
     assert perms(10) == {"editFields": False, "changeStatus": False, "comment": True, "privateNotes": False,
-                         "attach": True, "editNotes": "none", "reason": None}
+                         "attach": True, "editNotes": "none", "reason": None, "assignee": True,
+                         "subtasks": False, "watchAdd": False, "watchRemove": False}
     # 終了したプロジェクトには書き込めない
     assert perms(20) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                         "attach": False, "editNotes": "none", "reason": "project_closed"}
+                         "attach": False, "editNotes": "none", "reason": "project_closed", "assignee": False,
+                         "subtasks": False, "watchAdd": False, "watchRemove": False}
     # メンバーでない(権限が分からない)ときは制限しない
     assert perms(30)["editFields"] and perms(30)["comment"]
     # ただし他の人のコメントまで編集できるとはしない(自分のコメントだけ「⋯」から操作できる)
@@ -435,7 +437,8 @@ def test_write_permissions(app, fake):
     fake.my_roles = {1: [3]}
     app.api._role_perms.clear()
     assert perms(10) == {"editFields": False, "changeStatus": False, "comment": False, "privateNotes": False,
-                         "attach": False, "editNotes": "none", "reason": "no_permission"}
+                         "attach": False, "editNotes": "none", "reason": "no_permission", "assignee": True,
+                         "subtasks": False, "watchAdd": False, "watchRemove": False}
     fake.my_roles = {1: [3, 4]}
     app.api._my_roles.clear()
     assert perms(10)["reason"] is None
@@ -810,6 +813,37 @@ def test_versions_api_list_tree_and_read(app, fake):
         return any(p["versions"] or any_versions(p["children"]) for p in nodes)
     assert wait_until(lambda: not any_versions(app.rpc("getTree")["servers"][0]["projects"]))
     assert app.rpc("getTree")["servers"][0]["projects"][0]["children"] == []
+
+
+def test_fields_follow_the_tracker_and_role_settings(app, fake):
+    """Redmineで非表示にした標準項目は出さない。親チケット・ウォッチの変更には、その権限が要る。"""
+    fake.add_project(1, "A")
+    fake.members[1] = [ME]
+    fake.add_issue(10, 1, "x")
+    fake.my_roles = {1: [3]}
+    fake.roles = {3: ["view_issues", "edit_issues", "add_issue_notes", "add_issue_watchers"]}
+    sid = _register(app, fake)
+    assert wait_until(lambda: app.ctx.issues.get(sid, 10))
+    keys = lambda: [x["key"] for x in app.rpc("getIssueDetails", serverId=sid, issueId=10)["fields"]]  # noqa: E731
+    perms = lambda: app.rpc("getEditOptions", serverId=sid, issueId=10)["permissions"]  # noqa: E731
+
+    # トラッカーの設定が分からない(古いRedmine)ときは、すべて出す
+    assert "estimated_hours" in keys() and perms()["assignee"] is True
+    # トラッカーの標準項目を絞ると、使わない項目は出ない(トラッカー自体は常に出る)
+    fake.trackers[0]["enabled_standard_fields"] = ["start_date", "due_date", "done_ratio"]
+    app.api._tracker_fields.clear()
+    assert keys() == ["tracker_id", "start_date", "due_date", "done_ratio"]
+    assert perms()["assignee"] is False  # 担当者を使わないトラッカー
+    fake.trackers[0]["enabled_standard_fields"] = ["assigned_to_id", "parent_issue_id"]
+    app.api._tracker_fields.clear()
+    assert keys() == ["tracker_id", "parent_issue_id"] and perms()["assignee"] is True
+    # 親チケットの変更は manage_subtasks、ウォッチの追加・解除は add_/delete_issue_watchers
+    p = perms()
+    assert (p["subtasks"], p["watchAdd"], p["watchRemove"]) == (False, True, False)
+    fake.roles = {3: ["view_issues", "edit_issues", "manage_subtasks", "delete_issue_watchers"]}
+    app.api._role_perms.clear()
+    p = perms()
+    assert (p["subtasks"], p["watchAdd"], p["watchRemove"]) == (True, False, True)
 
 
 def test_issue_details_and_update(app, fake):

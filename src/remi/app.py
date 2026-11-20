@@ -6,6 +6,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 import webbrowser
 
 from remi import APP_NAME, APP_USER_MODEL_ID, __version__
@@ -63,8 +64,10 @@ class WebviewWindow:
         if self.start_hidden:
             self.sync.set_visible(False)
         self.window.events.closing += self._on_closing
-        self.window.events.shown += lambda: self.apply_theme(self.ctx.settings.get("theme"))
+        self.window.events.shown += lambda: self.apply_theme("")
         gui = "edgechromium" if sys.platform == "win32" else None
+        if sys.platform == "win32":
+            threading.Thread(target=self._keep_title_bar, name="title-bar", daemon=True).start()
         # Redmineのページのログイン状態を残すため、WebView2のデータを保存する
         storage = data_dir() / "webview"
         storage.mkdir(parents=True, exist_ok=True)
@@ -101,6 +104,7 @@ class WebviewWindow:
             self.window.restore()
             self.sync.set_visible(True)
             self._show_redmine_window()
+            self.apply_theme("")  # 隠している間に戻った色を付け直す
 
     def hide(self) -> None:
         if self.window is not None:
@@ -264,6 +268,22 @@ class WebviewWindow:
             return
         for w in (self.window, *self._redmine_windows()):
             self._set_title_bar(w)
+
+    TITLE_BAR_INTERVAL = 2.0  # タイトルバーの色を確かめ直す間隔(秒)
+
+    def _keep_title_bar(self) -> None:
+        """タイトルバーの色を、定期的に付け直す。
+
+        ウィンドウの色の設定は、しばらく使わなかったり、隠して出し直したり、ウィンドウが作り直されたりすると、
+        Windows 側で既定の色に戻ることがある。戻っても気づけないので、設定していれば何も起きない(同じ値を渡すだけ)
+        付け直しを続ける。システムの色に従う設定のとき、システムの色の切り替えにも追従する。
+        """
+        while not self._quitting:
+            time.sleep(self.TITLE_BAR_INTERVAL)
+            try:
+                self.apply_theme("")
+            except Exception:  # noqa: BLE001 - 色が付け直せなくても、アプリは動かし続ける
+                log.debug("could not refresh the title bar", exc_info=True)
 
     def _set_title_bar(self, w) -> None:
         if w is None:

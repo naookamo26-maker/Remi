@@ -62,6 +62,7 @@ export class IssueHeader {
         call("setWatching", { serverId: d.serverId, issueId: d.issueId, watching: !d.watching })
           .catch((e) => { watchBtn.disabled = false; toast(t(`errors.${e.code}`)); });
       } }, icon("star"));
+    this.watchBtn = watchBtn;
     /** 書き込めないときの説明(選択肢を読み込んでから表示する) */
     this.readOnlyNote = h("span", { class: "read-only-note", hidden: true });
     /** 選択肢(ステータス・担当者など)をRedmineから読み込んでいる間の表示 */
@@ -131,7 +132,9 @@ export class IssueHeader {
     box.replaceChildren();
     for (const f of det.fields) {
       const label = f.label || t(FIELD_LABELS[f.key]);
-      const reason = denied || (!f.editable ? t(`conv.${f.reason === "custom_field_unknown" ? "cfUnknown" : "cfUnsupported"}`) : null);
+      const reason = denied
+        || (f.key === "parent_issue_id" && !p.subtasks ? t("conv.noSubtaskPermission") : null)
+        || (!f.editable ? t(`conv.${f.reason === "custom_field_unknown" ? "cfUnknown" : "cfUnsupported"}`) : null);
       box.append(h("label", { class: "detail" }, h("span", { class: "name" }, label), this.detailInput(f, label, reason)));
     }
     if (!det.customFieldsKnown && det.fields.some((f) => f.key.startsWith("cf:"))) {
@@ -236,10 +239,18 @@ export class IssueHeader {
       priority_id: o.priorities.map((x) => [x.id, x.name]),
     };
     const p = o.permissions;
+    // ウォッチの追加・解除にも権限が要る(add_issue_watchers / delete_issue_watchers)
+    if (this.watchBtn) {
+      const watching = this.watchBtn.getAttribute("aria-pressed") === "true";
+      if (!(watching ? p.watchRemove : p.watchAdd)) {
+        this.watchBtn.disabled = true;
+        this.watchBtn.title = t("conv.noWatchPermission");
+      }
+    }
     // 書き込めない項目は、今の値だけを表示して操作できないようにする(理由はツールチップで示す)
     const denied = {
       status_id: !p.editFields ? this.deniedReason(p) : !p.changeStatus ? t("conv.noStatusTransition") : null,
-      assigned_to_id: !p.editFields ? this.deniedReason(p) : null,
+      assigned_to_id: !p.editFields ? this.deniedReason(p) : !p.assignee ? t("conv.assigneeDisabled") : null,
       priority_id: !p.editFields ? this.deniedReason(p) : null,
     };
     for (const [key, sel] of Object.entries(this.selects)) {

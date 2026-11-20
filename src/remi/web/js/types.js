@@ -191,6 +191,10 @@
  * @property {boolean} comment             コメントを書ける
  * @property {boolean} privateNotes        プライベートコメントにできる
  * @property {boolean} attach              ファイルを添付できる
+ * @property {boolean} assignee            担当者を使える(トラッカーの設定で使わない場合は false)
+ * @property {boolean} subtasks            親チケットを変えられる(manage_subtasks)
+ * @property {boolean} watchAdd            ウォッチを追加できる(add_issue_watchers)
+ * @property {boolean} watchRemove         ウォッチを解除できる(delete_issue_watchers)
  * @property {"all"|"own"|"none"} editNotes  コメントを編集・削除できる(すべて / 自分のものだけ / できない)
  * @property {"project_closed"|"no_permission"|null} reason  何も書き込めない理由
  */

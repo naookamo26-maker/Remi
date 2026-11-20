@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from remi import __version__
+from remi.api import client as redmine_client
 from remi.api.client import RedmineClient, normalize_url
 from remi.api.errors import ErrorCode, RedmineError
 from remi.api.probe import probe_server
@@ -47,7 +48,6 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "show_closed": lambda v: isinstance(v, bool),
     "version_show_closed": lambda v: isinstance(v, bool),
     "unread_first": lambda v: isinstance(v, bool),
-    "closed_retention_days": lambda v: isinstance(v, int) and 0 <= v <= 365,
     "allow_external_images": lambda v: isinstance(v, bool),
     "mine_side": lambda v: v in ("right", "left"),
     "pane_sizes": lambda v: isinstance(v, list) and len(v) <= 3 and all(isinstance(x, int | float) for x in v),
@@ -271,6 +271,7 @@ class RemiApi:
             "pollInterval": s.poll_interval, "notifyEnabled": s.notify_enabled, "textFormat": s.text_format,
             "proxyMode": s.proxy_mode, "proxyUrl": s.proxy_url, "myUserId": s.my_user_id, "myLogin": s.my_login,
             "myName": s.my_name, "lastError": s.last_error, "lastSyncedAt": s.last_synced_at,
+            "watchVersions": s.watch_versions,
         }
 
     @rpc
@@ -285,7 +286,8 @@ class RemiApi:
         if not key:
             raise RpcError("unauthorized")
         try:
-            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None, min_interval=0.2)
+            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None,
+                                 min_interval=redmine_client.PROBE_MIN_INTERVAL)
         except RedmineError as e:
             raise RpcError(e.code.value, e.detail) from e
         try:
@@ -339,6 +341,8 @@ class RemiApi:
                 raise RpcError("sync_busy")
         s.name, s.url, s.text_format, s.poll_interval = name, url, fmt, poll
         s.notify_enabled = bool(data.get("notifyEnabled", True))
+        versions_changed = existing is not None and s.watch_versions != bool(data.get("watchVersions", False))
+        s.watch_versions = bool(data.get("watchVersions", False))
         s.enabled = bool(data.get("enabled", True))
         s.proxy_mode, s.proxy_url = proxy_mode, (data.get("proxyUrl") or None)
         if user_id is not None:
@@ -355,6 +359,9 @@ class RemiApi:
                 self._clear_server_cache(s.server_id)
         finally:
             self._servers_changed()  # 止めた同期スレッドは、失敗しても必ず動かし直す
+        if versions_changed and self.sync is not None:
+            self.sync.sync_versions_now(s.server_id)  # マイルストーンの既定を変えたら、すぐ取得する(やめたときは、ツリーから消す)
+            self.ctx.bus.publish("projectSettingsChanged", serverId=s.server_id)
         return self._server_dict(s)
 
     def _clear_server_cache(self, server_id: int) -> None:

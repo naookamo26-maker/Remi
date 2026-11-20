@@ -164,9 +164,7 @@
   "menu.on": "オン",
   "menu.openInBrowser": "既定のブラウザで開く",
   "menu.openRedmine": "Redmineで開く",
-  "menu.showAllProjects": "すべてのプロジェクトを表示(このサーバー)",
-  "menu.visibleRelations": "表示するチケット…",
-  "menu.watchVersions": "未完了のバージョンをウォッチ",
+  "menu.showVersions": "マイルストーンを表示する",
   "notify.body": "{user}: {notes}",
   "notify.others": {
     "other": "ほか {count}件の新着コメント"
@@ -184,7 +182,7 @@
   "server.add": "登録",
   "server.addTitle": "サーバーの登録",
   "server.apiKey": "APIアクセスキー",
-  "server.apiKeyHelp": "Redmineの「個人設定 › APIアクセスキー」で確認できます。Windows資格情報マネージャーに保存します。",
+  "server.apiKeyHelp": "Redmineの「個人設定 › APIアクセスキー」で確認できます。",
   "server.connected": "接続できました。ユーザー: {name}(ID {id})· 所属グループ {groups}件 · 未完了のチケット: 担当 {assigned}件 / ウォッチ {watched}件",
   "server.connecting": "接続しています…",
   "server.editTitle": "サーバーの編集",
@@ -193,6 +191,7 @@
   "server.guessed": "最近の文章{n}件から {name} と推測しました。Redmineの「管理 › 設定 › 全般 › テキスト書式」と同じものを選んでください。",
   "server.keyUnchanged": "空欄のままなら、今のキーを使います",
   "server.markdown": "Markdown(CommonMark / GitHub風)",
+  "server.milestones": "マイルストーン",
   "server.minutes": {
     "other": "{count}分"
   },
@@ -206,6 +205,7 @@
   "server.proxyManual": "手動で指定",
   "server.proxySystem": "Windowsの設定に従う",
   "server.proxyUrl": "プロキシのURL",
+  "server.showVersions": "マイルストーンを表示する(プロジェクトの設定が「継承」のときの既定)",
   "server.syncAndNotify": "同期と通知",
   "server.test": "接続テスト",
   "server.textFormat": "テキスト書式",
@@ -230,9 +230,6 @@
   "settings.openInBrowser": "既定のブラウザ",
   "settings.openInTab": "Remiのタブ",
   "settings.redmineOpenIn": "Redmineのページを開く場所",
-  "settings.redmineOpenInHelp": "Remiのタブ・別のウィンドウでは、Redmineへのログインは最初の1回だけで済みます。Shift+クリックすると常に既定のブラウザで開きます。タブは、ウィンドウ全体のタブとして表示し、「別ウィンドウへ」で切り離せます。",
-  "settings.retention": "クローズ済みを残す日数",
-  "settings.retentionHelp": "クローズしたチケットを、この日数のあいだ一覧に残します。",
   "settings.right": "右",
   "settings.servers": "サーバー",
   "settings.showNotifications": "デスクトップ通知を表示する",

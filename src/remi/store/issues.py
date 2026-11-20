@@ -299,13 +299,15 @@ class IssueStore:
                       (utcnow(), server_id, issue_id))
 
     def purge_stale(self, days: int = 90) -> int:
-        """監視対象外で、長く開かれていないチケットのキャッシュを削除する。"""
+        """監視対象外で、長く開かれていないチケットのキャッシュを削除する。クローズ済みは残す(過去のチケットを見返せるように)。"""
         rows = self.db.query(
             "SELECT server_id, issue_id FROM issues i WHERE monitored = 0 AND "
             "COALESCE(last_opened_at, updated_on, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) "
             # ウォッチしているバージョンに含まれるチケットは残す(バージョンの一覧に出す)
             "AND NOT EXISTS (SELECT 1 FROM version_issues v WHERE v.server_id = i.server_id "
-            "AND v.issue_id = i.issue_id)",
+            "AND v.issue_id = i.issue_id) "
+            "AND NOT EXISTS (SELECT 1 FROM masters m WHERE m.server_id = i.server_id AND m.kind = 'status' "
+            "AND m.id = i.status_id AND json_extract(m.extra_json, '$.is_closed'))",
             (f"-{int(days)} days",),
         )
         by_server: dict[int, list[int]] = {}

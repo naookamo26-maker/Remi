@@ -228,3 +228,58 @@ def test_migrate_v6_merges_watch_authored_into_visible_relations(tmp_path):
         assert ServerStore(d).get(2).visible_relations is None
     finally:
         d.close_all()
+
+
+def test_migrate_v7_redoes_initial_sync_once(tmp_path):
+    """初回同期でクローズ済みも取得するようにしたので、使い始めている利用者も初回同期をやり直す(キャッシュは消さない)。"""
+    import sqlite3
+
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v6.db"
+    c = sqlite3.connect(p)
+    for sql in MIGRATIONS[:6]:
+        c.executescript(sql)
+    c.execute("PRAGMA user_version = 6")
+    c.execute("INSERT INTO servers(server_id, name, url, initial_sync_done, last_sync_cursor) "
+              "VALUES(1, 'S', 'http://s', 1, '2026-01-01T00:00:00Z')")
+    c.execute("INSERT INTO projects(server_id, project_id, parent_id, name) VALUES(1, 1, NULL, 'P')")
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.servers import ServerStore
+
+        assert d.schema_version() == SCHEMA_VERSION
+        assert ServerStore(d).get(1).initial_sync_done is False
+        assert d.query_one("SELECT COUNT(*) FROM projects")[0] == 1  # キャッシュは残る
+    finally:
+        d.close_all()
+
+
+def test_migrate_v8_adds_server_watch_versions_and_drops_retention(tmp_path):
+    """マイルストーン表示のサーバー既定(初期値はオフ)を足し、廃止した「クローズ済みを残す日数」の設定を消す。"""
+    import sqlite3
+
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v7.db"
+    c = sqlite3.connect(p)
+    for sql in MIGRATIONS[:7]:
+        c.executescript(sql)
+    c.execute("PRAGMA user_version = 7")
+    c.execute("INSERT INTO servers(server_id, name, url) VALUES(1, 'S', 'http://s')")
+    c.execute("INSERT INTO settings(key, value) VALUES('closed_retention_days', '14')")
+    c.execute("INSERT INTO settings(key, value) VALUES('theme', '\"dark\"')")
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.servers import ServerStore
+
+        assert d.schema_version() == SCHEMA_VERSION
+        assert ServerStore(d).get(1).watch_versions is False
+        assert Settings(d).get("theme") == "dark"
+        assert d.query_one("SELECT 1 FROM settings WHERE key = 'closed_retention_days'") is None
+    finally:
+        d.close_all()

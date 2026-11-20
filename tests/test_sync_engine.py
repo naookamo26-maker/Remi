@@ -122,17 +122,55 @@ def test_reconcile_unmonitors_unassigned(setup, fake):
     assert {i.issue_id for i in issues.list_issues([sid])} == {1}
 
 
-def test_closed_issue_retention(setup, fake):
+def test_closed_issue_is_not_monitored_but_kept(setup, fake):
+    """クローズしたチケットは、すぐ監視対象から外れる(一覧には出ない)が、保存は残り、「クローズ済みも表示」で見える。再オープンで戻る。"""
     sync, issues, sid = setup
     fake.add_issue(1, 2, "担当", updated_on=ts(60))
     sync.sync_changes()
+    assert issues.get(sid, 1).monitored
     fake.set_status(1, 5)
     sync.sync_changes()
-    assert issues.get(sid, 1).monitored  # 7日以内は残る
-    fake.issues[1]["closed_on"] = ts(60 * 24 * 8)
-    fake.issues[1]["updated_on"] = ts(0)
-    sync.sync_changes()
     assert not issues.get(sid, 1).monitored
+    assert {i.issue_id for i in issues.list_issues([sid])} == set()
+    assert {i.issue_id for i in issues.list_issues([sid], include_unmonitored=True)} == {1}
+    sync.reconcile()  # 未完了の一覧に出ないだけでは、消えない
+    assert issues.get(sid, 1) is not None
+    fake.set_status(1, 2)  # 再オープン
+    sync.sync_changes()
+    assert issues.get(sid, 1).monitored
+
+
+def test_initial_sync_imports_old_closed_issues(setup, fake):
+    """アプリを使う前にクローズされたチケットも取り込む。クローズ済みは監視しないので一覧には出ず、「クローズ済みも表示」で見える。"""
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "未完了", updated_on=ts(60))
+    fake.add_issue(2, 2, "昔クローズ", status_id=5, updated_on=ts(60 * 24 * 100))
+    fake.issues[2]["closed_on"] = ts(60 * 24 * 100)
+    fake.add_issue(3, 2, "最近クローズ", status_id=5, updated_on=ts(60))
+    fake.add_issue(4, 2, "関係なし", assigned_to=7, status_id=5, updated_on=ts(60 * 24 * 100))
+    sync.sync_changes()
+    assert issues.get(sid, 4) is None
+    assert issues.get(sid, 2).monitored is False
+    assert issues.get(sid, 3).monitored is False
+    assert {i.issue_id for i in issues.list_issues([sid])} == {1}
+    assert {i.issue_id for i in issues.list_issues([sid], include_unmonitored=True)} == {1, 2, 3}
+    # 開いたときにコメントを取得できる(既読扱い。通知は出ない)
+    assert sync.fetch_journals(2).new_comments == []
+    # 関係が外れたかの確認(未完了だけの一覧)でも、クローズ済みの過去分は残る
+    sync.reconcile()
+    assert issues.get(sid, 2) is not None
+
+
+def test_purge_stale_keeps_closed_issues(setup, fake):
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "昔クローズ", status_id=5, updated_on=ts(60 * 24 * 200))
+    fake.issues[1]["closed_on"] = ts(60 * 24 * 200)
+    fake.add_issue(2, 2, "古い未完了", updated_on=ts(60 * 24 * 200))
+    sync.sync_changes()
+    issues.set_monitored(sid, [2], False)  # 関係が外れた古い未完了のチケット
+    assert issues.purge_stale() == 1
+    assert issues.get(sid, 1) is not None
+    assert issues.get(sid, 2) is None
 
 
 def test_detect_deleted(setup, fake):

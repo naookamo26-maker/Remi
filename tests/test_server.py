@@ -223,7 +223,8 @@ def test_visible_relations_filter_list_and_tree(app, fake):
     fake.add_project(2, "A-子", parent=1)
     fake.add_project(3, "B")
     fake.add_issue(10, 1, "担当")
-    fake.add_issue(11, 1, "ウォッチ", assigned_to=7, watchers={ME})
+    # 更新日時は秒単位なので、同じ秒にコメントを足すと更新に気づけない。あらかじめ過去にしておく
+    fake.add_issue(11, 1, "ウォッチ", assigned_to=7, watchers={ME}, updated_on="2026-01-01T00:00:00Z")
     fake.add_issue(13, 1, "グループ", assigned_to=100)
     fake.add_issue(20, 2, "子のウォッチ", assigned_to=7, watchers={ME})
     fake.add_issue(30, 3, "Bのウォッチ", assigned_to=7, watchers={ME})
@@ -733,6 +734,7 @@ def test_loading_state_while_roadmap_is_fetched(app, fake):
     tree = lambda: app.rpc("getTree")["servers"][0]  # noqa: E731
     assert tree()["loading"] is None and not tree()["projects"][0]["loadingVersions"]
     seen: list[tuple[str | None, bool]] = []
+    fake.delay = 0.3  # 取得している間の印を確実に見られるよう、応答を遅らせる
     app.rpc("setProjectSetting", serverId=sid, projectId=1, key="watch_versions", value=True)
     end = time.monotonic() + 20
     while time.monotonic() < end:

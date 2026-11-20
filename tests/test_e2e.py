@@ -696,13 +696,17 @@ def test_header_buttons_project_relations_and_grouped_changes(page, remi, fake):
     playwright_api.expect(page.locator(".tree .node", has_text="すべて").locator(".count-inline")).to_have_text("(2)")
     page.keyboard.press("Escape")
     assert remi.ctx.projects.own_visible_relations(1) == {}
-    # 「すべてのプロジェクトを表示」は、サーバーの右クリックメニューで、サーバーごとに切り替える
+    # サーバーの右クリックメニューは、操作だけ(「すべてのプロジェクトを表示」や「表示するチケット」の設定は置かない)
     page.locator(".tree .node.server").click(button="right")
-    page.get_by_role("menuitemcheckbox", name="すべてのプロジェクトを表示(このサーバー)").click()
-    end = time.monotonic() + 5
-    while time.monotonic() < end and not remi.ctx.servers.get(1).show_all_projects:
-        time.sleep(0.05)
-    assert remi.ctx.servers.get(1).show_all_projects is True
+    menu = page.get_by_role("menu")
+    playwright_api.expect(menu).to_contain_text("すべて既読にする")
+    playwright_api.expect(menu).not_to_contain_text("すべてのプロジェクトを表示")
+    playwright_api.expect(menu).not_to_contain_text("表示するチケット")
+    page.keyboard.press("Escape")
+    # 「すべてのプロジェクトを表示」は、サーバーごとの設定(ふだんは、表示するものがないプロジェクトがあるときの
+    # ツリーのリンクから切り替える)。ここではそのリンクが出るまでもなく、設定を直接オンにする
+    remi.ctx.servers.update_fields(1, show_all_projects=True)
+    remi.ctx.bus.publish("projectSettingsChanged", serverId=1)
     # サーバーの下のリンクで、隠すことも戻すこともできる
     link = page.locator(".tree .node.link-row")
     playwright_api.expect(link).to_have_text("非表示に戻す")
@@ -743,6 +747,24 @@ def test_selecting_tree_item_closes_conversation_and_keeps_draft(page, remi, fak
     assert not page.errors, page.errors
 
 
+def test_server_default_shows_milestones(page, remi, fake):
+    """サーバーの⚙ダイアログで「マイルストーンを表示する」をオンにすると、継承しているプロジェクトに効く。"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    playwright_api.expect(page.locator(".tree .node.version")).to_have_count(0)
+    row = page.locator(".tree .node.server")
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_label("マイルストーンを表示する(プロジェクトの設定が「継承」のときの既定)").check()
+    page.get_by_role("button", name="保存").click()
+    playwright_api.expect(page.locator(".tree .node.version", has_text="v1.0")).to_be_visible(timeout=20000)
+    assert remi.ctx.servers.get(1).watch_versions is True
+    assert not page.errors, page.errors
+
+
 def test_roadmap_versions(page, remi, fake):
     seed(fake)
     fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
@@ -751,11 +773,11 @@ def test_roadmap_versions(page, remi, fake):
     add_server(remi, fake)
     page.goto(remi.server.start_url)
     playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
-    # プロジェクトの歯車のメニューで「未完了のバージョンをウォッチ」をオンにする
+    # プロジェクトの歯車のメニューで「マイルストーンを表示する」をオンにする
     row = page.locator(".tree .node", has_text="基幹システム").first
     row.hover()
     row.locator(".node-gear").click()
-    page.get_by_role("group", name="未完了のバージョンをウォッチ").get_by_role("button", name="オン").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
     version = page.locator(".tree .node.version", has_text="v1.0")
     playwright_api.expect(version).to_be_visible(timeout=20000)
     # 子プロジェクトのないプロジェクトでは、「ロードマップ」の行を出さず、バージョンを直下に並べる

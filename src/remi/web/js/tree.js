@@ -262,7 +262,7 @@ export class Tree {
       } }, icon("gear"));
   }
 
-  // プロジェクトの横の歯車ボタン: 通知・作成したチケットのウォッチ・バージョンのウォッチの設定を開く
+  // プロジェクトの横の歯車ボタン: 通知・マイルストーンの表示の設定を開く
   settingsButton(server, p) {
     return h("button", { type: "button", class: "node-tool node-gear", title: t("tree.projectSettingsShort"),
       "aria-label": t("tree.projectSettings", { name: p.name }), "aria-haspopup": "menu",
@@ -293,7 +293,7 @@ export class Tree {
       { label: t("tree.projectSettings", { name: target?.name ?? "" }), hint: true },
       { sep: true },
       seg("notify", t("menu.notifications")),
-      seg("watch_versions", t("menu.watchVersions"), t("menu.appliesToSubprojects")),
+      seg("watch_versions", t("menu.showVersions"), t("menu.appliesToSubprojects")),
     ], { focusLabel });
   }
 
@@ -393,14 +393,7 @@ export class Tree {
       const ps = await call("getProjectSettings", { serverId: sel.serverId, projectId: sel.projectId });
       if (ps.url) items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: ps.url }) });
     } else if (server) {
-      // チケットのないプロジェクトも表示するかは、サーバーごとに選ぶ
-      items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) },
-        { sep: true },
-        { label: t("menu.showAllProjects"), checked: !!server.showAllProjects,
-          onClick: () => call("setServerSetting", { serverId: server.serverId, key: "show_all_projects",
-            value: !server.showAllProjects }).then(() => this.refresh()) },
-        { label: t("menu.visibleRelations"),
-          onClick: () => this.relationsMenu(e.clientX, e.clientY, server.serverId, null, false) });
+      items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) });
     }
     contextMenu(e.clientX, e.clientY, items);
   }

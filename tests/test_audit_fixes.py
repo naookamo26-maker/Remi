@@ -199,7 +199,19 @@ def test_requests_are_refused_when_the_worker_is_not_running(db, monkeypatch):
 def test_upload_over_the_limit_is_answered_in_json(app):
     from remi.server.api import UPLOAD_MAX
 
-    r = app.http.post(app.server.origin + "/upload?serverId=1&filename=a.bin",
-                      headers={"X-Remi-Upload": "1", "Content-Length": str(UPLOAD_MAX + 1)}, data=b"")
-    assert r.status_code == 413 and r.json()["error"]["code"] == "too_large"
+    import json
+    import socket
+
+    # 本文は送らない(サーバーは長さを見て、読まずに断る)。requests は本文を送ろうとして、Windows では
+    # 切られた接続のエラーになるので、要求の先頭だけをソケットで送って、応答を読む
+    cookie = "; ".join(f"{k}={v}" for k, v in app.http.cookies.items())
+    with socket.create_connection(("127.0.0.1", app.server.port), timeout=10) as sock:
+        sock.sendall((f"POST /upload?serverId=1&filename=a.bin HTTP/1.1\r\nHost: 127.0.0.1:{app.server.port}\r\n"
+                      f"Cookie: {cookie}\r\nX-Remi-Upload: 1\r\nContent-Length: {UPLOAD_MAX + 1}\r\n\r\n").encode())
+        raw = b""
+        while chunk := sock.recv(65536):  # 断ったあとは、サーバーが接続を閉じる
+            raw += chunk
+    head, _, body = raw.partition(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.1 413")
+    assert json.loads(body)["error"]["code"] == "too_large"
     assert app.rpc("bootstrap")["uploadMax"] == UPLOAD_MAX

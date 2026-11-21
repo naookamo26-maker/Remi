@@ -18,6 +18,8 @@ if not defined VCS set "VCS=auto"
 rem Arguments for Remi.exe when it is started again. Example: --background
 rem (starts hidden in the tray, the same as the automatic start with Windows)
 if not defined START_ARGS set "START_ARGS="
+rem Arguments that make a running Remi quit (normally you do not need to change this)
+if not defined QUIT_ARGS set "QUIT_ARGS=--quit"
 rem Seconds to wait for Remi to exit. After that, Remi is terminated.
 if not defined WAIT_SECONDS set "WAIT_SECONDS=30"
 rem ------------------------------------------------------------------------
@@ -33,7 +35,7 @@ if not exist "%EXE%" (
 echo [1/3] Stopping Remi ...
 rem Remi hides in the tray when its window is closed, so ask it to quit by itself.
 rem (Nothing happens if Remi is not running.)
-start "" /wait "%EXE%" --quit
+start "" /wait "%EXE%" %QUIT_ARGS%
 set /a WAITED=0
 :wait_exit
 tasklist /FI "IMAGENAME eq %EXE%" /NH 2>nul | find /I "%EXE%" >nul

@@ -133,6 +133,12 @@ export class Conversation {
     const cur = this.app.current;
     if (!cur || cur.serverId !== serverId || cur.issueId !== issueId) return; // 別のチケットに移った
     const sameIssue = issueKey(this.data) === issueKey(data);
+    if (sameIssue && this.data.updatedOn !== data.updatedOn) {
+      // チケットが更新された(ほかの人がステータス・担当者などを変えた): ヘッダの選択肢(今の値・移れるステータス)と
+      // 「詳細」の値を読み直す。送信前の変更(changes)は残す。権限は、読み直す間も前の値を使う
+      this.editOptions = null;
+      this.details = null;
+    }
     if (!sameIssue) {
       this.changes = {};
       this.editOptions = null;
@@ -199,7 +205,28 @@ export class Conversation {
       // 権限が分かったら、コメントの「⋯」メニュー・添付の削除ボタンを出すために描き直す
       if (before !== JSON.stringify(opts.permissions)) this.refreshTimeline();
     } catch (e) {
-      this.header.showError(e.code);
+      // 別のチケットに移っていたら、前のチケットの失敗を、いまのチケットのヘッダに出さない
+      const d = this.data;
+      if (d && d.serverId === serverId && d.issueId === issueId) this.header.showError(e.code);
+    }
+  }
+
+  /**
+   * 送信中のチケットの結果を、バックエンドに問い合わせ直す。SSE の再接続やイベントのあふれで noteFinished を
+   * 受け取り損ねると、送信中のまま(送信ボタンを押せないまま)になるため(再接続したときに呼ぶ)。
+   */
+  async recoverSends() {
+    for (const key of [...this.inFlight.keys()]) {
+      const [serverId, issueId] = key.split(":").map(Number);
+      try {
+        const st = await call("getSendResult", { serverId, issueId });
+        if (st.pending) continue; // まだ送っている: 結果は noteFinished で届く
+        // 結果が残っていなければ(バックエンドが作り直されたなど)、失敗として扱う(本文は下書きに残っている)
+        const r = st.result || { error: "connection_failed", detail: "" };
+        this.noteFinished({ serverId, issueId, ...r });
+      } catch {
+        // 問い合わせられない(バックエンドが落ちている)ときは、次の再接続で試す
+      }
     }
   }
 

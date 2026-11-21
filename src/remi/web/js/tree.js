@@ -179,7 +179,7 @@ export class Tree {
         icon: "server", cls: "server", header: true, token: `s:${s.serverId}`, children: kids,
         filter: this.relationsButton(s),
         gear: this.serverSettingsButton(s),
-        dot: s.status === "unknown" ? null : s.status, dotLabel, title: s.url,
+        dot: dotLabel ? { kind: s.status, label: dotLabel } : null, title: s.url,
       });
       this.el.append(server);
       if (s.error) {
@@ -402,13 +402,16 @@ export class Tree {
     }
     const items = [{ label: t("menu.markAllRead"), onClick: () => call("markAllRead", { serverId: sel.serverId ?? null, projectId: sel.projectId ?? null }) }];
     const server = this.data.servers.find((s) => s.serverId === sel.serverId);
+    // 開き方は、ほかのメニューと同じく「Remiで開く」「外部ブラウザで開く」(開く場所の設定に従う)
+    let url = null;
     if (sel.kind === "project") {
       // 設定は行の右端のボタン(フィルタ・歯車)から開く。右クリックは操作だけにする
       const ps = await call("getProjectSettings", { serverId: sel.serverId, projectId: sel.projectId });
-      if (ps.url) items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: ps.url }) });
+      url = ps.url;
     } else if (server) {
-      items.push({ label: t("menu.openInBrowser"), onClick: () => call("openExternal", { url: server.url }) });
+      url = server.url;
     }
+    if (url) items.push(...this.app.openMenuItems(() => url));
     contextMenu(e.clientX, e.clientY, items);
   }
 }

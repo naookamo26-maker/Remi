@@ -159,6 +159,7 @@ class IssueRow:
     unread: int = 0
     last_note_user: str | None = None
     last_note: str | None = None
+    others_note: bool = False  # 自分以外が書いたコメントがあるか(一覧のときだけ)
 
 
 @dataclass
@@ -199,6 +200,7 @@ def _issue(r) -> IssueRow:
         unread=r["unread"] if "unread" in keys else 0,
         last_note_user=r["last_note_user"] if "last_note_user" in keys else None,
         last_note=r["last_note"] if "last_note" in keys else None,
+        others_note=bool(r["others_note"]) if "others_note" in keys else False,
     )
 
 
@@ -216,6 +218,12 @@ _UNREAD_SQL = """
 (SELECT COUNT(*) FROM journals j
   WHERE j.server_id = i.server_id AND j.issue_id = i.issue_id
     AND j.journal_id > COALESCE(rs.last_read_journal_id, 0)
+    AND j.notes <> '' AND COALESCE(j.user_id, -1) <> COALESCE(s.my_user_id, -2))
+"""
+# 自分以外が書いたコメントがあるか(「未読に戻す」ができるか)
+_OTHERS_NOTE_SQL = """
+EXISTS (SELECT 1 FROM journals j
+  WHERE j.server_id = i.server_id AND j.issue_id = i.issue_id
     AND j.notes <> '' AND COALESCE(j.user_id, -1) <> COALESCE(s.my_user_id, -2))
 """
 _LAST_NOTE_SQL = """
@@ -378,14 +386,16 @@ class IssueStore:
             params.extend(sorted(project_ids))
         if search:
             s = search.strip().lstrip("#")
+            # % と _ は、LIKE の「任意の文字」ではなく、その文字として探す
+            like = "%" + search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             if s.isdigit():
-                where.append("(i.issue_id = ? OR i.subject LIKE ?)")
-                params.extend([int(s), f"%{search.strip()}%"])
+                where.append("(i.issue_id = ? OR i.subject LIKE ? ESCAPE '\\')")
+                params.extend([int(s), like])
             else:
-                where.append("i.subject LIKE ?")
-                params.append(f"%{search.strip()}%")
+                where.append("i.subject LIKE ? ESCAPE '\\'")
+                params.append(like)
         sql = f"""
-            SELECT i.*, {_UNREAD_SQL} AS unread,
+            SELECT i.*, {_UNREAD_SQL} AS unread, {_OTHERS_NOTE_SQL} AS others_note,
                    {_LAST_NOTE_SQL.format(col='user_name')} AS last_note_user,
                    {_LAST_NOTE_SQL.format(col='notes')} AS last_note
             FROM issues i
@@ -605,18 +615,27 @@ class IssueStore:
                               (server_id, issue_id))
         return bool(r and r[0])
 
-    def mark_unread(self, server_id: int, issue_id: int) -> None:
-        """最後のコメントの直前まで既読を戻す。"""
+    def mark_unread(self, server_id: int, issue_id: int) -> bool:
+        """自分以外が書いた最後のコメントの直前まで既読を戻す。戻せた(そのコメントがあった)ら True。
+
+        自分のコメントは未読として数えないので、自分のコメントの直前まで戻しても未読にならない。
+        自分以外のコメントがなければ、何もしない(既読位置を変えない)。
+        """
         r = self.db.query_one(
-            "SELECT journal_id FROM journals WHERE server_id = ? AND issue_id = ? AND notes <> '' "
-            "ORDER BY journal_id DESC LIMIT 1", (server_id, issue_id))
-        target = (int(r[0]) - 1) if r else 0
+            "SELECT j.journal_id FROM journals j JOIN servers s ON s.server_id = j.server_id "
+            "WHERE j.server_id = ? AND j.issue_id = ? AND j.notes <> '' "
+            "AND COALESCE(j.user_id, -1) <> COALESCE(s.my_user_id, -2) "
+            "ORDER BY j.journal_id DESC LIMIT 1", (server_id, issue_id))
+        if not r:
+            return False
+        target = int(r[0]) - 1
         with self.db.tx() as c:
             c.execute(
                 "INSERT INTO read_state(server_id, issue_id, last_read_journal_id, read_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(server_id, issue_id) DO UPDATE SET last_read_journal_id = excluded.last_read_journal_id",
                 (server_id, issue_id, target, utcnow()),
             )
+        return True
 
     def mark_all_read(self, server_id: int, project_ids: set[int] | None = None) -> None:
         """監視対象のチケット(project_ids があれば、そのプロジェクトのもの)を、保存済みの最新の journal まで既読にする。

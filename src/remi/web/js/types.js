@@ -109,6 +109,7 @@
  * @property {string|null} assignee
  * @property {string|null} updatedOn       ISO 8601
  * @property {number} unread
+ * @property {boolean} canMarkUnread       「未読に戻す」ができるか(自分以外のコメントがあり、いま未読でない監視中のチケット)
  * @property {Relation[]} relations
  * @property {boolean} monitored           関係が外れたチケット(クローズ済みなど)は false
  * @property {string|null} lastNoteUser

@@ -142,7 +142,9 @@ class ServerSync:
         issues: dict[int, dict] = {}
         flags: dict[int, int] = {}
         for flag, q in queries:
-            for it in self.client.issues(**q, **extra, sort="updated_on"):
+            # 番号順にページを取る。更新日時の順だと、取得の途中で更新されたチケットが末尾へ移り、
+            # 後ろのものが1つずつ前にずれて、ページの境目のチケットを取りこぼす
+            for it in self.client.issues(**q, **extra, sort="id"):
                 iid = int(it["id"])
                 if flag == REL_AUTHORED and int(it["project"]["id"]) not in authored_projects:
                     continue
@@ -276,8 +278,8 @@ class ServerSync:
         data = self.client.issue(issue_id, include="journals,attachments")
         first_fetch = not existing.journals_synced_on
         before = self._snapshot(issue_id)
-        self.issues.upsert_issue(self.server_id, data, existing.relation_flags,
-                                 self._is_monitored(data, existing.relation_flags, self._closed_ids()))
+        monitored = self._is_monitored(data, existing.relation_flags, self._closed_ids())
+        self.issues.upsert_issue(self.server_id, data, existing.relation_flags, monitored)
         new_ids = self.issues.upsert_journals(self.server_id, issue_id, data.get("journals") or [])
         for path in self.issues.upsert_attachments(self.server_id, issue_id, data.get("attachments") or []):
             Path(path).unlink(missing_ok=True)  # 削除された添付の画像キャッシュ
@@ -295,7 +297,9 @@ class ServerSync:
         # 新しいコメントだけでなく、コメントの編集・削除や添付の追加・削除も、画面を更新させる
         if new_ids or self._snapshot(issue_id) != before:
             result.changed_issue_ids.add(issue_id)
-        if notify and new_ids:
+        # クローズ済み・関係が外れた(監視対象外の)チケットのコメントは通知しない(設計書 §4.7, §7.2)。
+        # 未読としても数えないので、通知だけが出て、既読にしても通知センターから消えない状態になる
+        if notify and new_ids and monitored:
             me = self.server.my_user_id
             # 既読のもの・一度通知したものは通知しない(キャッシュを消して取り直すと、古いコメントも「新しく
             # 保存した」ことになるため。通知したかはキャッシュとは別に残す)
@@ -306,6 +310,9 @@ class ServerSync:
                     result.new_comments.append(NewComment(
                         issue_id, j.journal_id, j.user_name or "", j.notes, data.get("subject", ""),
                         int(data["project"]["id"])))
+        if new_ids:
+            # 通知しなかったもの(監視対象外のときに届いたもの)も、通知の対象として扱ったことにする
+            # (再オープンなどで監視対象に戻ったときに、古いコメントをまとめて通知しない)
             self.issues.set_notified(self.server_id, issue_id, max(new_ids))
         return result
 
@@ -356,7 +363,8 @@ class ServerSync:
         self.issues.set_relation_flags(self.server_id, issue_id, flags)
         if not flags:
             self.issues.set_monitored(self.server_id, [issue_id], False)
-        elif not row.monitored and watching:
+        elif not row.monitored and watching and row.status_id not in self._closed_ids():
+            # クローズ済みは、ウォッチしても監視対象にしない(未読・件数の対象外のまま)
             self.issues.set_monitored(self.server_id, [issue_id], True)
 
     # --- 関係が外れた・クローズ・削除(設計書 §4.7) ------------------------------
@@ -542,7 +550,7 @@ class ServerSync:
         before = self.versions.members(sid, vid)
         after: dict[int, bool] = {}
         items: dict[int, dict] = {}
-        for it in self.client.issues(fixed_version_id=vid, status_id="*", sort="updated_on"):
+        for it in self.client.issues(fixed_version_id=vid, status_id="*", sort="id"):
             iid = int(it["id"])
             proj = it.get("project") or {}
             if self.projects.get(sid, int(proj["id"])) is None:

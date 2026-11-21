@@ -169,15 +169,24 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 
 /* ---- 一覧 ---- */
 .list-header { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border); }
-.list-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.list-title .title-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.list-title h2 { margin: 0; font-size: 14px; }
+.list-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.list-title .title-right { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+.list-title h2 { margin: 0; font-size: 14px; min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list-title .crumb { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-title .crumb .count { flex: none; }
+/* 狭いとき(一覧のペインが 300px 未満。list.js の .narrow): ボタンの隙間を詰め、パンくずを隠し、件数は数字だけにする */
+.pane-list.narrow .list-title { gap: 4px; }
+.pane-list.narrow .list-title .title-right { gap: 1px; }
+.pane-list.narrow .lbtn { width: 24px; }
+.pane-list.narrow .crumb { flex: none; margin-left: 3px; font-size: 11px; }
+.pane-list.narrow .crumb-path, .pane-list.narrow .crumb-sep { display: none; }
+.pane-list.narrow .count { font-size: 0; }
+.pane-list.narrow .count::after { content: attr(data-short); font-size: 11px; }
 .search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 30px; border: 1px solid var(--border);
   border-radius: 6px; color: var(--text-muted); background: var(--window); }
 .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, var(--window)); }
 .search input { flex: 1; border: 0; outline: none; background: transparent; color: var(--text); min-width: 0; }
-.list-header .segmented button { min-height: 22px; }
+.list-header .segmented button { min-height: 22px; min-width: 0; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; }
 /* 検索・並べ替え・絞り込み・表示密度のボタン。検索=青、絞り込み=緑、並べ替え=紫。条件があるときだけ色が付く */
 .lbtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; flex: none; cursor: pointer;
   border: 1px solid var(--border); border-radius: 5px; background: var(--window); color: var(--text-muted); }
@@ -222,6 +231,10 @@ button.link:hover, .menu button.link:hover { background: none; text-decoration: 
 .fpop .modes .o i { font-style: normal; font-size: 10px; color: var(--text-muted); }
 .fpop .modes .o.on { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); border-color: var(--c-filter); font-weight: 600; }
 .fpop .sep.inner { margin: 8px 0 6px; }
+/* 狭いとき: 大分類の3つを同じ幅で並べ、「(既定)」は下に小さく出す */
+.fpop.narrow .modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fpop.narrow .modes .o { flex-direction: column; gap: 0; padding: 3px 2px; white-space: nowrap; font-size: 11px; }
+.fpop.narrow .modes .o i { font-size: 9px; line-height: 1.1; }
 .fpop .note { padding: 0 0 4px; background: none; font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 .fpop .plist { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
 .fpop .plist.scroll { max-height: 140px; overflow-y: auto; }
@@ -240,8 +253,15 @@ button.link:hover, .menu button.link:hover { background: none; text-decoration: 
 .issue { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .issue:hover { background: var(--surface-alt); }
 .issue.selected { background: var(--selection); }
-.issue .line1 { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
-.issue .line1 .spacer { flex: 1; }
+.issue .line1 { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); min-width: 0; }
+.issue .line1 .spacer { flex: 1; min-width: 0; }
+/* 幅が足りないときは、折り返さず、関係のラベル、並べ替えのタグの順に縮める(ステータス・番号・時刻は縮めない) */
+.issue .line1 > span { white-space: nowrap; flex: none; }
+.issue .line1 > .spacer { flex: 1 1 0; }
+.issue .line1 > .tag { flex: 0 4 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.issue .line1 > .tag.skey { flex: 0 1 auto; }
+.pane-list.narrow .issue .line1 .time[data-short] { font-size: 0; }
+.pane-list.narrow .issue .line1 .time[data-short]::after { content: attr(data-short); font-size: 12px; }
 /* マウスを乗せる(キーボードで選ぶ)と、時刻の代わりに操作のボタンを出す */
 .issue .row-more { display: none; border: 1px solid var(--border); background: var(--window); color: var(--text-muted); border-radius: 4px;
   padding: 0 8px; font-size: 14px; line-height: 16px; cursor: pointer; }

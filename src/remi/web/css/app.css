@@ -166,13 +166,27 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .btn .spin { width: 10px; height: 10px; }
 
 /* ---- 一覧 ---- */
-.list-header { padding: 10px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); }
-.list-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.list-header { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border); }
+.list-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.list-title .title-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .list-title h2 { margin: 0; font-size: 14px; }
 .list-title .crumb { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 32px; border: 1px solid var(--border);
+.search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 26px; border: 1px solid var(--border);
   border-radius: 6px; color: var(--text-muted); background: var(--window); }
 .search input { flex: 1; border: 0; outline: none; background: transparent; color: var(--text); min-width: 0; }
+.list-header .segmented button { min-height: 22px; }
+/* 表示密度の切り替え(標準 / コンパクト) */
+.density { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; flex: none; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--window); color: var(--text-muted); }
+.density:hover { background: var(--surface); color: var(--text); }
+.density[aria-pressed=true] { background: var(--selection); color: var(--accent); border-color: var(--accent); }
+.density svg.icon { width: 14px; height: 14px; stroke-width: 1.6; }
+/* 絞り込みの要約。検索語だけを省略して、ほかの条件は残す */
+.filter-summary { display: flex; align-items: center; gap: 6px; padding: 3px 8px; font-size: 12px; white-space: nowrap; overflow: hidden;
+  border-radius: 6px; background: var(--selection); }
+.filter-summary .k, .filter-summary .sep { color: var(--text-muted); }
+.filter-summary .k, .filter-summary .sep, .filter-summary .f { flex: none; }
+.filter-summary .term { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .toggles { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; }
 .toggles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .issue-list { flex: 1 1 auto; overflow: auto; margin: 0; padding: 0; list-style: none; }
@@ -189,6 +203,10 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .issue:hover .line1 .time, .issue:has(.row-more:focus-visible) .line1 .time { display: none; }
 .issue .subject { line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .issue.unread .subject { font-weight: 700; }
+/* コンパクト: 件名は1行、最新コメントは出さない。関係のラベルは1行目に移す(list.js) */
+.issue-list.compact .issue { gap: 0; padding: 4px 12px; }
+.issue-list.compact .issue .subject { -webkit-line-clamp: 1; line-height: 1.3; }
+.issue-list.compact .issue .line1 .tag { font-size: 10px; padding: 0 4px; }
 .issue .line3 { display: flex; gap: 6px; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; }
 .issue .line3 .preview { overflow: hidden; text-overflow: ellipsis; }
 .tag { padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; flex: none; }
@@ -270,6 +288,12 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .composer .actions .spacer { flex: 1; }
 .composer .actions label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .composer .error { color: var(--danger); font-size: 12px; }
+/* 下書きの保存状態。保存済みは少しして消える。失敗のときだけ目立たせる */
+.draft-state { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.draft-state.saved { color: var(--success); }
+.draft-state.failed { color: var(--danger); }
+.draft-state svg.icon { width: 14px; height: 14px; }
+.draft-state .btn { min-height: 24px; padding: 0 8px; font-size: 12px; }
 .welcome { margin: auto; max-width: 420px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 24px; }
 .welcome h2 { margin: 0; }
 

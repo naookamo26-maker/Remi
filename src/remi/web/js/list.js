@@ -19,6 +19,13 @@ export class IssueList {
     this.search = "";
     this.title = h("h2", {});
     this.crumb = h("span", { class: "crumb" });
+    // 表示密度(標準 / コンパクト)の切り替え。選んだ表示は設定 list_density に保存して、次回も使う
+    this.densityButton = h("button", { type: "button", class: "density", title: t("list.density"), "aria-label": t("list.density"),
+      "aria-pressed": "false",
+      onClick: () => app.saveSetting("list_density", this.compact() ? "standard" : "compact").then(() => this.render()) },
+      icon("density"));
+    // 標準から変えている絞り込み(検索語・関係・クローズ済み)の要約。何も変えていないときは出さない
+    this.summary = h("div", { class: "filter-summary", hidden: true });
     const onSearch = debounce(() => { this.search = this.searchInput.value; this.refresh(); }, 200);
     this.searchInput = h("input", { type: "search", placeholder: t("list.searchPlaceholder"), "aria-label": t("list.search"),
       onInput: onSearch,
@@ -48,12 +55,13 @@ export class IssueList {
       onKeydown: (e) => this.onKey(e) });
     this.root = h("section", { class: "pane pane-list", "aria-label": t("list.label") },
       h("div", { class: "list-header" },
-        h("div", { class: "list-title" }, this.title, this.crumb),
+        h("div", { class: "list-title" }, this.title, h("span", { class: "title-right" }, this.densityButton, this.crumb)),
         h("label", { class: "search" }, icon("search"), this.searchInput),
         this.relationGroup,
         h("div", { class: "toggles" },
           this.unreadFirstLabel = h("label", {}, this.unreadFirst, t("list.unreadFirst")),
-          h("label", {}, this.showClosed, t("list.showClosed")))),
+          h("label", {}, this.showClosed, t("list.showClosed"))),
+        this.summary),
       this.el);
   }
 
@@ -109,6 +117,10 @@ export class IssueList {
     }
     // 絞り込める関係が1つだけなら「すべて」と同じなので、ボタンごと隠す。バージョンでは関係で絞り込まない
     this.relationGroup.hidden = shown.length <= 2 || this.app.selection.kind === "version";
+    this.renderSummary(rel);
+    const compact = this.compact();
+    this.densityButton.setAttribute("aria-pressed", String(compact));
+    this.el.classList.toggle("compact", compact);
     const scroll = this.el.scrollTop;
     clear(this.el);
     if (!this.issues.length) {
@@ -135,6 +147,8 @@ export class IssueList {
         h("div", { class: "line1" },
           h("span", {}, `#${it.issueId}`),
           it.status ? h("span", { class: `pill${it.closed ? " closed" : ""}` }, it.status) : null,
+          // コンパクトでは、関係のラベルを3行目ではなく、ここ(ステータスの隣)に出す
+          compact ? it.relations.map((r) => h("span", { class: "tag" }, t(RELATION_LABELS[r]))) : null,
           showServer ? h("span", {}, it.serverName) : null,
           h("span", { class: "spacer" }),
           h("span", { class: "time" }, formatShort(it.updatedOn)),
@@ -147,11 +161,41 @@ export class IssueList {
             } }, "⋯"),
           it.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: it.unread }) }, countText(it.unread)) : null),
         h("div", { class: "subject" }, it.subject),
-        h("div", { class: "line3" },
+        compact ? null : h("div", { class: "line3" },
           it.relations.map((r) => h("span", { class: "tag" }, t(RELATION_LABELS[r]))),
           preview ? h("span", { class: "preview" }, preview) : null)));
     }
     this.el.scrollTop = scroll;
+  }
+
+  compact() {
+    return this.app.settings.list_density === "compact";
+  }
+
+  /**
+   * 絞り込みの要約。既定から変えている条件だけを並べる(並べ替えの「未読を上に」は、絞り込みではないので含めない)。
+   * 検索語は長いと省略して、全文は title に入れる。
+   * @param {string} rel 関係での絞り込み(all なら含めない)
+   */
+  renderSummary(rel) {
+    const version = this.app.selection.kind === "version";
+    const search = this.search.trim();
+    /** @type {{text: string, grow?: boolean}[]} */
+    const parts = [];
+    if (search) parts.push({ text: t("list.summary.search", { term: search }), grow: true });
+    if (rel !== "all" && !this.relationGroup.hidden) parts.push({ text: t("list.summary.relation", { name: t(`list.filter.${rel}`) }) });
+    // 「クローズ済みも表示」の既定は、チケット一覧では「しない」、バージョンでは「する」
+    const showClosed = !!this.app.settings[this.showClosedKey()];
+    if (showClosed !== version) parts.push({ text: t(showClosed ? "list.summary.closedShown" : "list.summary.closedHidden") });
+    this.summary.hidden = !parts.length;
+    clear(this.summary);
+    if (!parts.length) return;
+    this.summary.title = [t("list.summary.label"), parts.map((p) => p.text).join(" / ")].join(" ");
+    this.summary.append(h("span", { class: "k" }, t("list.summary.label")));
+    parts.forEach((p, i) => {
+      if (i) this.summary.append(h("span", { class: "sep" }, "/"));
+      this.summary.append(h("span", { class: p.grow ? "term" : "f" }, p.text));
+    });
   }
 
   /** 「クローズ済みも表示」の設定のキー: マイルストーンを開いているときは、チケット一覧と分けて覚える */

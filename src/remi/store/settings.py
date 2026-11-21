@@ -15,6 +15,7 @@ DEFAULTS: dict[str, Any] = {
     "show_closed": False,
     "version_show_closed": True,  # マイルストーン(バージョン)を開いたときの「クローズ済みも表示」。一覧とは別
     "unread_first": True,
+    "list_density": "standard",  # 一覧の表示密度: standard / compact(設計書 §5.1)
     "allow_external_images": False,
     "image_cache_limit_mb": 500,
     "mine_side": "right",

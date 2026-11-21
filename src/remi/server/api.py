@@ -48,6 +48,7 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "show_closed": lambda v: isinstance(v, bool),
     "version_show_closed": lambda v: isinstance(v, bool),
     "unread_first": lambda v: isinstance(v, bool),
+    "list_density": lambda v: v in ("standard", "compact"),
     "allow_external_images": lambda v: isinstance(v, bool),
     "mine_side": lambda v: v in ("right", "left"),
     "pane_sizes": lambda v: isinstance(v, list) and len(v) <= 3 and all(isinstance(x, int | float) for x in v),

@@ -1122,3 +1122,91 @@ def test_late_not_found_does_not_wipe_other_view(page, remi, fake):
     page.wait_for_timeout(2000)
     assert page.locator("#other-view").count() == 1
     assert page.locator(".pane-conv .spin").count() == 0  # 読み込み中の表示のタイマーも、閉じたあとは効かない
+
+
+def test_draft_save_status(page, remi, fake):
+    """下書きの保存状態を、入力欄の近くに出す。保存済みは消え、失敗のときは再保存できる(設計書 §6.1)。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    state = page.locator(".composer .draft-state")
+    playwright_api.expect(state).to_be_hidden()  # 通常は何も出さない
+    assert "下書きは自動保存されます" not in page.locator(".composer").inner_text()
+
+    page.locator(".composer textarea").fill("途中の文章")
+    playwright_api.expect(state).to_contain_text("保存待ち")
+    playwright_api.expect(state).to_contain_text("下書き保存済み")
+    playwright_api.expect(state).to_be_hidden(timeout=5000)  # しばらくすると消える
+    assert remi.ctx.issues.get_draft(1, 10)[0] == "途中の文章"
+
+    # 保存に失敗したら、そう出して、再保存できる
+    page.route("**/api/saveDraft", lambda route: route.abort())
+    page.locator(".composer textarea").fill("失敗する文章")
+    playwright_api.expect(state).to_contain_text("下書きを保存できませんでした")
+    page.unroute("**/api/saveDraft")
+    page.get_by_role("button", name="再保存").click()
+    playwright_api.expect(state).to_contain_text("下書き保存済み")
+    assert remi.ctx.issues.get_draft(1, 10)[0] == "失敗する文章"
+
+    # 本文を空にすると下書きは残らないので、「保存済み」とは出さない
+    page.locator(".composer textarea").fill("")
+    page.wait_for_timeout(1200)
+    playwright_api.expect(state).to_be_hidden()
+    # 失敗させた通信のログ以外に、エラーはない
+    assert not [e for e in page.errors if "api/saveDraft" not in e], page.errors
+
+
+def test_filter_summary(page, remi, fake):
+    """既定から変えている絞り込みだけを、一覧の上に要約して出す(設計書 §5.1)。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    summary = page.locator(".filter-summary")
+    playwright_api.expect(summary).to_be_hidden()  # 何も変えていなければ出さない
+
+    page.locator(".search input").fill("CSV")
+    playwright_api.expect(summary).to_contain_text("検索「CSV」")
+    page.get_by_role("button", name="担当", exact=True).click()
+    playwright_api.expect(summary).to_contain_text("関係: 担当")
+    page.get_by_label("クローズ済みも表示").check()
+    playwright_api.expect(summary).to_contain_text("クローズ済み: 表示")
+    assert "未読" not in summary.inner_text()  # 並べ替えは、絞り込みに含めない
+
+    # 検索語が長くても、1行のまま(省略して、全文は title に入る)
+    page.locator(".search input").fill("とても長い検索語" * 10)
+    playwright_api.expect(summary).to_have_attribute("title", re.compile("とても長い検索語" * 10))
+    assert summary.bounding_box()["height"] < 30
+
+    page.locator(".search input").fill("")
+    page.get_by_role("button", name="すべて", exact=True).click()
+    page.get_by_label("クローズ済みも表示").uncheck()
+    playwright_api.expect(summary).to_be_hidden()
+    assert not page.errors, page.errors
+
+
+def test_compact_density(page, remi, fake):
+    """一覧の表示密度を切り替え、選んだ表示を次回も使う。コンパクトでは関係のラベルを1行目に出す。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    button = page.get_by_role("button", name="コンパクト表示")
+    playwright_api.expect(button).to_have_attribute("aria-pressed", "false")
+    assert page.locator(".issue .line3").count() == 2  # 標準: 3行目に関係のラベルと最新コメント
+
+    button.click()
+    playwright_api.expect(button).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(page.locator(".issue-list.compact")).to_have_count(1)
+    assert page.locator(".issue .line3").count() == 0
+    row = page.locator(".issue", has_text="メールの宛先を追加したい")
+    playwright_api.expect(row.locator(".line1 .tag").first).to_be_visible()
+    assert remi.ctx.settings.get("list_density") == "compact"
+
+    page.reload()  # 次に開いたときも、コンパクトのまま
+    page.wait_for_selector(".issue-list.compact li.issue")
+    page.get_by_role("button", name="コンパクト表示").click()
+    playwright_api.expect(page.locator(".issue-list.compact")).to_have_count(0)
+    assert remi.ctx.settings.get("list_density") == "standard"
+    assert not page.errors, page.errors

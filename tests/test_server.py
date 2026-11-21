@@ -85,6 +85,10 @@ def test_bootstrap_and_settings(app):
     assert s["theme"] == "dark"
     assert app.rpc_error("setSetting", key="theme", value="pink")["code"] == "invalid_setting"
     assert app.rpc_error("setSetting", key="window_geometry", value="x")["code"] == "invalid_setting"
+    # 一覧の表示密度(標準 / コンパクト)
+    assert app.rpc("bootstrap")["settings"]["list_density"] == "standard"
+    assert app.rpc("setSetting", key="list_density", value="compact")["list_density"] == "compact"
+    assert app.rpc_error("setSetting", key="list_density", value="tiny")["code"] == "invalid_setting"
 
 
 def test_full_flow(app, fake):

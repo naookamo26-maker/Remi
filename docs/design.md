@@ -735,7 +735,7 @@ Windowsでは、タスクバーの色(`SystemUsesLightTheme`)とアプリの色(
 - バージョンの定義は `src/remi/__init__.py` の `__version__` の**1か所だけ**にする。`pyproject.toml` はそこから読む
 - Pythonのパッケージ規約(PEP 440)とも矛盾しないように、バージョン文字列は `X.Y.Z` の形だけを使う(`-beta` などの付加ラベルは使わない)
 - 変更履歴は `CHANGELOG.md`(Keep a Changelog形式)に書く。開発中の変更は `Unreleased` の節にためておき、リリースのときにバージョン番号の節へ移す
-- リリースのときは `vX.Y.Z` のGitタグを付ける
+- Git のタグは付けない。どのバージョンかは、`__version__`(アプリの中)と、`CHANGELOG.md` のバージョンの見出しで決まる(`main` にマージした時点の内容が、そのバージョン)
 - バージョン番号の表示先: ウィンドウのタイトル(`Remi vX.Y.Z`)、User-Agent(`Remi/X.Y.Z`)、exeのファイルバージョン(Windowsの4桁形式 `X.Y.Z.0`)
 - DBのスキーマのバージョンは、アプリのバージョンとは別に `PRAGMA user_version` で管理し、起動時に順番にマイグレーションする。新しいスキーマのDBを古いアプリで開いた場合は、起動を中止してその旨を表示する
 

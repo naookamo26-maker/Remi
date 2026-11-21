@@ -77,6 +77,8 @@ PERMISSIONS_TTL = 600
 # 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
 SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters",
                        "versions", "version_issues", "version_events")
+# サーバーごとに settings に持つ取得状況の記録(キーは「名前:サーバーID」)
+SERVER_SETTING_KEYS = ("versions_seen_projects", "last_metadata", "last_delete_check")
 # 初期化の前に同期スレッドを止めるときの待ち時間。取得の通信は止めればすぐ終わる。
 # 変更を送っている途中なら、その応答(読み取りのタイムアウトは30秒)を待つ
 SYNC_STOP_TIMEOUT = 40.0
@@ -376,6 +378,9 @@ class RemiApi:
         with self.ctx.db.tx() as c:
             for table in SERVER_CACHE_TABLES:
                 c.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
+            # このサーバーの取得状況の記録も捨てる(残すと、取り直したバージョンがすべて「作成」の変化になる)
+            c.execute("DELETE FROM settings WHERE key IN (?, ?, ?)",
+                      tuple(f"{k}:{server_id}" for k in SERVER_SETTING_KEYS))
         shutil.rmtree(attachment_cache_dir(server_id), ignore_errors=True)
         with self._members_lock:
             for key in [k for k in self._members if k[0] == server_id]:
@@ -519,8 +524,8 @@ class RemiApi:
             if version:
                 if closed and not show_closed:
                     continue
-            elif not r.monitored and not closed:
-                continue  # 「クローズ済みも表示」でも、関係が外れた未完了チケットは出さない
+            elif not r.relation_flags or (not r.monitored and not closed):
+                continue  # 自分と関係ない(バージョンで見ているだけの)チケットと、関係が外れた未完了チケットは出さない
             out.append({
                 "serverId": r.server_id, "serverName": n["server"], "issueId": r.issue_id,
                 "projectId": r.project_id, "subject": r.subject,

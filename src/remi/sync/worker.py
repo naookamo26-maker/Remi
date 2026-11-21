@@ -344,12 +344,20 @@ class ServerWorker(threading.Thread):
         # 開いているチケットを、いちばん先に取得する(ほかの同期より先。待たせない)。
         # 画面が見えていない間は確かめない(そのチケットの新着は、下の差分同期で見つかる)
         if self.open_issue is not None and self.visible and now >= self.sched.open_issue:
-            if self.open_issue_full:
-                with interactive():  # 開いた直後の1回目は、人が待っている(最小間隔を空けず、背景の同期に先んじる)
-                    self._emit(sync.fetch_journals(self.open_issue))
-                self.open_issue_full = False  # 失敗したら(例外)、次の確認でもコメントごと取り直す
-            else:
-                self._emit(sync.check_issue(self.open_issue))
+            try:
+                if self.open_issue_full:
+                    with interactive():  # 開いた直後の1回目は、人が待っている(最小間隔を空けず、背景の同期に先んじる)
+                        self._emit(sync.fetch_journals(self.open_issue))
+                    self.open_issue_full = False  # 失敗したら(例外)、次の確認でもコメントごと取り直す
+                else:
+                    self._emit(sync.check_issue(self.open_issue))
+            except RedmineError as e:
+                if e.code not in (ErrorCode.NOT_FOUND, ErrorCode.FORBIDDEN):
+                    raise
+                # 開いているチケットが削除された・見えなくなった: そのチケットの問題として扱い、同期は止めない
+                self._emit(sync.issue_unavailable(self.open_issue, e))
+                self.open_issue = None
+                self.open_issue_full = False
             self.sched.open_issue = now + jittered(self._interval(OPEN_ISSUE_INTERVAL))
             did_network = True
 
@@ -403,6 +411,7 @@ class ServerWorker(threading.Thread):
             did_network = True
         if now >= self.sched.delete_check:
             self._emit(sync.detect_deleted())
+            sync.purge_stale()  # 関係が外れて10日経った未完了のチケットのキャッシュ(1日1回)
             Settings(self.db).set(f"last_delete_check:{self.server_id}", time.time())
             self.sched.delete_check = now + jittered(DELETE_CHECK_INTERVAL)
             did_network = True
@@ -411,7 +420,12 @@ class ServerWorker(threading.Thread):
         if self.sched.queue and now >= self.sched.journal_next:
             iid = self.sched.queue.pop(0)
             self.sched.journal_next = now + JOURNAL_QUEUE_INTERVAL
-            self._emit(sync.fetch_journals(iid))
+            try:
+                self._emit(sync.fetch_journals(iid))
+            except RedmineError as e:
+                if e.code not in (ErrorCode.NOT_FOUND, ErrorCode.FORBIDDEN):
+                    raise
+                self._emit(sync.issue_unavailable(iid, e))  # 取得できないチケット1件のために、同期を止めない
             did_network = True
         if self.sched.attachments:
             self._download_attachment(self.sched.attachments.pop(0))

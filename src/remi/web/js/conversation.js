@@ -102,7 +102,13 @@ export class Conversation {
     try {
       data = await call("getConversation", { serverId, issueId, limit: this.limit, markRead });
     } catch (e) {
-      if (e.code === "not_found") return this.showEmpty();
+      if (e.code === "not_found") {
+        // 削除された: 開いていた扱いも外す(残すと、存在しないチケットを同期が確かめ続ける)
+        const cur = this.app.current;
+        if (cur && cur.serverId === serverId && cur.issueId === issueId) this.app.closeIssue();
+        else this.showEmpty();
+        return;
+      }
       throw e;
     }
     const cur = this.app.current;

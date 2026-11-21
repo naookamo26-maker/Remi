@@ -195,3 +195,12 @@ def test_tray_hint_is_shown_only_once(db):
     n.tray_hint()
     assert len(backend.shown) == 1
     assert "トレイ" in backend.shown[0][0] or "tray" in backend.shown[0][0]
+
+
+def test_purge_keeps_the_open_issue(stale):
+    sync, issues, sid = stale
+    issues.set_monitored(sid, [1], False)
+    _backdate(issues, 11)
+    assert sync.purge_stale(keep={1}) == 0  # いま開いているチケットは消さない
+    assert issues.get(sid, 1) is not None
+    assert sync.purge_stale() == 1

@@ -443,3 +443,17 @@ def test_nothing_starts_after_shutdown(db, fake):
     assert mgr.restart() is False  # 終了後は起動しない
     mgr._retry(mgr._retry_gen, 1)  # 終了前に予約された再試行が、いま来ても同じ
     assert wait_until(lambda: len(_sync_threads()) == before)
+
+
+def test_restart_applies_the_latest_open_issue(db, fake):
+    """再起動したワーカーには、そのとき開いているチケットを伝える。"""
+    sid, mgr = _start(db, fake)
+    try:
+        mgr.set_open_issue(sid, 1)
+        assert mgr.restart() is True
+        assert wait_until(lambda: mgr._workers[sid].open_issue == 1)
+        mgr.set_open_issue(None, None)
+        assert mgr.restart() is True
+        assert wait_until(lambda: mgr._workers[sid].open_issue is None)
+    finally:
+        mgr.stop_all()

@@ -323,11 +323,12 @@ class IssueStore:
             c.execute("UPDATE issues SET last_opened_at = ? WHERE server_id = ? AND issue_id = ?",
                       (utcnow(), server_id, issue_id))
 
-    def purge_stale(self, days: int = PURGE_DAYS, server_id: int | None = None) -> int:
+    def purge_stale(self, days: int = PURGE_DAYS, server_id: int | None = None, keep: set[int] | None = None) -> int:
         """関係が外れた(監視対象外になって days 日経った)未完了のチケットのキャッシュを削除する。
 
         残すもの: クローズ済み(過去のチケットを見返せるように)、ウォッチしているバージョンに含まれるもの
-        (バージョンの一覧に出す)、下書きがあるもの、最近開いたもの。戻ってきたときは、同期が取得し直す。
+        (バージョンの一覧に出す)、下書きがあるもの、最近開いたもの、keep(server_id の、いま開いているチケット)。
+        戻ってきたときは、同期が取得し直す。
         """
         rows = self.db.query(
             "SELECT server_id, issue_id FROM issues i WHERE monitored = 0 AND unmonitored_at IS NOT NULL "
@@ -341,6 +342,8 @@ class IssueStore:
             "AND m.id = i.status_id AND json_extract(m.extra_json, '$.is_closed'))",
             (f"-{int(days)} days", f"-{int(days)} days", server_id, server_id),
         )
+        if keep:
+            rows = [r for r in rows if not (r[0] == server_id and r[1] in keep)]
         by_server: dict[int, list[int]] = {}
         for r in rows:
             by_server.setdefault(r[0], []).append(r[1])

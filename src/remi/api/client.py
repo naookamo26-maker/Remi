@@ -415,7 +415,7 @@ class RedmineClient:
         return written
 
 
-RETRY_AFTER_MAX = 3600.0  # Retry-After に従って待つ上限(秒)
+RETRY_AFTER_MAX = 3600.0  # Retry-After に従って待つ上限(秒)。異常に長い指定(何日も止まる)から守るための上限で、これを超える指定は1時間に丸める
 
 
 def parse_retry_after(value: str | None) -> float | None:

@@ -525,19 +525,28 @@ class SyncManager:
         self._visible = True
         self._open: tuple[int | None, int | None] = (None, None)
         self._retry_gen = 0  # restart の再試行の世代。変わったら、待っている再試行は取り消し
+        # 停止・起動・再試行(ライフサイクル)を直列にする鍵。_lock より外側で取る(この鍵を持ったまま _lock を取ってよい)
+        self._lifecycle = threading.RLock()
+        self._closed = False  # アプリの終了(shutdown)後は、ワーカーを起動しない
 
     def restart(self) -> bool:
         """同期スレッドを作り直す。旧スレッドが止まりきらなかったときは、並行して動かさないよう
-        起動を見送り False を返す(止まるのを待って、自動で再試行する)。"""
-        with self._lock:
-            self._retry_gen += 1  # 待っている再試行があれば取り消す
-            gen = self._retry_gen
-        if not self._stop_workers():
-            log.warning("sync restart postponed: old sync threads are still running")
-            self._schedule_retry(gen, RESTART_RETRY_MAX)
-            return False
-        self._start_workers()
-        return True
+        起動を見送り False を返す(止まるのを待って、自動で再試行する)。終了後(shutdown のあと)は何もしない。
+
+        停止・起動・再試行は _lifecycle で直列にする(複数の呼び出しが重なっても、ワーカーを二重に起動したり、
+        管理から外れたスレッドを残したりしない)。"""
+        with self._lifecycle:
+            if self._closed:
+                return False
+            with self._lock:
+                self._retry_gen += 1  # 待っている再試行があれば取り消す
+                gen = self._retry_gen
+            if not self._stop_workers():
+                log.warning("sync restart postponed: old sync threads are still running")
+                self._schedule_retry(gen, RESTART_RETRY_MAX)
+                return False
+            self._start_workers()
+            return True
 
     def _schedule_retry(self, gen: int, left: int) -> None:
         if left <= 0:
@@ -548,20 +557,21 @@ class SyncManager:
         t.start()
 
     def _retry(self, gen: int, left: int) -> None:
-        with self._lock:
-            if gen != self._retry_gen:  # 新しい restart や stop_all で取り消された
-                return
-        if self._stop_workers():
+        with self._lifecycle:
             with self._lock:
-                if gen != self._retry_gen:
+                if self._closed or gen != self._retry_gen:  # 新しい restart・stop_all・shutdown で取り消された
                     return
-            self._start_workers()
-        else:
-            self._schedule_retry(gen, left)
+            if self._stop_workers():
+                self._start_workers()
+            else:
+                self._schedule_retry(gen, left)
 
     def _start_workers(self) -> None:
         with self._lock:
             for server in ServerStore(self.db).list(enabled_only=True):
+                alive = self._workers.get(server.server_id)
+                if alive is not None and alive.is_alive():
+                    continue  # すでに動いている(重ねて起動しない)
                 w = ServerWorker(self.db, server.server_id, self.bus)
                 w.active = self._active
                 w.visible = self._visible
@@ -572,15 +582,22 @@ class SyncManager:
             self.set_open_issue(sid, iid)
 
     def stop_all(self, timeout: float = 5.0) -> bool:
-        """すべての同期スレッドを止める。時間内に止まらないものがあれば False。
+        """すべての同期スレッドを止める(一時的。あとで restart で動かし直せる)。時間内に止まらないものがあれば False。
 
         止めると、次のリクエストは送らず、通信中のリクエストの結果も捨てる(RedmineClient.cancel)。
         そのため、ページングや複数の処理が残っていても、通信中の1件が終われば止まる。
         True を返したときはスレッドが終わっているので、この後にDBへ書き込まれることはない。
         """
-        with self._lock:
-            self._retry_gen += 1  # 待っている restart の再試行は、取り消す(止めた後に起動しない)
-        return self._stop_workers(timeout)
+        with self._lifecycle:
+            with self._lock:
+                self._retry_gen += 1  # 待っている restart の再試行は、取り消す(止めた後に起動しない)
+            return self._stop_workers(timeout)
+
+    def shutdown(self, timeout: float = 5.0) -> bool:
+        """アプリの終了: すべての同期スレッドを止め、以後は restart でも起動しない。"""
+        with self._lifecycle:
+            self._closed = True
+            return self.stop_all(timeout)
 
     def _stop_workers(self, timeout: float = 5.0) -> bool:
         with self._lock:

@@ -407,3 +407,9 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 /* 上へスクロールして読んでいる間に届いた新着。タイムラインの見えている範囲の右下に貼り付く */
 .timeline .new-messages { position: sticky; bottom: 4px; align-self: flex-end; flex: none; border-radius: 999px; padding: 6px 14px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
+
+/* 会話の読み込みに失敗したときの右ペイン */
+.load-error { text-align: center; }
+.load-error p { margin: 0 0 6px; }
+.load-error .title { font-weight: 600; }
+.load-error .btn { margin-top: 8px; }

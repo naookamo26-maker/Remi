@@ -1064,3 +1064,40 @@ def test_assignee_shows_my_name_not_the_action(page, remi, fake):
     page.wait_for_selector(".conv-header select:not([disabled])")
     shown = page.locator(".conv-header select").nth(1).evaluate("e => e.selectedOptions[0].textContent")
     assert shown == "岡本 ナオ"
+
+
+def test_load_failure_shows_error_and_retry(page, remi, fake):
+    """会話の読み込みに失敗したら、読み込み中のままにせず、原因と「もう一度読み込む」を出す。押すと開き直せる。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    page.evaluate("""() => { const orig = window.fetch.bind(window); window.__fail = true;
+      window.fetch = async (u, o) => { if (window.__fail && String(u).includes('getConversation')) {
+        await new Promise((r) => setTimeout(r, 400));
+        return new Response(JSON.stringify({ error: { code: 'connection_failed' } }), { status: 200 }); }
+        return orig(u, o); }; }""")
+    page.locator(".issue-list li.issue", has_text="#10").click()
+    page.wait_for_selector(".load-error")
+    assert "会話を読み込めませんでした" in page.locator(".load-error").inner_text()
+    assert page.locator(".pane-conv .spin").count() == 0  # 読み込み中の表示は残らない
+    page.evaluate("() => { window.__fail = false; }")
+    page.get_by_role("button", name="もう一度読み込む").click()
+    page.wait_for_selector(".conv-header")
+    assert "CSVが文字化けする" in page.locator(".conv-header h1").inner_text()
+
+
+def test_stale_conversation_response_does_not_overwrite_newer(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    page.evaluate("""() => { const orig = window.fetch.bind(window); let n = 0;
+      window.fetch = async (u, o) => { const k = String(u).includes('getConversation') ? ++n : 0;
+        const r = await orig(u, o); if (k === 1) await new Promise((res) => setTimeout(res, 1500)); return r; }; }""")
+    page.locator(".issue-list li.issue", has_text="#10").click()
+    page.wait_for_timeout(400)
+    remi.ctx.db.query("UPDATE issues SET subject = '新しい件名' WHERE issue_id = 10")
+    page.evaluate("() => window.remi.conv.load(1, 10, { markRead: false })")  # あとから始めた読み込み(新しい内容)
+    page.wait_for_timeout(2500)  # 遅れた古い応答が届いたあと
+    assert page.locator(".conv-header h1").inner_text() == "新しい件名"

@@ -402,3 +402,44 @@ def test_unexpected_key_error_during_sync_is_recorded_not_fatal(db, fake, monkey
         assert mgr._worker(sid).is_alive()
     finally:
         mgr.stop_all()
+
+
+def _sync_threads():
+    return [t for t in threading.enumerate() if t.name.startswith("sync-") and t.is_alive()]
+
+
+def test_concurrent_restarts_do_not_leave_extra_workers(db, fake):
+    """複数の restart() が同時に呼ばれても、サーバーごとに同期スレッドは1本だけ(二重起動・管理外のスレッドを残さない)。"""
+    fake.add_project(1, "A")
+    fake.add_issue(1, 1, "a")
+    for n in range(2):
+        ServerStore(db).save(Server(name=f"S{n}", url=fake.base_url), api_key="test-key")
+    mgr = SyncManager(db, EventBus())
+    before = len(_sync_threads())
+    threads = [threading.Thread(target=mgr.restart) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    try:
+        assert len(mgr._workers) == 2
+        assert len(_sync_threads()) - before == 2
+    finally:
+        mgr.stop_all()
+    assert wait_until(lambda: len(_sync_threads()) == before)
+
+
+def test_nothing_starts_after_shutdown(db, fake):
+    """終了(shutdown)したあとは、restart や待っていた再試行でも、同期スレッドを起動しない。stop_all は一時停止で、動かし直せる。"""
+    fake.add_project(1, "A")
+    ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key")
+    mgr = SyncManager(db, EventBus())
+    before = len(_sync_threads())
+    assert mgr.restart() is True
+    assert mgr.stop_all() is True
+    assert mgr.restart() is True  # 一時停止のあとは、動かし直せる
+    assert len(_sync_threads()) - before == 1
+    assert mgr.shutdown() is True
+    assert mgr.restart() is False  # 終了後は起動しない
+    mgr._retry(mgr._retry_gen, 1)  # 終了前に予約された再試行が、いま来ても同じ
+    assert wait_until(lambda: len(_sync_threads()) == before)

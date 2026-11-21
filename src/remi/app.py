@@ -436,7 +436,7 @@ def run(argv: list[str]) -> int:
     finally:
         if tray is not None and tray.icon is not None:
             tray.icon.stop()
-        sync.stop_all(timeout=2.0)
+        sync.shutdown(timeout=2.0)
         server.stop()
         single.close()
         db.close_all()

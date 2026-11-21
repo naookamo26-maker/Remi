@@ -109,6 +109,7 @@ export class Conversation {
       data = await call("getConversation", { serverId, issueId, limit: this.limit, markRead });
     } catch (e) {
       clearTimeout(loadingTimer);
+      if (this._loadSeq !== seq) return; // 古い読み込みの失敗は、新しい表示に影響させない
       if (e.code === "not_found") {
         // 削除された: 開いていた扱いも外す(残すと、存在しないチケットを同期が確かめ続ける)
         const cur = this.app.current;
@@ -116,9 +117,17 @@ export class Conversation {
         else this.showEmpty();
         return;
       }
+      // 別のチケットを開こうとして失敗した: 読み込み中(または前のチケット)のままにせず、原因と再試行の手段を出す。
+      // すでにそのチケットを表示している(更新の失敗)ときは、表示を残して呼び出し側の通知に任せる
+      if (issueKey(this.data) !== `${serverId}:${issueId}`) {
+        const cur = this.app.current;
+        if (cur && cur.serverId === serverId && cur.issueId === issueId) this.showLoadError(serverId, issueId, e.code);
+        return;
+      }
       throw e;
     }
     clearTimeout(loadingTimer);
+    if (this._loadSeq !== seq) return; // もっと新しい読み込みを始めた: 古い応答で新しい表示を上書きしない
     const cur = this.app.current;
     if (!cur || cur.serverId !== serverId || cur.issueId !== issueId) return; // 別のチケットに移った
     const sameIssue = issueKey(this.data) === issueKey(data);
@@ -235,10 +244,23 @@ export class Conversation {
 
   /** 読み込み中の表示(別のチケットを開いて、表示まで時間がかかるとき) */
   showLoading() {
+    this.data = null;
     this.composer = null;
     this.timeline = null;
     clear(this.root).append(h("div", { class: "welcome" },
       h("p", { class: "muted loading" }, spinner(), t("conv.paneLoading"))));
+  }
+
+  /** 読み込みに失敗した(別のチケットを開こうとしたとき): 原因と、もう一度読み込むボタン */
+  showLoadError(serverId, issueId, code) {
+    this.data = null;
+    this.composer = null;
+    this.timeline = null;
+    clear(this.root).append(h("div", { class: "welcome" }, h("div", { class: "load-error", role: "alert" },
+      h("p", { class: "title" }, t("conv.loadFailed")),
+      h("p", { class: "muted" }, t(`errors.${code || "connection_failed"}`)),
+      h("button", { type: "button", class: "btn primary", onClick: () => this.app.openIssue(serverId, issueId) },
+        t("conv.reload")))));
   }
 
   // --- 新着ボタン(上へスクロールして読んでいる間に新着が届いたとき) -----------------------------

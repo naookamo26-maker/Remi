@@ -37,10 +37,16 @@ export class Composer {
     this.privateLabel = h("label", {}, this.privateBox, t("conv.sendPrivate"));
     this.sendButton = h("button", { type: "button", class: "btn primary", onClick: () => this.conv.send() }, icon("send"), t("conv.send"));
     this.error = h("div", { class: "error", role: "alert" });
-    this.saveDraft = debounce(() => {
-      call("saveDraft", { serverId: this.serverId, issueId: this.issueId, body: this.textarea.value, private: this.privateBox.checked })
-        .catch(() => {});
-    }, 600);
+    // 下書きの保存状態(保存待ち・保存中・保存済み・失敗)。通常は何も出さない
+    this.draftState = h("span", { class: "draft-state", "aria-live": "polite", hidden: true });
+    this.draftRev = 0; // 入力などで下書きが変わるたびに進める。古い保存の結果で、新しい状態を上書きしないために使う
+    this.draftTimer = null;
+    const persist = debounce(() => this.persistDraft(), 600);
+    this.saveDraft = Object.assign(() => { this.draftRev++; this.setDraftState("pending"); persist(); }, {
+      flush: () => persist.flush(),
+      flushPending: () => persist.flushPending(),
+      cancel: () => { this.draftRev++; persist.cancel(); this.setDraftState("idle"); },
+    });
     if (d.draft.failed) this.showFailed();
     const tab = (label, selected, onClick) => h("button", { type: "button", role: "tab", "aria-selected": String(selected), onClick }, label);
     const editTab = tab(t("conv.edit"), true, () => this.setPreview(false, editTab, previewTab));
@@ -57,16 +63,48 @@ export class Composer {
         }
       } },
       h("div", { class: "tabs", role: "tablist", "aria-label": t("conv.inputMode") }, editTab, previewTab,
-        h("span", { class: "spacer" }), h("span", { class: "fmt" }, t("conv.format", { format: fmt }))),
+        h("span", { class: "spacer" }), h("span", { class: "fmt", title: t("conv.formatHint") }, t("conv.format", { format: fmt }))),
       this.textarea, this.preview, this.chips, this.error,
       h("div", { class: "actions" },
         this.attachButton, this.fileInput,
         this.privateLabel,
-        h("span", { class: "muted" }, t("conv.sendHint")),
+        this.draftState,
         h("span", { class: "spacer" }),
         this.sendButton));
     this.renderChips();
     this.update();
+  }
+
+  // --- 下書きの保存と、その状態の表示(設計書 §6.1) ----------------------------------
+  /** 下書きを保存する。結果は、そのあとに入力がなかったときだけ表示に反映する */
+  async persistDraft() {
+    const rev = this.draftRev;
+    const body = this.textarea.value;
+    this.setDraftState("saving");
+    try {
+      await call("saveDraft", { serverId: this.serverId, issueId: this.issueId, body, private: this.privateBox.checked });
+      // 本文が空なら下書きは残らないので、「保存済み」とは出さない
+      if (rev === this.draftRev) this.setDraftState(body.trim() ? "saved" : "idle");
+    } catch {
+      if (rev === this.draftRev) this.setDraftState("failed");
+    }
+  }
+
+  /** @param {"idle"|"pending"|"saving"|"saved"|"failed"} state */
+  setDraftState(state) {
+    clearTimeout(this.draftTimer);
+    const el = this.draftState;
+    el.className = `draft-state ${state}`;
+    el.hidden = state === "idle";
+    el.replaceChildren();
+    if (state === "failed") {
+      el.append(icon("warning"), t("conv.draft.failed"),
+        h("button", { type: "button", class: "btn", onClick: () => { this.draftRev++; this.persistDraft(); } }, t("conv.draft.resave")));
+    } else if (state !== "idle") {
+      el.append(state === "saved" ? icon("check") : null, t(`conv.draft.${state}`));
+    }
+    // 保存済みの表示は、しばらくしたら消す(入力の邪魔にならないように)
+    if (state === "saved") this.draftTimer = setTimeout(() => this.setDraftState("idle"), 2000);
   }
 
   // --- 送信 -------------------------------------------------------------------

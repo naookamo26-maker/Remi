@@ -18,6 +18,7 @@ import threading
 import time
 import webbrowser
 from collections.abc import Callable
+from datetime import date
 from typing import Any, Protocol
 
 from remi import __version__
@@ -30,6 +31,7 @@ from remi.paths import attachment_cache_dir
 from remi.render.details import DetailNames, describe_detail
 from remi.render.markup import TEXT_FORMATS, RenderContext, render
 from remi.render.schemes import link_schemes, scheme_of
+from remi.server import issue_list
 from remi.server.tree import build_tree
 from remi.store.issues import DEFAULT_RELATIONS, REL_ASSIGNED, REL_AUTHORED, REL_GROUP, REL_WATCHING, RELATIONS
 from remi.store.projects import PROJECT_STATUS_ACTIVE, SETTING_KEYS
@@ -45,9 +47,13 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "language": lambda v: v == "system" or v in SUPPORTED_LANGUAGES,
     "notify_enabled": lambda v: isinstance(v, bool),
     "autostart": lambda v: isinstance(v, bool),
-    "show_closed": lambda v: isinstance(v, bool),
-    "version_show_closed": lambda v: isinstance(v, bool),
+    "list_search": lambda v: isinstance(v, str) and len(v) <= 200,
+    "list_status": lambda v: _valid_status_filter(v),
+    "version_status": lambda v: _valid_status_filter(v),
+    "list_filter": lambda v: _valid_list_filter(v),
+    "list_sort": lambda v: _valid_sort(v),
     "unread_first": lambda v: isinstance(v, bool),
+    "list_density": lambda v: v in ("standard", "compact"),
     "allow_external_images": lambda v: isinstance(v, bool),
     "mine_side": lambda v: v in ("right", "left"),
     "pane_sizes": lambda v: isinstance(v, list) and len(v) <= 3 and all(isinstance(x, int | float) for x in v),
@@ -108,6 +114,18 @@ def _valid_change(key: str, v: Any) -> bool:
     if key == "estimated_hours":
         return v is None or (isinstance(v, int | float) and not isinstance(v, bool) and 0 <= v < 100000)
     return False
+
+
+def _valid_status_filter(v: Any) -> bool:
+    return issue_list.valid_status_filter(v)
+
+
+def _valid_list_filter(v: Any) -> bool:
+    return issue_list.valid_list_filter(v)
+
+
+def _valid_sort(v: Any) -> bool:
+    return issue_list.valid_sort(v)
 
 
 def _valid_relations(v: Any) -> bool:
@@ -483,63 +501,100 @@ class RemiApi:
     @rpc
     def listIssues(self, serverId: int | None = None, projectId: int | None = None,  # noqa: N802,N803
                    unreadOnly: bool = False, search: str = "", relation: str = "all",  # noqa: N803
-                   versionId: int | None = None) -> dict[str, Any]:  # noqa: N803
-        """一覧。versionId を渡すと、そのバージョンのチケットをすべて出す(表示するチケット・絞り込みは使わない)。"""
-        if versionId is not None:
-            return self._list_version_issues(serverId, versionId, search)
+                   versionId: int | None = None,  # noqa: N803
+                   statusMode: str | None = None, statuses: list[str] | None = None,  # noqa: N803
+                   trackers: list[str] | None = None, priorities: list[str] | None = None,
+                   assignees: list[str] | None = None, due: list[str] | None = None,
+                   sort: str = "updated", desc: bool = True) -> dict[str, Any]:
+        """一覧。versionId を渡すと、そのバージョンのチケットをすべて出す(表示するチケット・関係の絞り込みは使わない)。
+
+        statusMode(open=未完了 / closed=クローズ済み / all)・statuses(個別のステータス名。あれば statusMode は使わない)・
+        trackers・priorities・assignees(自分は "@me"、未割り当ては "@none")・due(overdue / week / none)で絞り込み、
+        sort(updated / number / subject / status / tracker / priority / due)と desc で並べ替える。
+        statusMode を省くと、チケット一覧は open、バージョンは all。
+        返す値: issues・total(件数)・facets(絞り込みの選択肢と件数)・scopeTotal(0件のとき、条件を当てる前の件数)。
+        """
+        version = versionId is not None
+        cond = issue_list.Conditions(
+            status_mode=statusMode or ("all" if version else "open"), statuses=list(statuses or []),
+            trackers=list(trackers or []), priorities=list(priorities or []), assignees=list(assignees or []),
+            due=list(due or []), sort=sort, desc=bool(desc))
+        if (cond.status_mode not in issue_list.STATUS_MODES or sort not in issue_list.SORT_KEYS
+                or not all(isinstance(x, str) for x in (*cond.statuses, *cond.trackers, *cond.priorities, *cond.assignees))
+                or any(x not in issue_list.DUE_KEYS for x in cond.due)):
+            raise RpcError("invalid_input", "conditions")
+        if version:
+            if serverId is None or self.ctx.versions.get(serverId, versionId) is None:
+                raise RpcError("not_found")
+            rows = self.ctx.issues.list_issues([serverId], search=search, version_id=versionId)
+            res = self._issue_summaries(rows, cond, version=True)
+            if not res["issues"]:
+                res["scopeTotal"] = len(self.ctx.issues.list_issues([serverId], version_id=versionId))
+            return res
         server_ids = [serverId] if serverId else [s.server_id for s in self.ctx.servers.list(enabled_only=True)]
         project_ids = None
         if serverId and projectId:
             project_ids = {projectId} | self.ctx.projects.descendants(serverId, projectId)
-        show_closed = bool(self.ctx.settings.get("show_closed"))
         if relation not in RELATION_FILTERS:
             raise RpcError("invalid_input", "relation")
         # プロジェクトごとの表示するチケットと、絞り込みボタンの選択。ツリーの件数・未読数とトレイの未読数も
-        # 同じもので数える
+        # 同じもので数える。クローズ済み(監視対象外)も取り出して、ステータスの絞り込みで出し分ける
         scope = self.ctx.relation_scope(relation)
-        rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=show_closed,
+        rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=True,
                                            unread_only=unreadOnly, search=search, relations=scope)
-        return self._issue_summaries(rows)
+        res = self._issue_summaries(rows, cond)
+        if not res["issues"]:
+            # 検索・関係・ステータス・属性を当てる前に、表示できるチケットがあるか(「条件に一致するものがない」の判定)
+            every = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=True,
+                                                unread_only=unreadOnly, relations=self.ctx.relation_scope("all"))
+            res["scopeTotal"] = len(self._issue_summaries(every, issue_list.Conditions(status_mode="all"))["issues"])
+        return res
 
-    def _list_version_issues(self, server_id: int | None, version_id: int, search: str) -> dict[str, Any]:
-        if server_id is None or self.ctx.versions.get(server_id, version_id) is None:
-            raise RpcError("not_found")
-        rows = self.ctx.issues.list_issues([server_id], search=search, version_id=version_id)
-        return self._issue_summaries(rows, version=True)
-
-    def _issue_summaries(self, rows, version: bool = False) -> dict[str, Any]:
-        # バージョンを開いたときの「クローズ済みも表示」は、チケット一覧とは別の設定
-        show_closed = bool(self.ctx.settings.get("version_show_closed" if version else "show_closed"))
+    def _issue_summaries(self, rows, cond: issue_list.Conditions, version: bool = False) -> dict[str, Any]:
         names: dict[int, dict[str, Any]] = {}
-        out = []
+        base = []
+        today = date.today()
         for r in rows:
             n = names.get(r.server_id)
             if n is None:
+                masters = self.ctx.masters
                 n = names[r.server_id] = {
-                    "status": self.ctx.masters.names(r.server_id, "status"),
-                    "closed": self.ctx.masters.closed_status_ids(r.server_id),
+                    "status": masters.names(r.server_id, "status"),
+                    "tracker": masters.names(r.server_id, "tracker"),
+                    "priority": masters.names(r.server_id, "priority"),
+                    "pos": {k: {i: e.get("position", issue_list.POSITION_UNKNOWN)
+                                for i, e in masters.extras(r.server_id, k).items()}
+                            for k in ("status", "tracker", "priority")},
+                    "closed": masters.closed_status_ids(r.server_id),
                     "server": (self.ctx.servers.get(r.server_id) or Server(name="", url="")).name,
                 }
             closed = r.status_id in n["closed"]
-            if version:
-                if closed and not show_closed:
-                    continue
-            elif not r.relation_flags or (not r.monitored and not closed):
+            if not version and (not r.relation_flags or (not r.monitored and not closed)):
                 continue  # 自分と関係ない(バージョンで見ているだけの)チケットと、関係が外れた未完了チケットは出さない
-            out.append({
+            state = issue_list.due_state(r.due_date, closed, today)
+            base.append({
                 "serverId": r.server_id, "serverName": n["server"], "issueId": r.issue_id,
                 "projectId": r.project_id, "subject": r.subject,
                 "status": n["status"].get(r.status_id, ""), "closed": closed,
+                "tracker": n["tracker"].get(r.tracker_id, ""), "priority": n["priority"].get(r.priority_id, ""),
+                "dueDate": r.due_date, "overdue": state == "overdue", "dueState": state,
                 # 自分と関係ないチケット(バージョンで見ているもの)のコメントは未読として数えない
                 "assignee": r.assigned_to_name, "updatedOn": r.updated_on,
                 "unread": r.unread if r.relation_flags else 0,
                 "relations": _flags(r.relation_flags), "monitored": r.monitored,
                 "lastNoteUser": r.last_note_user, "lastNote": (r.last_note or "")[:120].replace("\n", " "),
+                "_pos": {"status": n["pos"]["status"].get(r.status_id, issue_list.POSITION_UNKNOWN),
+                         "tracker": n["pos"]["tracker"].get(r.tracker_id, issue_list.POSITION_UNKNOWN),
+                         "priority": n["pos"]["priority"].get(r.priority_id, issue_list.POSITION_UNKNOWN)},
             })
+        facets = issue_list.facets(base, cond)
+        out = issue_list.sort_items([i for i in base if issue_list.matches(i, cond)], cond)
         # バージョンのチケットは自分と関係ないものも含み、未読として数えないので、未読を上にしない
         if not version and self.ctx.settings.get("unread_first"):
-            out.sort(key=lambda x: 0 if x["unread"] else 1)  # 安定ソートなので更新順は保たれる
-        return {"issues": out, "total": len(out)}
+            out.sort(key=lambda x: 0 if x["unread"] else 1)  # 安定ソートなので、選んだ並びは保たれる
+        for i in out:
+            del i["_pos"]
+        return {"issues": out, "total": len(out), "facets": facets}
 
     # --- ロードマップ(バージョン) ---------------------------------------------------
     @rpc

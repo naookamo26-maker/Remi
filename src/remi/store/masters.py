@@ -16,11 +16,15 @@ class MasterStore:
         self.db = db
 
     def replace(self, server_id: int, kind: str, items: list[dict[str, Any]],
-                extra_keys: tuple[str, ...] = ()) -> None:
+                extra_keys: tuple[str, ...] = (), with_position: bool = False) -> None:
+        """with_position: Redmine が返した並び(ステータス・トラッカー・優先度は、管理画面の順序で返る)を、
+        position(0から)として覚える。一覧の並べ替えを、名前順ではなく Redmine の順序にするのに使う。"""
         with self.db.tx() as c:
             c.execute("DELETE FROM masters WHERE server_id = ? AND kind = ?", (server_id, kind))
-            for it in items:
+            for pos, it in enumerate(items):
                 extra = {k: it.get(k) for k in extra_keys if k in it}
+                if with_position:
+                    extra["position"] = pos
                 c.execute(
                     "INSERT INTO masters(server_id, kind, id, name, extra_json) VALUES(?, ?, ?, ?, ?)",
                     (server_id, kind, int(it["id"]), it.get("name", ""), json.dumps(extra)),

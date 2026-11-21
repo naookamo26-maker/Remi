@@ -92,7 +92,7 @@
  */
 
 /**
- * listIssues の戻り値 `{issues: IssueSummary[], total: number}` の1件。
+ * listIssues の戻り値 `{issues: IssueSummary[], total, facets, [scopeTotal]}` の1件。
  * @typedef {object} IssueSummary
  * @property {number} serverId
  * @property {string} serverName
@@ -101,13 +101,30 @@
  * @property {string} subject
  * @property {string} status               ステータス名
  * @property {boolean} closed
+ * @property {string} tracker              トラッカー名(知らないときは空)
+ * @property {string} priority             優先度名(知らないときは空)
+ * @property {string|null} dueDate         期日(YYYY-MM-DD)
+ * @property {boolean} overdue             期限切れ(期日を過ぎた未完了)
+ * @property {string} dueState             overdue / week(今週)/ none / other
  * @property {string|null} assignee
  * @property {string|null} updatedOn       ISO 8601
  * @property {number} unread
  * @property {Relation[]} relations
- * @property {boolean} monitored           関係が外れたチケット(クローズ済みも表示のとき)は false
+ * @property {boolean} monitored           関係が外れたチケット(クローズ済みなど)は false
  * @property {string|null} lastNoteUser
  * @property {string} lastNote             最後のコメントの先頭(改行は空白に置き換え済み)
+ */
+
+/**
+ * 絞り込みの選択肢1つ。
+ * @typedef {object} FacetItem
+ * @property {string} value     名前。担当者の「自分」は "@me"、「未割り当て」は "@none"、期日は overdue / week / none
+ * @property {number} count     その値を選んだときの件数(ほかの条件を当てたあと)
+ */
+
+/**
+ * 絞り込みの選択肢(いまの一覧にあるものだけ)。キーは status / tracker / priority / assignee / due。
+ * @typedef {Object<string, FacetItem[]>} Facets
  */
 
 /** @typedef {"assigned"|"group"|"watching"|"authored"} Relation 自分との関係(group はグループ経由の担当) */

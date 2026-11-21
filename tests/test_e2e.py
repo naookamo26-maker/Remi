@@ -1122,3 +1122,227 @@ def test_late_not_found_does_not_wipe_other_view(page, remi, fake):
     page.wait_for_timeout(2000)
     assert page.locator("#other-view").count() == 1
     assert page.locator(".pane-conv .spin").count() == 0  # 読み込み中の表示のタイマーも、閉じたあとは効かない
+
+
+def test_draft_save_status(page, remi, fake):
+    """下書きの保存状態を、入力欄の近くに出す。保存済みは消え、失敗のときは再保存できる(設計書 §6.1)。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    state = page.locator(".composer .draft-state")
+    playwright_api.expect(state).to_be_hidden()  # 通常は何も出さない
+    assert "下書きは自動保存されます" not in page.locator(".composer").inner_text()
+
+    page.locator(".composer textarea").fill("途中の文章")
+    playwright_api.expect(state).to_contain_text("保存待ち")
+    playwright_api.expect(state).to_contain_text("下書き保存済み")
+    playwright_api.expect(state).to_be_hidden(timeout=5000)  # しばらくすると消える
+    assert remi.ctx.issues.get_draft(1, 10)[0] == "途中の文章"
+
+    # 保存に失敗したら、そう出して、再保存できる
+    page.route("**/api/saveDraft", lambda route: route.abort())
+    page.locator(".composer textarea").fill("失敗する文章")
+    playwright_api.expect(state).to_contain_text("下書きを保存できませんでした")
+    page.unroute("**/api/saveDraft")
+    page.get_by_role("button", name="再保存").click()
+    playwright_api.expect(state).to_contain_text("下書き保存済み")
+    assert remi.ctx.issues.get_draft(1, 10)[0] == "失敗する文章"
+
+    # 本文を空にすると下書きは残らないので、「保存済み」とは出さない
+    page.locator(".composer textarea").fill("")
+    page.wait_for_timeout(1200)
+    playwright_api.expect(state).to_be_hidden()
+    # 失敗させた通信のログ以外に、エラーはない
+    assert not [e for e in page.errors if "api/saveDraft" not in e], page.errors
+
+
+def _open_list(page, remi, fake, closed=True):
+    """担当・ウォッチのチケットと、クローズ済みの担当チケット(12)を用意して、一覧を開く。"""
+    seed(fake)
+    if closed:
+        fake.add_issue(12, 2, "終了済みの件", status_id=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+
+
+def test_search_popup_and_chip(page, remi, fake):
+    """🔍を押すと小さなウィンドウで検索できる。検索語はチップに残り、✕で消せる。保存して次回も使う(設計書 §5.1)。"""
+    _open_list(page, remi, fake)
+    chips = page.locator(".cchips")
+    playwright_api.expect(chips).to_be_hidden()  # 条件がなければ、チップの行は出ない
+    assert page.locator(".search input").count() == 0  # 検索ボックスは、押したときだけ出る
+
+    page.get_by_role("button", name="検索 (Ctrl+F)").click()
+    box = page.locator(".search-pop input")
+    playwright_api.expect(box).to_be_focused()
+    box.fill("CSV")
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    page.keyboard.press("Enter")  # 閉じても、検索語はチップとして残る
+    playwright_api.expect(page.locator(".search-pop")).to_have_count(0)
+    playwright_api.expect(chips).to_contain_text("検索「CSV」")
+    playwright_api.expect(page.get_by_role("button", name="検索 (Ctrl+F)")).to_have_attribute("aria-pressed", "true")
+    assert remi.ctx.settings.get("list_search") == "CSV"
+
+    page.reload()  # 次に開いたときも使う
+    page.wait_for_selector(".issue-list li.issue")
+    playwright_api.expect(chips).to_contain_text("検索「CSV」")
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+
+    # Ctrl+F で開く。Esc は、検索語があれば消し、空なら閉じる
+    page.keyboard.press("Control+f")
+    playwright_api.expect(page.locator(".search-pop input")).to_have_value("CSV")
+    page.keyboard.press("Escape")
+    playwright_api.expect(page.locator(".search-pop input")).to_have_value("")
+    page.keyboard.press("Escape")
+    playwright_api.expect(page.locator(".search-pop")).to_have_count(0)
+    playwright_api.expect(chips).to_be_hidden()
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)  # クローズ済み(12)は、既定の「未完了」で出ない
+
+    # チップの✕で消せる
+    page.get_by_role("button", name="検索 (Ctrl+F)").click()
+    page.locator(".search-pop input").fill("メール")
+    page.keyboard.press("Enter")
+    playwright_api.expect(chips).to_contain_text("メール")
+    page.get_by_role("button", name="検索の条件を外す").click()
+    playwright_api.expect(chips).to_be_hidden()
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    assert not page.errors, page.errors
+
+
+def test_filter_popup_status_and_chips(page, remi, fake):
+    """ステータスは「未完了(既定)/クローズ済み/すべて」と個別の選択。条件はチップに出て、✕で消せる。"""
+    _open_list(page, remi, fake)
+    button = page.get_by_role("button", name="絞り込み", exact=True)
+    chips = page.locator(".cchips")
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)  # 既定は未完了
+    button.click()
+    pop = page.locator(".fpop")
+    playwright_api.expect(pop.get_by_role("button", name=re.compile("^未完了"))).to_have_attribute("aria-pressed", "true")
+
+    pop.get_by_role("button", name="クローズ済み").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(page.locator(".issue")).to_contain_text("終了済みの件")
+    playwright_api.expect(chips).to_contain_text("ステータス: クローズ済み")
+    pop.get_by_role("button", name="すべて", exact=True).click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(3)
+
+    # 個別に選ぶと、3つは選択なしになる(複数選べる)
+    pop.get_by_role("menuitemcheckbox", name=re.compile("^新規")).click()
+    playwright_api.expect(pop.get_by_role("button", name="すべて", exact=True)).to_have_attribute("aria-pressed", "false")
+    playwright_api.expect(chips).to_contain_text("ステータス: 新規")
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    assert remi.ctx.settings.get("list_status") == {"mode": "open", "names": ["新規"]}
+    page.keyboard.press("Escape")
+
+    # チップの✕で、既定の「未完了」に戻る
+    page.get_by_role("button", name="ステータスの条件を外す").click()
+    playwright_api.expect(chips).to_be_hidden()
+    assert remi.ctx.settings.get("list_status") == {"mode": "open", "names": []}
+    assert not page.errors, page.errors
+
+
+def test_filter_attributes_and_clear_all(page, remi, fake):
+    """担当者などの属性の絞り込み(項目ごとに開閉、チェック付きのリスト)と、「すべて解除」。"""
+    _open_list(page, remi, fake)
+    page.get_by_role("button", name="絞り込み", exact=True).click()
+    pop = page.locator(".fpop")
+    pop.get_by_role("button", name=re.compile("^担当者")).click()
+    # 「自分」は、担当者のリストの先頭。件数が付く
+    first = pop.locator(".plist .fit").first
+    playwright_api.expect(first).to_contain_text("自分")
+    first.click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(page.locator(".cchip-filter")).to_contain_text("担当者: 自分")
+    playwright_api.expect(page.get_by_role("button", name="絞り込み", exact=True)).to_have_attribute("aria-pressed", "true")
+    page.keyboard.press("Escape")
+
+    # 関係ボタン・検索も合わせて0件にして、「すべて解除」で既定に戻す
+    page.get_by_role("button", name="担当", exact=True).click()
+    page.get_by_role("button", name="検索 (Ctrl+F)").click()
+    page.locator(".search-pop input").fill("メール")  # 件名にメールを含むのは、担当ではないチケット(11)だけ
+    page.keyboard.press("Enter")
+    playwright_api.expect(page.locator(".issue")).to_have_count(0)
+    playwright_api.expect(page.locator(".empty")).to_contain_text("条件に一致するチケットはありません。")
+    page.locator(".empty").get_by_role("button", name="すべて解除").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(2)
+    playwright_api.expect(page.locator(".cchips")).to_be_hidden()
+    assert remi.ctx.settings.get("relation_filter") == "all"
+    assert remi.ctx.settings.get("list_filter") == {"trackers": [], "priorities": [], "assignees": [], "due": []}
+    assert not page.errors, page.errors
+
+
+def test_sort_menu_tags_and_chip(page, remi, fake):
+    """並べ替えのメニュー。既定以外は、チップと、行のタグ(優先度・期日など)で分かる。"""
+    seed(fake)
+    fake.add_issue(13, 2, "優先度が高い", priority_id=3, due_date="2020-01-01")
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    sort = page.get_by_role("button", name="並べ替え", exact=True)
+    sort.click()
+    page.get_by_role("menuitemcheckbox", name="優先度").click()
+    # 優先度は高い順(降順)が初期値。「高め」が先頭
+    playwright_api.expect(page.locator(".issue").first).to_contain_text("優先度が高い")
+    playwright_api.expect(page.locator(".issue").first.locator(".skey")).to_have_text("優先度 高め")
+    playwright_api.expect(page.locator(".cchip-sort")).to_contain_text("並べ替え: 優先度 ↓")
+    assert remi.ctx.settings.get("list_sort") == {"key": "priority", "desc": True}
+
+    # 期日: 近い順(昇順)。期限切れは、警告のタグ
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("menuitemcheckbox", name="期日").click()
+    playwright_api.expect(page.locator(".issue").first).to_contain_text("優先度が高い")
+    playwright_api.expect(page.locator(".issue").first.locator(".skey.warn")).to_contain_text("期日 2020/1/1")
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("button", name="降順 ↓").click()
+    playwright_api.expect(page.locator(".cchip-sort")).to_contain_text("並べ替え: 期日 ↓")
+    # 期日のないものは、降順でも最後(期日のあるチケットが先頭)
+    playwright_api.expect(page.locator(".issue").first).to_contain_text("優先度が高い")
+    playwright_api.expect(page.locator(".issue").last).not_to_contain_text("優先度が高い")
+
+    # ✕で既定の並びに戻る
+    page.get_by_role("button", name="並べ替えの条件を外す").click()
+    playwright_api.expect(page.locator(".cchips")).to_be_hidden()
+    playwright_api.expect(page.locator(".skey")).to_have_count(0)
+    assert remi.ctx.settings.get("list_sort") == {"key": "updated", "desc": True}
+    assert not page.errors, page.errors
+
+
+def test_unread_first_is_in_settings_dialog(page, remi, fake):
+    """「未読を上に」は、一覧のヘッダではなく、全体の設定の画面にある。"""
+    _open_list(page, remi, fake, closed=False)
+    assert page.get_by_label("未読を上に").count() == 0
+    page.get_by_role("button", name="設定", exact=True).click()
+    box = page.get_by_label("未読のチケットを上に表示する")
+    playwright_api.expect(box).to_be_checked()
+    box.uncheck()
+    page.wait_for_timeout(300)
+    assert remi.ctx.settings.get("unread_first") is False
+    assert not page.errors, page.errors
+
+
+def test_compact_density(page, remi, fake):
+    """一覧の表示密度を切り替え、選んだ表示を次回も使う。コンパクトでは関係のラベルを1行目に出す。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    button = page.get_by_role("button", name="コンパクト表示")
+    playwright_api.expect(button).to_have_attribute("aria-pressed", "false")
+    assert page.locator(".issue .line3").count() == 2  # 標準: 3行目に関係のラベルと最新コメント
+
+    button.click()
+    playwright_api.expect(button).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(page.locator(".issue-list.compact")).to_have_count(1)
+    assert page.locator(".issue .line3").count() == 0
+    row = page.locator(".issue", has_text="メールの宛先を追加したい")
+    playwright_api.expect(row.locator(".line1 .tag").first).to_be_visible()
+    assert remi.ctx.settings.get("list_density") == "compact"
+
+    page.reload()  # 次に開いたときも、コンパクトのまま
+    page.wait_for_selector(".issue-list.compact li.issue")
+    page.get_by_role("button", name="コンパクト表示").click()
+    playwright_api.expect(page.locator(".issue-list.compact")).to_have_count(0)
+    assert remi.ctx.settings.get("list_density") == "standard"
+    assert not page.errors, page.errors

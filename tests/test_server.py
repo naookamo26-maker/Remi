@@ -85,6 +85,10 @@ def test_bootstrap_and_settings(app):
     assert s["theme"] == "dark"
     assert app.rpc_error("setSetting", key="theme", value="pink")["code"] == "invalid_setting"
     assert app.rpc_error("setSetting", key="window_geometry", value="x")["code"] == "invalid_setting"
+    # 一覧の表示密度(標準 / コンパクト)
+    assert app.rpc("bootstrap")["settings"]["list_density"] == "standard"
+    assert app.rpc("setSetting", key="list_density", value="compact")["list_density"] == "compact"
+    assert app.rpc_error("setSetting", key="list_density", value="tiny")["code"] == "invalid_setting"
 
 
 def test_full_flow(app, fake):
@@ -782,16 +786,13 @@ def test_versions_api_list_tree_and_read(app, fake):
     tree = app.rpc("getTree")["servers"][0]
     assert tree["count"] == 1  # バージョンのチケットは件数に入れない
     assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [10]
-    # マイルストーンの「クローズ済みも表示」は、チケット一覧の設定(show_closed)とは別で、既定はオン
-    vids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"])  # noqa: E731
+    # マイルストーンのステータスの絞り込みは、既定が「すべて」(チケット一覧は「未完了」)
+    vids = lambda **kw: sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5, **kw)["issues"])  # noqa: E731
     assert vids() == [20, 21]
-    app.rpc("setSetting", key="version_show_closed", value=False)
-    assert vids() == [20]
-    app.rpc("setSetting", key="show_closed", value=True)  # 一覧の設定は、バージョンには効かない
-    assert vids() == [20]
-    app.rpc("setSetting", key="version_show_closed", value=True)
-    assert vids() == [20, 21]
-    app.rpc("setSetting", key="show_closed", value=False)
+    assert vids(statusMode="open") == [20]
+    assert vids(statusMode="closed") == [21]
+    assert app.rpc("bootstrap")["settings"]["version_status"] == {"mode": "all", "names": []}
+    assert app.rpc("bootstrap")["settings"]["list_status"] == {"mode": "open", "names": []}
     assert app.rpc_error("listIssues", serverId=sid, versionId=999)["code"] == "not_found"
 
     # 変化があれば印が付き、表示したら消える

@@ -8,6 +8,7 @@
   --bubble-private: #FFFDF0; --bubble-private-border: #EADFA8;
   --code-bg: #F6F8FA; --code-border: #E1E4E8; --mention-bg: #C3DBF5; --mention-fg: #0B4F8A;
   --danger: #A40E26; --success: #116329; --warning-bg: #FFF8C5; --warning-fg: #6F4E00;
+  --c-filter: #1B7F4B; --c-sort: #7A4BC2; /* 絞り込み(緑)・並べ替え(紫)の色。検索は --accent */
   --font: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", system-ui, sans-serif;
   --mono: "Cascadia Mono", Consolas, "BIZ UDGothic", "Noto Sans Mono CJK JP", monospace;
 }
@@ -20,6 +21,7 @@
   --bubble-private: #332D1A; --bubble-private-border: #5C5130;
   --code-bg: #16171A; --code-border: #3A3D42; --mention-bg: #23466E; --mention-fg: #CFE6FF;
   --danger: #FF8A80; --success: #6FDD8B; --warning-bg: #3D3000; --warning-fg: #F2CC60;
+  --c-filter: #5FD3A0; --c-sort: #B79BEA;
 }
 html, body { margin: 0; height: 100%; background: var(--window); color: var(--text); font: 13px/1.5 var(--font); }
 .app-loading { display: grid; place-items: center; height: 100%; color: var(--text-muted); }
@@ -166,15 +168,74 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .btn .spin { width: 10px; height: 10px; }
 
 /* ---- 一覧 ---- */
-.list-header { padding: 10px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); }
-.list-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.list-header { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border); }
+.list-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.list-title .title-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .list-title h2 { margin: 0; font-size: 14px; }
 .list-title .crumb { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 32px; border: 1px solid var(--border);
+.search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 30px; border: 1px solid var(--border);
   border-radius: 6px; color: var(--text-muted); background: var(--window); }
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, var(--window)); }
 .search input { flex: 1; border: 0; outline: none; background: transparent; color: var(--text); min-width: 0; }
-.toggles { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; }
-.toggles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.list-header .segmented button { min-height: 22px; }
+/* 検索・並べ替え・絞り込み・表示密度のボタン。検索=青、絞り込み=緑、並べ替え=紫。条件があるときだけ色が付く */
+.lbtn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; flex: none; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--window); color: var(--text-muted); }
+.lbtn:hover { background: var(--surface); }
+.lbtn svg.icon { width: 14px; height: 14px; stroke-width: 1.6; }
+/* アイコンは、条件がないときも、それぞれの色(検索=青、絞り込み=緑、並べ替え=紫)。条件があるときは、背景と枠にも色が付く */
+.lbtn-search { color: var(--accent); }
+.lbtn-filter { color: var(--c-filter); }
+.lbtn-sort { color: var(--c-sort); }
+.lbtn-density[aria-pressed=true] { background: var(--selection); color: var(--accent); border-color: var(--accent); }
+.lbtn-search[aria-pressed=true] { background: color-mix(in srgb, var(--accent) 16%, var(--window)); color: var(--accent); border-color: var(--accent); }
+.lbtn-filter[aria-pressed=true] { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); color: var(--c-filter); border-color: var(--c-filter); }
+.lbtn-sort[aria-pressed=true] { background: color-mix(in srgb, var(--c-sort) 16%, var(--window)); color: var(--c-sort); border-color: var(--c-sort); }
+/* いま有効な条件のチップ。✕で外す。色は、ボタンと同じ(検索=青、絞り込み=緑、並べ替え=紫) */
+.cchips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cchip { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px 0 8px; border-radius: 4px; font-size: 12px; min-width: 0; max-width: 100%; }
+.cchip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.cchip button { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--text-muted); cursor: pointer; flex: none; }
+.cchip button:hover { background: var(--border); color: var(--text); }
+.cchip button svg.icon { width: 10px; height: 10px; }
+.cchip-search { background: color-mix(in srgb, var(--accent) 16%, var(--window)); }
+.cchip-filter { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); }
+.cchip-sort { background: color-mix(in srgb, var(--c-sort) 16%, var(--window)); }
+button.link, .menu button.link { display: inline; min-height: 0; border: 0; background: none; padding: 0 4px; color: var(--link); font-size: 12px; cursor: pointer; }
+button.link:hover, .menu button.link:hover { background: none; text-decoration: underline; }
+/* 並べ替えの値のタグ(優先度・トラッカー・期日)と、並べ替え中のステータスのラベル */
+.tag.skey, .pill.sorted { background: color-mix(in srgb, var(--c-sort) 16%, var(--window)); border-color: transparent; color: var(--text); }
+.tag.skey.warn { background: color-mix(in srgb, var(--danger) 14%, var(--window)); color: var(--danger); font-weight: 600; }
+/* 小さなウィンドウ(検索・絞り込み) */
+.popover { padding: 8px; }
+.search-pop .hint { padding: 6px 2px 0; font-size: 11px; color: var(--text-muted); }
+.fpop { padding: 0; }
+.fpop .sep { margin: 0; }
+.fpop .frow { width: 100%; min-height: 36px; padding: 0 10px; border-radius: 0; font-size: 13px; }
+.fpop .frow .v { margin-left: auto; font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fpop .frow .v.on { color: var(--c-filter); font-weight: 600; }
+.fpop .frow .chev { font-size: 10px; color: var(--text-muted); flex: none; }
+.fpop .fbody { padding: 0 10px 8px; }
+.fpop .modes { display: flex; gap: 4px; }
+.fpop .modes .o { flex: 1; justify-content: center; border: 1px solid var(--border); border-radius: 5px; min-height: 28px; font-size: 12px; background: var(--window); }
+.fpop .modes .o i { font-style: normal; font-size: 10px; color: var(--text-muted); }
+.fpop .modes .o.on { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); border-color: var(--c-filter); font-weight: 600; }
+.fpop .sep.inner { margin: 8px 0 6px; }
+.fpop .note { padding: 0 0 4px; background: none; font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.fpop .plist { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.fpop .plist.scroll { max-height: 140px; overflow-y: auto; }
+.fpop .fit { min-height: 26px; padding: 0 8px; border-radius: 0; font-size: 12px; }
+.fpop .fit .chk { width: 14px; display: inline-flex; flex: none; }
+.fpop .fit .chk svg.icon { width: 12px; height: 12px; }
+.fpop .fit .cnt { margin-left: auto; font-size: 10px; color: var(--text-muted); }
+.fpop .fit.on { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); font-weight: 600; }
+.fpop .fit.pin { border-bottom: 1px solid var(--border); }
+.fpop .find { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; color: var(--text-muted); }
+.fpop .find input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); }
+.fpop .find svg.icon { width: 12px; height: 12px; }
+.fpop .ffoot { display: flex; justify-content: flex-end; padding: 8px 14px; }
+.empty .btn { display: block; margin: 10px auto 0; }
 .issue-list { flex: 1 1 auto; overflow: auto; margin: 0; padding: 0; list-style: none; }
 .issue { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .issue:hover { background: var(--surface-alt); }
@@ -189,6 +250,10 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .issue:hover .line1 .time, .issue:has(.row-more:focus-visible) .line1 .time { display: none; }
 .issue .subject { line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .issue.unread .subject { font-weight: 700; }
+/* コンパクト: 件名は1行、最新コメントは出さない。関係のラベルは1行目に移す(list.js) */
+.issue-list.compact .issue { gap: 0; padding: 4px 12px; }
+.issue-list.compact .issue .subject { -webkit-line-clamp: 1; line-height: 1.3; }
+.issue-list.compact .issue .line1 .tag { font-size: 10px; padding: 0 4px; }
 .issue .line3 { display: flex; gap: 6px; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; }
 .issue .line3 .preview { overflow: hidden; text-overflow: ellipsis; }
 .tag { padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; flex: none; }
@@ -270,6 +335,12 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .composer .actions .spacer { flex: 1; }
 .composer .actions label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .composer .error { color: var(--danger); font-size: 12px; }
+/* 下書きの保存状態。保存済みは少しして消える。失敗のときだけ目立たせる */
+.draft-state { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.draft-state.saved { color: var(--success); }
+.draft-state.failed { color: var(--danger); }
+.draft-state svg.icon { width: 14px; height: 14px; }
+.draft-state .btn { min-height: 24px; padding: 0 8px; font-size: 12px; }
 .welcome { margin: auto; max-width: 420px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 24px; }
 .welcome h2 { margin: 0; }
 

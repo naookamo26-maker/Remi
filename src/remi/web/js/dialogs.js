@@ -145,8 +145,8 @@ export function settingsDialog(app) {
       options.map(([v, label]) => h("option", { value: v, selected: app.settings[key] === v }, label)));
     return el;
   };
-  const check = (key, label) => h("label", {},
-    h("input", { type: "checkbox", checked: !!app.settings[key], onChange: (e) => set(key, e.target.checked) }), label);
+  const check = (key, label, onSaved = null) => h("label", {},
+    h("input", { type: "checkbox", checked: !!app.settings[key], onChange: (e) => set(key, e.target.checked).then(() => onSaved?.()) }), label);
 
   const general = () => {
     const s = app.settings;
@@ -159,6 +159,7 @@ export function settingsDialog(app) {
       h("span", { class: "label" }, t("settings.notifications")), check("notify_enabled", t("settings.showNotifications")),
       h("span", { class: "label" }, t("settings.startup")), check("autostart", t("settings.autostart")),
       h("span", { class: "label" }, t("settings.images")), check("allow_external_images", t("settings.externalImages")),
+      h("span", { class: "label" }, t("settings.list")), check("unread_first", t("settings.unreadFirst"), () => app.list.refresh()),
       field(t("settings.redmineOpenIn"), select("redmine_open_in", [...(app.boot.tabsSupported ? [["tab", t("settings.openInTab")]] : []),
         ["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
         // Windows でタブを使えなかったときは、その理由を出す(原因を調べられるように)

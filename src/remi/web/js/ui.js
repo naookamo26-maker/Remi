@@ -4,10 +4,43 @@ import { icon } from "./icons.js";
 import { t } from "./i18n.js";
 
 let openMenu = null;
+let onMenuClose = null;
 
 export function closeMenu() {
   openMenu?.remove();
   openMenu = null;
+  const f = onMenuClose;
+  onMenuClose = null;
+  f?.();
+}
+
+/** el が、いま開いているメニュー・小さなウィンドウ(popover)か */
+export function isMenuOpen(el) {
+  return !!el && openMenu === el;
+}
+
+/**
+ * ボタンの下などに出す、小さなウィンドウ(検索・絞り込み)。メニューと同じ見た目で、外側のクリック・Esc・
+ * ウィンドウの非アクティブ化で閉じる(同時に開くのは1つだけ)。
+ * @param {HTMLElement} el 中身(クラス menu を付ける)
+ * @param {{x: number, y: number, width?: number|null, onClose?: (() => void)|null}} opts x・y は左上の位置
+ */
+export function popover(el, { x, y, width = null, onClose = null }) {
+  closeMenu();
+  el.classList.add("menu", "popover");
+  if (width) {
+    el.style.width = `${width}px`;
+    el.style.maxWidth = `${width}px`;
+    el.style.minWidth = "0";
+  }
+  el.style.maxHeight = `${Math.max(160, innerHeight - y - 8)}px`;
+  el.style.overflowY = "auto";
+  document.body.append(el);
+  const r = el.getBoundingClientRect();
+  el.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 4))}px`;
+  el.style.top = `${Math.max(4, y)}px`;
+  openMenu = el;
+  onMenuClose = onClose;
 }
 
 // items: {label, onClick, disabled, checked, keepOpen} | {sep:true} | {label, hint:true}

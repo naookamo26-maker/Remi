@@ -330,3 +330,28 @@ def test_does_not_notify_the_same_comment_twice(setup, fake):
     sync.sync_changes()
     assert sync.fetch_journals(1).new_comments == []
     assert issues.unread_count(sid, 1) == 1  # 未読のまま(通知しないだけ)
+
+
+def test_due_date_and_master_order_are_stored(setup, fake, db):
+    """期日と、ステータス・トラッカー・優先度の Redmine 上の順序(position)を保存する(一覧の並べ替え・絞り込み用)。"""
+    from remi.store.masters import MasterStore
+
+    sync, issues, sid = setup
+    fake.add_issue(1, 2, "期日あり", due_date="2026-12-01", tracker_id=2, priority_id=3, updated_on=ts(60))
+    fake.add_issue(2, 2, "期日なし", updated_on=ts(50))
+    sync.sync_changes()
+    assert issues.get(sid, 1).due_date == "2026-12-01"
+    assert issues.get(sid, 2).due_date is None
+
+    ms = MasterStore(db)
+    # 偽の Redmine が返した順に position が付く(優先度: 通常=0、高め=1)
+    pos = {n: ms.extras(sid, "priority")[i]["position"] for i, n in ms.names(sid, "priority").items()}
+    assert pos == {"通常": 0, "高め": 1}
+    assert [ms.extras(sid, "tracker")[i]["position"] for i in sorted(ms.names(sid, "tracker"))] == [0, 1]
+    assert ms.extras(sid, "status")[1].get("position") == 0
+
+    # 期日を変えたら、次の同期で変わる。消したら None に戻る
+    fake.issues[1]["due_date"] = "2026-12-24"
+    fake.issues[1]["updated_on"] = ts(0)
+    sync.sync_changes()
+    assert issues.get(sid, 1).due_date == "2026-12-24"

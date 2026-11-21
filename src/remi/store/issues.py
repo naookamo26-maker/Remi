@@ -155,6 +155,7 @@ class IssueRow:
     relation_flags: int
     monitored: bool
     journals_synced_on: str | None
+    due_date: str | None = None
     unread: int = 0
     last_note_user: str | None = None
     last_note: str | None = None
@@ -194,7 +195,7 @@ def _issue(r) -> IssueRow:
         assigned_to_name=r["assigned_to_name"], author_id=r["author_id"], author_name=r["author_name"],
         created_on=r["created_on"], updated_on=r["updated_on"], closed_on=r["closed_on"],
         relation_flags=r["relation_flags"], monitored=bool(r["monitored"]),
-        journals_synced_on=r["journals_synced_on"],
+        journals_synced_on=r["journals_synced_on"], due_date=r["due_date"] if "due_date" in keys else None,
         unread=r["unread"] if "unread" in keys else 0,
         last_note_user=r["last_note_user"] if "last_note_user" in keys else None,
         last_note=r["last_note"] if "last_note" in keys else None,
@@ -238,8 +239,8 @@ class IssueStore:
             c.execute(
                 """INSERT INTO issues(server_id, issue_id, project_id, tracker_id, subject, description,
                        status_id, priority_id, assigned_to_id, assigned_to_name, author_id, author_name,
-                       created_on, updated_on, closed_on, relation_flags, monitored, unmonitored_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       created_on, updated_on, closed_on, relation_flags, monitored, unmonitored_at, due_date)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(server_id, issue_id) DO UPDATE SET
                        project_id=excluded.project_id, tracker_id=excluded.tracker_id,
                        subject=excluded.subject, description=excluded.description,
@@ -248,7 +249,7 @@ class IssueStore:
                        author_id=excluded.author_id, author_name=excluded.author_name,
                        created_on=excluded.created_on, updated_on=excluded.updated_on,
                        closed_on=excluded.closed_on, relation_flags=excluded.relation_flags,
-                       monitored=excluded.monitored,
+                       monitored=excluded.monitored, due_date=excluded.due_date,
                        unmonitored_at=CASE WHEN excluded.monitored = 1 THEN NULL
                                            ELSE COALESCE(issues.unmonitored_at, excluded.unmonitored_at) END""",
                 (
@@ -257,7 +258,7 @@ class IssueStore:
                     (data.get("status") or {}).get("id"), (data.get("priority") or {}).get("id"),
                     assigned.get("id"), assigned.get("name"), author.get("id"), author.get("name"),
                     data.get("created_on"), data.get("updated_on"), data.get("closed_on"),
-                    relation_flags, int(monitored), None if monitored else utcnow(),
+                    relation_flags, int(monitored), None if monitored else utcnow(), data.get("due_date") or None,
                 ),
             )
 

@@ -75,7 +75,6 @@ def main() -> None:
         "--add-data", f"{src / 'link_schemes.json'}{sep}remi",
         "--collect-submodules", "remi",
         "--collect-data", "pygments",
-        "--hidden-import", "linkify_it",
         "--paths", str(ROOT / "src"),
         "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
         str(ROOT / "packaging" / "entry.py"),

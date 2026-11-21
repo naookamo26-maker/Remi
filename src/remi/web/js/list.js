@@ -12,6 +12,10 @@ export class IssueList {
   constructor(app) {
     this.app = app;
     this.issues = [];
+    /** サーバーが返した並び(未読を上にしたもの) */
+    this.raw = [];
+    /** 並び順の上で「未読」として扱うチケット(読んで既読になっても、会話を開いている間は元の位置に置く) */
+    this.frozenUnread = new Set();
     this.search = "";
     this.title = h("h2", {});
     this.crumb = h("span", { class: "crumb" });
@@ -65,11 +69,31 @@ export class IssueList {
     this._token = token;
     const res = await call("listIssues", params);
     if (this._token !== token) return; // 古い結果は捨てる
-    this.issues = res.issues;
+    this.raw = res.issues;
     this.render();
   }
 
+  /**
+   * 「未読を上に」の並びを、会話を開いている間は動かさない。開いたチケットは既読になって下へ移るので、
+   * そのまま並べると、↓で順に読んでいるとき未読のチケットを飛ばしてしまう。会話を閉じたら、並びに反映する。
+   */
+  stabilize(issues) {
+    const key = (i) => `${i.serverId}:${i.issueId}`;
+    if (!this.app.settings.unread_first || this.app.selection.kind === "version") return issues;
+    if (!this.app.current) {
+      this.frozenUnread = new Set(issues.filter((i) => i.unread).map(key));
+      return issues;
+    }
+    for (const i of issues) if (i.unread) this.frozenUnread.add(key(i));
+    // 未読として扱うものを上に、それぞれの中は、いま表示している並びを保つ(新しく届いたものは、グループの先頭)
+    const before = new Map(this.issues.map((i, n) => [key(i), n]));
+    const group = (i) => (this.frozenUnread.has(key(i)) ? 0 : 1);
+    const pos = (i) => before.get(key(i)) ?? -1;
+    return [...issues].sort((a, b) => group(a) - group(b) || pos(a) - pos(b));
+  }
+
   render() {
+    this.issues = this.stabilize(this.raw);
     const { title, crumb } = this.app.selectionLabels();
     this.title.textContent = title;
     this.crumb.textContent = [crumb, t("list.count", { count: this.issues.length })].filter(Boolean).join(" · ");
@@ -106,14 +130,21 @@ export class IssueList {
         class: ["issue", it.unread ? "unread" : "", selected ? "selected" : ""].join(" "),
         role: "option", "aria-selected": String(!!selected), dataset: { server: it.serverId, issue: it.issueId },
         onClick: () => this.app.openIssue(it.serverId, it.issueId),
-        onContextmenu: (e) => { e.preventDefault(); this.menu(e, it); },
+        onContextmenu: (e) => { e.preventDefault(); this.menu(e.clientX, e.clientY, it); },
       },
         h("div", { class: "line1" },
           h("span", {}, `#${it.issueId}`),
           it.status ? h("span", { class: `pill${it.closed ? " closed" : ""}` }, it.status) : null,
           showServer ? h("span", {}, it.serverName) : null,
           h("span", { class: "spacer" }),
-          h("span", {}, formatShort(it.updatedOn)),
+          h("span", { class: "time" }, formatShort(it.updatedOn)),
+          // マウスを乗せると、時刻の代わりに操作のボタンを出す
+          h("button", { type: "button", class: "row-more", "aria-label": t("list.rowMenu"), title: t("list.rowMenu"),
+            "aria-haspopup": "menu", onClick: (e) => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              this.menu(r.right - 4, r.bottom + 4, it);
+            } }, "⋯"),
           it.unread ? h("span", { class: "badge", "aria-label": t("tree.unreadCount", { count: it.unread }) }, countText(it.unread)) : null),
         h("div", { class: "subject" }, it.subject),
         h("div", { class: "line3" },
@@ -169,13 +200,12 @@ export class IssueList {
     if (it) this.app.openIssue(it.serverId, it.issueId);
   }
 
-  menu(e, it) {
-    contextMenu(e.clientX, e.clientY, [
+  menu(x, y, it) {
+    contextMenu(x, y, [
       { label: t("menu.markRead"), disabled: !it.unread, onClick: () => call("markRead", { serverId: it.serverId, issueId: it.issueId }) },
       { label: t("menu.markUnread"), onClick: () => call("markUnread", { serverId: it.serverId, issueId: it.issueId }) },
       { sep: true },
-      { label: t("menu.openRedmine"), onClick: () => this.app.openIssueInBrowser(it.serverId, it.issueId) },
-      { label: t("menu.openInBrowser"), onClick: () => this.app.openIssueInBrowser(it.serverId, it.issueId, null, { external: true }) },
+      ...this.app.openMenuItems(null, { open: (external) => this.app.openIssueInBrowser(it.serverId, it.issueId, null, { external }) }),
     ]);
   }
 }

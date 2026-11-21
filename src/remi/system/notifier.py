@@ -88,6 +88,15 @@ class ToastBackend:
         toast.tag = tag  # 同じタグの通知は置き換わる(チケットごとに1つにする)
         self._toaster.show_toast(toast)
 
+    def show_message(self, title: str, body: str) -> None:
+        """チケットに関係のない、お知らせだけの通知(押しても何も開かない)。"""
+        if self._toaster is None:
+            log.info("notification: %s", title)
+            return
+        from windows_toasts import Toast
+
+        self._toaster.show_toast(Toast(text_fields=[title, body]))
+
     def remove(self, server_id: int, issue_id: int) -> None:
         """そのチケットの通知を、通知センターから消す(アプリで読んだとき)。"""
         if self._toaster is None:
@@ -121,6 +130,17 @@ class Notifier:
         self._snooze_until = 0.0
         self._lock = threading.Lock()
         ctx.bus.on(self._on_event)
+
+    def tray_hint(self) -> None:
+        """ウィンドウの×で初めてトレイへ格納したときに、1回だけ案内する(終了したと思われないように)。"""
+        if self.ctx.settings.get("tray_hint_shown"):
+            return
+        self.ctx.settings.set("tray_hint_shown", True)
+        lang = resolve_language(self.ctx.settings.get("language"))
+        try:
+            self.backend.show_message(t("tray.hintTitle", lang), t("tray.hintBody", lang))
+        except Exception:  # noqa: BLE001 - 案内できなくてもアプリは止めない
+            log.exception("failed to show the tray hint")
 
     # --- 一時停止(トレイメニュー) ---------------------------------------------------
     def snooze(self, seconds: float) -> None:

@@ -100,8 +100,11 @@ def build_tree(ctx: AppContext) -> dict[str, Any]:
             "url": s.url,
             "status": "error" if s.last_error else ("ok" if s.last_synced_at else "unknown"),
             "error": s.last_error,
+            # 次に再試行する目安の時刻(ミリ秒。エラーで待っているときだけ)
+            "retryAt": int(ctx.bus.retry_at(sid) * 1000) if s.last_error and ctx.bus.retry_at(sid) else None,
             "lastSyncedAt": s.last_synced_at,
             "unread": s_unread,
+            "syncing": "sync" in ctx.bus.activity(sid),  # 「今すぐ同期」の最中(同期ボタンの回転表示に使う)
             "count": sum(counts.values()),
             "showAllProjects": s.show_all_projects,
             "hiddenProjects": hidden,

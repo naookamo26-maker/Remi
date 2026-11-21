@@ -24,6 +24,7 @@ export class Composer {
     this.textarea = h("textarea", { "aria-label": t("conv.comment"), placeholder: t("conv.placeholder"), rows: "3",
       onInput: () => { this.saveDraft(); this.update(); },
       onKeydown: (e) => this.onKey(e),
+      onBlur: () => { this.tabLeaves = false; },
       onPaste: (e) => this.onPaste(e) });
     this.textarea.value = d.draft.body || "";
     this.privateBox = h("input", { type: "checkbox", onChange: () => this.saveDraft() });
@@ -245,10 +246,14 @@ export class Composer {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       this.conv.send();
-    } else if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+    } else if (e.key === "Escape") {
+      this.tabLeaves = true; // Escのあとの Tab は、インデントではなく、次の項目へ移る(キーボードだけで入力欄から出られるように)
+    } else if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !this.tabLeaves) {
       // Tabキーでインデントを入力できるようにする(設計書 §5.3)
       e.preventDefault();
       document.execCommand("insertText", false, "    ");
+    } else if (e.key !== "Tab" && e.key !== "Shift") {
+      this.tabLeaves = false;
     }
   }
 }

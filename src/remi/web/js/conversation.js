@@ -2,7 +2,7 @@
 // ヘッダ(issue-header.js)・会話(timeline.js)・入力欄(composer.js)をまとめ、読み込み・スクロール・送信の流れを受け持つ。
 import { call } from "./api.js";
 import { Composer } from "./composer.js";
-import { clear, h, toast } from "./dom.js";
+import { clear, h, spinner, toast } from "./dom.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { IssueHeader } from "./issue-header.js";
@@ -39,6 +39,8 @@ export class Conversation {
     this.permissions = null;
     /** @type {import("./types.js").IssueDetails|null} 「詳細」の項目(開いたときに読み込む) */
     this.details = null;
+    /** 上へスクロールして読んでいる間に届いた、他の人の新着コメントの数(「新着」ボタンに出す) */
+    this.newCount = 0;
     this.header = new IssueHeader(this);
     /** @type {Composer|null} */
     this.composer = null;
@@ -98,10 +100,15 @@ export class Conversation {
     if (resetLimit) this.limit = PAGE;
     this._versionToken = null; // 読み込み中のバージョンの表示は描かない
     this.version = null;
+    // 別のチケットを開くとき、少し待っても表示できなければ、読み込み中と出す(前のチケットが残ったままにしない)
+    const seq = (this._loadSeq = (this._loadSeq || 0) + 1);
+    const loadingTimer = issueKey(this.data) !== `${serverId}:${issueId}`
+      ? setTimeout(() => { if (this._loadSeq === seq) this.showLoading(); }, 250) : null;
     let data;
     try {
       data = await call("getConversation", { serverId, issueId, limit: this.limit, markRead });
     } catch (e) {
+      clearTimeout(loadingTimer);
       if (e.code === "not_found") {
         // 削除された: 開いていた扱いも外す(残すと、存在しないチケットを同期が確かめ続ける)
         const cur = this.app.current;
@@ -111,6 +118,7 @@ export class Conversation {
       }
       throw e;
     }
+    clearTimeout(loadingTimer);
     const cur = this.app.current;
     if (!cur || cur.serverId !== serverId || cur.issueId !== issueId) return; // 別のチケットに移った
     const sameIssue = issueKey(this.data) === issueKey(data);
@@ -125,6 +133,12 @@ export class Conversation {
     const atBottom = this.isNearBottom();
     const prevScroll = prev ? prev.scrollTop : 0;
     const prevHeight = prev ? prev.scrollHeight : 0;
+    // 上へスクロールして読んでいる間に届いた他の人の新着は、数えて「新着」ボタンに出す(最下部を見ていれば、数えない)
+    if (!sameIssue || atBottom) this.newCount = 0;
+    else if (!keepScroll) {
+      const known = Math.max(0, ...this.data.journals.map((j) => j.journalId));
+      this.newCount += data.journals.filter((j) => j.journalId > known && j.html && !j.mine).length;
+    }
     this.data = data;
     this.render(sameIssue);
     const tl = this.timeline;
@@ -188,7 +202,13 @@ export class Conversation {
     const header = this.header.render(d);
     const timeline = h("div", { class: "timeline", role: "log", "aria-label": t("conv.timeline"),
       onClick: (e) => this.onTimelineClick(e),
-      onScroll: () => { this.stickBottom = this.isNearBottom(); } });
+      onScroll: () => {
+        this.stickBottom = this.isNearBottom();
+        if (this.stickBottom) {
+          this.clearNew();
+          this.app.flushRead(); // 最下部まで見たので、待っていた新着を既読にする
+        }
+      } });
     // 画像の読み込みで高さが変わっても、最下部を見ていたら最下部を保つ
     timeline.addEventListener("load", (e) => {
       if (e.target.tagName === "IMG" && this.stickBottom) timeline.scrollTop = timeline.scrollHeight;
@@ -209,7 +229,40 @@ export class Conversation {
       this.load(d.serverId, d.issueId, { markRead: false, keepScroll: true });
     } });
     if (this.sending) timeline.append(pendingMessage(this.composer.pendingParts()));
+    this.updateNewButton();
     this.composer.update();
+  }
+
+  /** 読み込み中の表示(別のチケットを開いて、表示まで時間がかかるとき) */
+  showLoading() {
+    this.composer = null;
+    this.timeline = null;
+    clear(this.root).append(h("div", { class: "welcome" },
+      h("p", { class: "muted loading" }, spinner(), t("conv.paneLoading"))));
+  }
+
+  // --- 新着ボタン(上へスクロールして読んでいる間に新着が届いたとき) -----------------------------
+  updateNewButton() {
+    this.newButton?.remove();
+    this.newButton = null;
+    if (!this.newCount || !this.timeline) return;
+    // タイムラインの最下部に貼り付く(スクロールしても、見えている範囲の右下に残る)
+    this.newButton = h("button", { type: "button", class: "btn primary new-messages",
+      onClick: () => this.jumpToNew() }, t("conv.newMessages", { count: this.newCount }));
+    this.timeline.append(this.newButton);
+  }
+
+  clearNew() {
+    if (!this.newCount) return;
+    this.newCount = 0;
+    this.updateNewButton();
+  }
+
+  jumpToNew() {
+    if (!this.timeline) return;
+    this.timeline.scrollTop = this.timeline.scrollHeight;
+    this.clearNew();
+    this.app.flushRead();
   }
 
   /**

@@ -120,8 +120,9 @@ class App {
     if (key === "theme") this.applyTheme();
     if (key === "mine_side") this.applyMineSide();
     if (key === "language") {
-      // 画面は再読み込みだけで切り替わる(設計書 §10.1)
-      setTimeout(() => location.reload(), 300);
+      // 画面は再読み込みだけで切り替わる(設計書 §10.1)。入力中の文章は、先に下書きとして保存する
+      this.conv.composer?.saveDraft.flushPending();
+      setTimeout(() => location.reload(), 400);
     }
     return this.settings;
   }
@@ -141,10 +142,15 @@ class App {
     }
   }
 
-  // 今すぐ同期する。開いているチケットは、更新日時が同じでもコメントごと取り直す
-  syncNow() {
-    call("syncNow", this.current ?? {}).catch(() => {});
-    toast(t("tree.syncStarted"));
+  // 今すぐ同期する。開いているチケットは、更新日時が同じでもコメントごと取り直す。
+  // 同期している間は受け付けない(ボタンの回転と状態欄で同期中だと分かる。押したときは「同期中です」と伝える)
+  async syncNow() {
+    try {
+      const { started } = await call("syncNow", this.current ?? {});
+      if (!started) toast(t("tree.syncRunning"));
+    } catch (e) {
+      toast(t(`errors.${e.code || "connection_failed"}`));
+    }
   }
 
   // --- 選択 -------------------------------------------------------------------------
@@ -235,7 +241,7 @@ class App {
     this.pendingRead = false;
     call("setOpenIssue", { serverId: null, issueId: null }).catch(() => {});
     this.showSelectionView();
-    this.list.markSelected();
+    this.list.render(); // 閉じたら、既読になったチケットを並び順にも反映する(開いている間は、位置を動かさない)
   }
 
   // チケットを開いていないときの右ペイン: バージョンを選んでいれば、その変化の記録。ほかは案内だけ
@@ -257,6 +263,17 @@ class App {
     } catch {
       this.openIssueInBrowser(serverId, issueId, note);
     }
+  }
+
+  /**
+   * 「Remiで開く」「外部ブラウザで開く」のメニュー項目。開く場所の設定が「外部ブラウザ」のときは、1つだけにする。
+   * @param {() => string} url 開くURL(選んだときに求める)
+   * @param {{extra?: object[]}} [opts]
+   */
+  openMenuItems(url, { open = (external) => this.openRedmine(url(), { external }) } = {}) {
+    const external = { label: t("menu.openInBrowser"), onClick: () => open(true) };
+    if (this.settings.redmine_open_in === "browser") return [external];
+    return [{ label: t("menu.openRedmine"), onClick: () => open(false) }, external];
   }
 
   openIssueInBrowser(serverId, issueId, note = null, { external = false } = {}) {
@@ -321,11 +338,14 @@ class App {
   onActive(active) {
     call("setActive", { active }).catch(() => {});
     if (active && !this.current && this.selection.kind === "version") this.showSelectionView(); // 変化を見たことにする
-    if (active && this.pendingRead && this.current) {
-      // 非アクティブの間に届いたコメントは、アクティブになった時点で既読にする(設計書 §7.1)
-      this.pendingRead = false;
-      call("markRead", this.current);
-    }
+    if (active) this.flushRead();
+  }
+
+  // 既読を待っていたコメント(非アクティブの間や、上へスクロール中に届いたもの)を、読める状態になったら既読にする(設計書 §7.1)
+  flushRead() {
+    if (!this.pendingRead || !this.current || !document.hasFocus() || !this.conv.isNearBottom()) return;
+    this.pendingRead = false;
+    call("markRead", this.current);
   }
 
   // --- サーバーからのイベント -----------------------------------------------------------
@@ -335,9 +355,10 @@ class App {
         this.refreshSoon();
         if (this.current && e.serverId === this.current.serverId && (e.issueIds || []).includes(this.current.issueId)
           && e.source !== "read") {
-          const active = document.hasFocus();
-          if (!active) this.pendingRead = true;
-          this.conv.load(this.current.serverId, this.current.issueId, { markRead: active });
+          // 上へスクロールして読んでいる間に届いた新着は、最下部まで見たとき(新着ボタンを押したときを含む)に既読にする
+          const markRead = document.hasFocus() && this.conv.isNearBottom();
+          if (!markRead) this.pendingRead = true;
+          this.conv.load(this.current.serverId, this.current.issueId, { markRead });
         }
         break;
       case "syncState":
@@ -357,7 +378,7 @@ class App {
         this.onServersChanged();
         break;
       case "tabsUnavailable":
-        toast(t("tabs.unavailable", { reason: e.reason }));
+        toast(t("tabs.unavailable"));
         break;
       case "tabsChanged":
         this.tabs.set({ tabs: e.tabs, active: e.active });

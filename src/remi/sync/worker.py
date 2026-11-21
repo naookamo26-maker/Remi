@@ -55,7 +55,6 @@ RESTART_RETRY_INTERVAL = 1.0  # 旧スレッドが止まりきらず restart を
 RESTART_RETRY_MAX = 60  # その再試行の回数の上限
 RETRY_AFTER_SPREAD = 0.2  # Retry-After に、最大でこの割合を上乗せして待つ(再試行の集中を避ける)
 JOURNAL_QUEUE_INTERVAL = 1.0  # コメントの遅延取得の間隔(秒)。開いているチケットは別に、すぐ取得する
-SYNC_NOW_MIN_INTERVAL = 30.0  # 「今すぐ同期」の最短間隔(秒)。連打してもサーバーへは送らない
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/bmp", "image/webp"}
 
@@ -75,7 +74,6 @@ class Schedule:
     failures: int = 0
     metadata_at: float = float("-inf")  # 前回プロジェクト一覧・マスタを取得した時刻
     journal_next: float = 0.0  # 次にコメントの遅延取得をしてよい時刻
-    manual_sync_at: float = float("-inf")  # 前回の「今すぐ同期」
     queue: list[int] = field(default_factory=list)  # journal を取得するチケット
     attachments: list[int] = field(default_factory=list)
 
@@ -188,18 +186,15 @@ class ServerWorker(threading.Thread):
             (manual,) = args or (True,)
             now = time.monotonic()
             if manual:
-                if now - self.sched.manual_sync_at < SYNC_NOW_MIN_INTERVAL:
-                    return  # 連打してもサーバーへは送らない
-                self.sched.manual_sync_at = now
                 if now - self.sched.metadata_at >= MANUAL_METADATA_MIN_AGE:
                     self.sched.metadata = 0
                 self.sched.reconcile = 0  # 関係が外れたチケットの検出も、すぐ行う(担当を渡した直後に押したとき)
-                # 同期している間、画面の状態欄に「同期しています…」を出す(受け付けたときだけ。tick の後で消す)
+                # 同期している間、画面に「同期しています…」を出す(SyncManager.sync_now が受け付けたときに点け、tick の後で消す)
                 self.bus.set_activity(self.server_id, "sync", True)
             self.sched.changes = 0
             self.sched.versions = 0
             # バックオフ中でも1回は試す(VPNをつなぎ直したときなど)。失敗の回数は残すので、また失敗すれば
-            # 前より長く待つ。連打は上の最短間隔で抑える
+            # 前より長く待つ。連打は、同期している間は SyncManager.sync_now が受け付けないことで抑える
             self.sched.backoff_until = 0
         elif cmd == "sync_versions":
             # プロジェクトの設定を変えたときなど: バージョンの監視だけをすぐ確かめる(チケットの差分同期は要らない)
@@ -478,6 +473,7 @@ class ServerWorker(threading.Thread):
             log.info("server %s recovered", self.server_id)
         servers.update_fields(self.server_id, last_error=None, last_synced_at=utcnow())
         self.sched.failures = 0
+        self.bus.set_retry_at(self.server_id, None)
         self.bus.publish("syncState", serverId=self.server_id)
 
     def _on_error(self, err: RedmineError) -> None:
@@ -494,6 +490,7 @@ class ServerWorker(threading.Thread):
             # 再試行しないよう、指定より短くならない範囲でランダムに少し長く待つ
             delay = max(delay, err.retry_after * random.uniform(1.0, 1.0 + RETRY_AFTER_SPREAD))
         self.sched.backoff_until = time.monotonic() + delay
+        self.bus.set_retry_at(self.server_id, time.time() + delay)
         log.warning("sync error on server %s: %s; retrying in %ss", self.server_id, err, delay)
         ServerStore(self.db).update_fields(self.server_id, last_error=err.code.value)
         self.bus.publish("syncState", serverId=self.server_id)
@@ -607,11 +604,18 @@ class SyncManager:
         with self._lock:
             return self._workers.get(server_id)
 
-    def sync_now(self, manual: bool = True) -> None:
-        """今すぐ同期する。manual(利用者の操作)なら、最短間隔より短い連打は無視する。"""
+    def sync_now(self, manual: bool = True) -> bool:
+        """今すぐ同期する。manual(利用者の操作)で、前の「今すぐ同期」がまだ終わっていなければ(どれかのサーバーが
+        同期中なら)受け付けず False を返す(終わったら、待ち時間なしですぐ受け付ける)。受け付けたら True。"""
         with self._lock:
-            for w in self._workers.values():
+            workers = [w for w in self._workers.values() if w.is_alive()]
+            if manual and any("sync" in self.bus.activity(w.server_id) for w in workers):
+                return False
+            for w in workers:
+                if manual:
+                    self.bus.set_activity(w.server_id, "sync", True)  # 受け付けた直後の連打も、同期中として断る
                 w.send("sync_now", manual)
+            return bool(workers)
 
     def sync_versions_now(self, server_id: int) -> None:
         """バージョンの監視だけを、すぐ同期する(プロジェクトの設定を変えたとき)。"""

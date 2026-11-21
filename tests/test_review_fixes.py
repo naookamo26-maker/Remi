@@ -163,3 +163,35 @@ def test_delete_issues_removes_cached_image_files(stale, tmp_path):
     issues.set_attachment_cached(sid, 5, str(f))
     issues.delete_issues(sid, [1])
     assert not Path(f).exists()
+
+
+def test_tree_tells_when_sync_will_retry(db, fake):
+    from remi.server.tree import build_tree
+
+    sid = ServerStore(db).save(Server(name="S", url=fake.base_url), api_key="test-key").server_id
+    ctx = AppContext(db)
+    assert build_tree(ctx)["servers"][0]["retryAt"] is None
+    ServerStore(db).update_fields(sid, last_error="unauthorized")
+    ctx.bus.set_retry_at(sid, time.time() + 600)
+    retry = build_tree(ctx)["servers"][0]["retryAt"]
+    assert 590_000 < retry - time.time() * 1000 < 610_000
+    ctx.bus.set_retry_at(sid, None)
+    assert build_tree(ctx)["servers"][0]["retryAt"] is None
+
+
+def test_tray_hint_is_shown_only_once(db):
+    from remi.system.notifier import Notifier
+
+    class Backend:
+        shown: list = []
+
+        def show_message(self, title, body):
+            self.shown.append((title, body))
+
+    ctx = AppContext(db)
+    backend = Backend()
+    n = Notifier(ctx, api=None, on_open=lambda s, i: None, backend=backend)
+    n.tray_hint()
+    n.tray_hint()
+    assert len(backend.shown) == 1
+    assert "トレイ" in backend.shown[0][0] or "tray" in backend.shown[0][0]

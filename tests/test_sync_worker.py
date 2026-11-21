@@ -235,23 +235,22 @@ def test_open_issue_is_not_checked_while_hidden(db, fake, monkeypatch):
         mgr.stop_all()
 
 
-def test_manual_sync_now_is_throttled(db, fake, monkeypatch):
-    """「今すぐ同期」は最短間隔より短い連打をサーバーへ送らない。内部からの同期(manual=False)は対象外。"""
-    from remi.sync import worker
-
-    monkeypatch.setattr(worker, "SYNC_NOW_MIN_INTERVAL", 60.0)
+def test_manual_sync_now_is_ignored_only_while_syncing(db, fake):
+    """「今すぐ同期」は、同期している間だけ受け付けない。終わったら、待ち時間なしですぐ受け付ける。"""
     sid, mgr = _start(db, fake)
     try:
         assert wait_until(lambda: IssueStore(db).journals_synced(sid, 1))
         assert _assigned_queries(fake) == 1
-        mgr.sync_now()  # 差分同期と、関係が外れたチケットの突き合わせ(一覧を取り直す)の2回
+        assert mgr.sync_now() is True  # 差分同期と、関係が外れたチケットの突き合わせ(一覧を取り直す)の2回
+        assert mgr.sync_now() is False  # 受け付けた直後(同期中)は、連打を受け付けない
         assert wait_until(lambda: _assigned_queries(fake) == 3)
-        for _ in range(3):
-            mgr.sync_now()
-        time.sleep(1.5)
-        assert _assigned_queries(fake) == 3
-        mgr.sync_now(manual=False)  # 内部からの同期は、差分だけ
-        assert wait_until(lambda: _assigned_queries(fake) == 4)
+        assert wait_until(lambda: "sync" not in mgr.bus.activity(sid))
+        assert mgr.sync_now() is True  # 終わったら、すぐ受け付ける
+        assert wait_until(lambda: _assigned_queries(fake) == 5)
+        assert wait_until(lambda: "sync" not in mgr.bus.activity(sid))
+        before = _assigned_queries(fake)
+        assert mgr.sync_now(manual=False) is True  # 内部からの同期は、差分だけ
+        assert wait_until(lambda: _assigned_queries(fake) == before + 1)
     finally:
         mgr.stop_all()
 

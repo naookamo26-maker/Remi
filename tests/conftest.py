@@ -17,7 +17,6 @@ def _fast_sync(monkeypatch):
     from remi.sync import worker
 
     monkeypatch.setattr(worker, "JOURNAL_QUEUE_INTERVAL", 0.0)
-    monkeypatch.setattr(worker, "SYNC_NOW_MIN_INTERVAL", 0.0)
     # Redmineへの通信の最小間隔(既定0.5秒)も、待たない。アプリを動かすテストは通信が数十回になり、これだけで10秒以上かかる
     from remi.api import client
 

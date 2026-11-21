@@ -66,7 +66,7 @@ export class IssueHeader {
       onClick: (e) => {
         const r = e.currentTarget.getBoundingClientRect();
         contextMenu(r.right - 4, r.bottom + 4, [
-          { label: t("conv.openInBrowser"), onClick: () => app.openRedmine(d.url, { external: true }) },
+          ...app.openMenuItems(() => d.url),
           { label: t("conv.copyUrl"), onClick: () => navigator.clipboard.writeText(d.url).then(() => toast(t("conv.copied"))) },
         ]);
       } }, "▾");
@@ -275,8 +275,11 @@ export class IssueHeader {
     if (!o || !this.selects) return;
     const lists = {
       status_id: o.statuses.map((x) => [x.id, x.name]),
-      assigned_to_id: [["", t("conv.none")], ...(o.me ? [[o.me, t("conv.assignToMe")]] : []),
-        ...o.assignees.filter((a) => a.id !== o.me).map((a) => [a.id, a.group ? `${a.name} ${t("conv.groupSuffix")}` : a.name])],
+      // Redmineと同じく、先頭に「自分に割り当て」(ショートカット)を置き、一覧には自分の名前も入れる。
+      // 担当が自分のときは、現在値に自分の名前そのもの(操作名ではなく)を出す
+      assigned_to_id: [["", t("conv.none")], ...(o.me ? [[o.me, t("conv.assignToMe"), o.meName]] : []),
+        ...(o.me && !o.assignees.some((a) => a.id === o.me) && o.meName ? [[o.me, o.meName]] : []),
+        ...o.assignees.map((a) => [a.id, a.group ? `${a.name} ${t("conv.groupSuffix")}` : a.name])],
       priority_id: o.priorities.map((x) => [x.id, x.name]),
     };
     const p = o.permissions;
@@ -303,7 +306,10 @@ export class IssueHeader {
         continue;
       }
       clear(sel);
-      for (const [v, label] of lists[key]) sel.append(h("option", { value: v, selected: String(v) === String(chosen ?? "") }, label));
+      // 同じ値の選択肢が2つあるとき(自分に割り当て・自分の名前)は、あとのもの(名前)が選ばれた状態にする
+      for (const [v, label, shown] of lists[key]) {
+        sel.append(h("option", { value: v, dataset: shown ? { label: shown } : null, selected: String(v) === String(chosen ?? "") }, label));
+      }
       sel.dataset.current = current;
       sel.disabled = false;
       sel.title = "";
@@ -333,8 +339,9 @@ export class IssueHeader {
     const current = sel.dataset.current === "" ? null : Number(sel.dataset.current);
     let change = null;
     if (value !== current) {
-      const fromOpt = [...sel.options].find((o) => String(o.value) === String(current ?? ""));
-      change = { value, label: sel.selectedOptions[0].textContent, from: fromOpt ? fromOpt.textContent : "-" };
+      const fromOpt = [...sel.options].reverse().find((o) => String(o.value) === String(current ?? ""));
+      const picked = sel.selectedOptions[0];
+      change = { value, label: picked.dataset.label || picked.textContent, from: fromOpt ? fromOpt.textContent : "-" };
     }
     sel.classList.toggle("changed", !!change);
     this.conv.setChange(key, change, { refill: false });

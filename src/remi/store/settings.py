@@ -27,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
     # 「すべてのプロジェクトを表示」はサーバーごと(servers.show_all_projects)、
     # 「表示するチケット」はプロジェクトごと(project_settings.visible_relations)の設定
     "pane_sizes": [260, 360],
+    "tray_hint_shown": False,  # 閉じる(×)でトレイへ格納することを、初めて格納したときに案内したか(画面からは変えない)
 }
 
 

@@ -973,7 +973,7 @@ class RemiApi:
         priorities = [{"id": k, "name": v} for k, v in self.ctx.masters.names(serverId, "priority").items()]
         return {
             "statuses": statuses, "statusesExact": allowed is not None,
-            "assignees": members, "priorities": priorities, "me": server.my_user_id,
+            "assignees": members, "priorities": priorities, "me": server.my_user_id, "meName": server.my_name,
             "current": {"status_id": row.status_id, "assigned_to_id": row.assigned_to_id,
                         "priority_id": row.priority_id},
             "permissions": permissions,
@@ -1116,13 +1116,15 @@ class RemiApi:
 
     # --- 同期・ウィンドウ ----------------------------------------------------------------
     @rpc
-    def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> None:  # noqa: N802,N803
-        """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。"""
+    def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> dict[str, bool]:  # noqa: N802,N803
+        """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。
+        前の「今すぐ同期」がまだ終わっていなければ受け付けない(started が False)。"""
         if self.sync is None:
-            return
-        self.sync.sync_now()
+            return {"started": False}
+        started = self.sync.sync_now()
         if serverId and issueId:
             self.setOpenIssue(serverId, issueId)  # 開き直すと、同期スレッドがコメントごと取り直す
+        return {"started": started}
 
     @rpc
     def setActive(self, active: bool) -> None:  # noqa: N802

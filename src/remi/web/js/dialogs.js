@@ -41,6 +41,8 @@ export function serverDialog(app, server = null) {
     disabled: s.proxyMode !== "manual", "aria-label": t("server.proxyUrl") });
   const enabled = h("input", { type: "checkbox", checked: s.enabled });
   const save = h("button", { type: "button", class: "btn primary" }, server ? t("common.save") : t("server.add"));
+  // 保存できないときは、その理由を出す
+  const saveHint = h("span", { class: "muted save-hint" });
 
   let probe = null;
   let testedWith = server ? `${s.url}\n` : null; // 編集時は、URLとキーを変えなければ再テスト不要
@@ -48,6 +50,7 @@ export function serverDialog(app, server = null) {
   const update = () => {
     testButton.disabled = !url.value.trim() || (!key.value.trim() && !server);
     save.disabled = !name.value.trim() || testedWith !== inputs();
+    saveHint.textContent = !name.value.trim() ? t("server.hintName") : testedWith !== inputs() ? t("server.hintTest") : "";
   };
   const show = (kind, text) => {
     result.hidden = false;
@@ -124,7 +127,8 @@ export function serverDialog(app, server = null) {
           h("label", {}, proxyManual, t("server.proxyManual")), proxyUrl))),
     h("label", {}, enabled, " ", t("server.enabled")));
   const cancel = h("button", { type: "button", class: "btn", onClick: () => m.close() }, t("common.cancel"));
-  const m = modal({ title: server ? t("server.editTitle") : t("server.addTitle"), body, footer: [cancel, save] });
+  const m = modal({ title: server ? t("server.editTitle") : t("server.addTitle"), body, footer: [saveHint, cancel, save],
+    closeOnBackdrop: false });
   update();
   return m;
 }
@@ -158,7 +162,7 @@ export function settingsDialog(app) {
       field(t("settings.redmineOpenIn"), select("redmine_open_in", [...(app.boot.tabsSupported ? [["tab", t("settings.openInTab")]] : []),
         ["app", t("settings.openInApp")], ["browser", t("settings.openInBrowser")]]),
         // Windows でタブを使えなかったときは、その理由を出す(原因を調べられるように)
-        app.boot.tabsError ? t("settings.tabsError", { reason: app.boot.tabsError }) : null));
+        app.boot.tabsError ? t("settings.tabsError") : null));
   };
 
   const servers = () => {

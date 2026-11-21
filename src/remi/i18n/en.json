@@ -179,6 +179,7 @@
   "list.f.note": "Choosing individual statuses clears the three above (you can pick several)",
   "list.f.open": "Open",
   "list.f.priority": "Priority",
+  "list.f.showAllStatus": "Show all statuses",
   "list.f.status": "Status",
   "list.f.title": "Filter",
   "list.f.tracker": "Tracker",

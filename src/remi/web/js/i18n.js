@@ -34,10 +34,11 @@ function sameDay(a, b) {
 }
 
 // 一覧用の短い表記: 今日は時刻、昨日は「昨日」、今年は月日、それ以前は年月日
-export function formatShort(iso, now = new Date()) {
+/** short: 同じ日の時刻から、午前・午後を省く(狭い表示用。24時間表記) */
+export function formatShort(iso, now = new Date(), { short = false } = {}) {
   const d = toDate(iso);
   if (!d) return "";
-  if (sameDay(d, now)) return new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(d);
+  if (sameDay(d, now)) return new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", ...(short ? { hour12: false } : {}) }).format(d);
   const y = new Date(now);
   y.setDate(now.getDate() - 1);
   if (sameDay(d, y)) return t("time.yesterday");

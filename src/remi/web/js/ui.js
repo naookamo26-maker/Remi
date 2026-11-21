@@ -47,6 +47,7 @@ export function popover(el, { x, y, width = null, onClose = null }) {
 //      | {segmented: {label, options:[{label, value}], value, onChange}, hint}
 // keepOpen: 押してもメニューを閉じない(チェックを続けて切り替えるとき)。onClick が返した真偽値(Promise可)をチェックの状態にする
 // focusLabel: 開いたときにフォーカスする項目の文言(開き直したときに、操作した項目へ戻すため)。省略すると先頭
+// 戻り値: 開いたメニューの要素(isMenuOpen で、開いているかを確かめるのに使う)
 export function contextMenu(x, y, items, { focusLabel = null } = {}) {
   closeMenu();
   const menu = h("div", { class: "menu", role: "menu" });
@@ -90,6 +91,7 @@ export function contextMenu(x, y, items, { focusLabel = null } = {}) {
   openMenu = menu;
   const buttons = [...menu.querySelectorAll("button")];
   (buttons.find((b) => focusLabel !== null && b.textContent === focusLabel) || buttons[0])?.focus();
+  return menu;
 }
 
 addEventListener("mousedown", (e) => {

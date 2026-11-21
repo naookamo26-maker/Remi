@@ -178,6 +178,7 @@
   "list.f.note": "個別に選ぶと、上の3つは選択なしになります(複数選べます)",
   "list.f.open": "未完了",
   "list.f.priority": "優先度",
+  "list.f.showAllStatus": "ステータスを「すべて」にする",
   "list.f.status": "ステータス",
   "list.f.title": "絞り込み",
   "list.f.tracker": "トラッカー",

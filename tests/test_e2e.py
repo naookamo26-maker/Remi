@@ -1346,3 +1346,136 @@ def test_compact_density(page, remi, fake):
     playwright_api.expect(page.locator(".issue-list.compact")).to_have_count(0)
     assert remi.ctx.settings.get("list_density") == "standard"
     assert not page.errors, page.errors
+
+
+def test_sort_applies_while_an_issue_is_open(page, remi, fake):
+    """チケットを開いている間も、並べ替えは効く(「未読を上に」の並びの固定で、新しい並びを打ち消さない)。"""
+    _open_list(page, remi, fake, closed=False)
+    ids = "() => [...document.querySelectorAll('.issue')].map(e => Number(e.dataset.issue))"
+    page.locator(".issue", has_text="#10").click()
+    playwright_api.expect(page.locator(".pane-conv h1")).to_be_visible()
+    page.get_by_role("button", name="並べ替え", exact=True).click()
+    page.get_by_role("menuitemcheckbox", name="チケット番号").click()
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("button", name="昇順 ↑").click()
+    page.wait_for_function("() => document.querySelector('.cchip-sort .t')?.textContent.includes('↑')")
+    page.wait_for_timeout(300)
+    assert page.evaluate(ids) == [10, 11]
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("button", name="降順 ↓").click()
+    page.wait_for_timeout(500)
+    assert page.evaluate(ids) == [11, 10]
+    assert not page.errors, page.errors
+
+
+def test_sort_button_closes_its_open_menu(page, remi, fake):
+    """並べ替えのボタンを、メニューが開いたまま押すと、閉じる(検索・絞り込みと同じ。開き直さない)。"""
+    _open_list(page, remi, fake, closed=False)
+    button = page.locator(".lbtn-sort")
+    button.click()
+    playwright_api.expect(page.locator(".menu")).to_have_count(1)
+    button.click()
+    page.wait_for_timeout(200)
+    playwright_api.expect(page.locator(".menu")).to_have_count(0)
+    button.click()  # もう一度押せば、また開く
+    playwright_api.expect(page.locator(".menu")).to_have_count(1)
+    assert not page.errors, page.errors
+
+
+def test_assignee_search_survives_ime_and_refresh(page, remi, fake):
+    """担当者の名前検索は、日本語の変換中も、一覧の更新やキーボード操作でも、入力欄が作り直されず、フォーカスを失わない。"""
+    _open_list(page, remi, fake)
+    page.get_by_role("button", name="絞り込み", exact=True).click()
+    pop = page.locator(".fpop")
+    pop.get_by_role("button", name=re.compile("^担当者")).click()
+    box = pop.locator(".find input")
+    box.click()
+    box.evaluate("e => { e.dataset.mark = 'same'; }")  # 作り直されたら、この印が消える
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Input.imeSetComposition", {"text": "さ", "selectionStart": 1, "selectionEnd": 1})
+    cdp.send("Input.imeSetComposition", {"text": "さとう", "selectionStart": 3, "selectionEnd": 3})
+    cdp.send("Input.insertText", {"text": "佐藤"})
+    page.wait_for_timeout(200)
+    assert box.input_value() == "佐藤"
+    page.evaluate("() => window.remi.list.refresh()")  # 同期のイベントなどで、一覧が更新されても
+    page.wait_for_timeout(400)
+    playwright_api.expect(pop.locator(".find input")).to_be_focused()
+    assert pop.locator(".find input").get_attribute("data-mark") == "same"
+
+    # 閉じて開き直すと、前の検索語は残らない
+    page.keyboard.press("Escape")
+    page.get_by_role("button", name="絞り込み", exact=True).click()  # 開いていた項目(担当者)は、そのまま開く
+    assert pop.locator(".find input").input_value() == ""
+    assert not page.errors, page.errors
+
+
+def test_filter_popup_keeps_keyboard_focus_after_toggle(page, remi, fake):
+    """キーボード(Space)で選択肢を切り替えても、同じ項目にフォーカスが残る。"""
+    _open_list(page, remi, fake)
+    page.get_by_role("button", name="絞り込み", exact=True).click()
+    item = page.locator(".fpop .fit", has_text="新規")
+    item.focus()
+    page.keyboard.press("Space")
+    playwright_api.expect(page.locator(".cchip-filter")).to_contain_text("ステータス: 新規")
+    focused = page.evaluate("() => document.activeElement.dataset.group + ':' + document.activeElement.dataset.value")
+    assert focused == "status:新規"
+    assert not page.errors, page.errors
+
+
+def test_closed_only_scope_offers_all_statuses(page, remi, fake):
+    """既定の「未完了」では何も出ないとき、「すべて解除」ではなく、ステータスを「すべて」にするボタンを出す。"""
+    fake.add_project(1, "基幹システム")
+    fake.add_project(2, "受注管理", parent=1)
+    fake.add_issue(12, 2, "終了済みの件", status_id=5, watchers={ME})
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".list-header")
+    empty = page.locator(".empty")
+    playwright_api.expect(empty).to_contain_text("条件に一致するチケットはありません。")
+    empty.get_by_role("button", name="ステータスを「すべて」にする").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    assert remi.ctx.settings.get("list_status") == {"mode": "all", "names": []}
+    assert not page.errors, page.errors
+
+
+def test_narrow_list_pane_does_not_overflow(page, remi, fake):
+    """一覧のペインを最小幅(240px)まで狭めても、ヘッダ・行・絞り込みのポップアップが、はみ出したり折り返したりしない。"""
+    seed(fake)
+    fake.add_issue(13, 2, "優先度が高い", priority_id=3, due_date="2020-01-01", watchers={ME})
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    page.evaluate("() => { document.querySelector('.pane-list').style.width = '240px'; }")
+    playwright_api.expect(page.locator(".pane-list.narrow")).to_have_count(1)
+    # 標準の幅では、狭い表示にしない
+    page.evaluate("() => { document.querySelector('.pane-list').style.width = '360px'; }")
+    playwright_api.expect(page.locator(".pane-list.narrow")).to_have_count(0)
+    page.evaluate("() => { document.querySelector('.pane-list').style.width = '240px'; }")
+
+    # ヘッダ: タイトルは1行で、件数は数字だけ。ボタンの隙間は詰まる
+    title = page.locator(".list-title h2")
+    assert title.evaluate("e => e.getBoundingClientRect().height") < 24
+    assert page.locator(".list-title .count").evaluate("e => getComputedStyle(e, '::after').content") == '"3"'
+    assert page.locator(".list-title").evaluate("e => e.scrollWidth <= e.clientWidth")
+
+    # 行: コンパクト + 期日の並べ替えでも、一覧に横スクロールが出ない。ステータスのラベルは縦に折り返さない
+    page.get_by_role("button", name="コンパクト表示").click()
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("menuitemcheckbox", name="期日").click()
+    playwright_api.expect(page.locator(".cchip-sort")).to_be_visible()
+    page.wait_for_timeout(300)
+    assert page.locator(".issue-list").evaluate("e => e.scrollWidth <= e.clientWidth")
+    assert page.locator(".issue .pill").first.evaluate("e => e.getBoundingClientRect().height") < 24
+
+    # ポップアップ: 大分類の3つのボタンが、枠の中に1行で収まる
+    page.get_by_role("button", name="絞り込み", exact=True).click()
+    box = page.locator(".fpop").bounding_box()
+    buttons = page.locator(".fpop .modes .o")
+    assert buttons.count() == 3
+    tops = set()
+    for i in range(3):
+        b = buttons.nth(i).bounding_box()
+        assert b["x"] >= box["x"] and b["x"] + b["width"] <= box["x"] + box["width"] + 1
+        tops.add(round(b["y"]))
+    assert len(tops) == 1
+    assert not page.errors, page.errors

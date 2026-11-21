@@ -1,4 +1,4 @@
-// 会話ビューのヘッダ: 件名・パンくず・ウォッチ・Redmineで開く、ステータス・担当者・優先度の選択(設計書 §6.2)
+// 会話ビューのヘッダ: 件名・パンくず・ウォッチ・Remiで開く、ステータス・担当者・優先度の選択(設計書 §6.2)
 import { call } from "./api.js";
 import { clear, h, spinner, toast } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
@@ -56,8 +56,8 @@ export class IssueHeader {
    */
   render(d) {
     const app = this.conv.app;
-    // 件名の幅を確保するため、ウォッチ(星)と「Redmineで開く」は、アイコンだけのボタンを縦に並べる。
-    // 開くボタンは、右の「▾」でブラウザで開く・URLのコピーを選べる(Shift+クリックでも既定のブラウザで開く)
+    // 件名の幅を確保するため、ウォッチ(星)と「Remiで開く」は、アイコンだけのボタンを縦に並べる。
+    // 開くボタンは、右の「▾」で外部ブラウザで開く・URLのコピーを選べる(Shift+クリックでも外部ブラウザで開く)
     const openBtn = h("button", { type: "button", class: "btn icon-only", title: t("conv.openRedmineHint"),
       "aria-label": t("conv.openRedmine"),
       onClick: (e) => app.openRedmine(d.url, { external: e.shiftKey }) }, icon("external"));

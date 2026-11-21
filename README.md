@@ -18,6 +18,7 @@ py -3.14 -m venv .venv
 pip install -r requirements-dev.txt
 python -m remi               # 起動(WebView2のウィンドウ)
 python -m remi --browser     # 開発モード: 既定のブラウザで画面を開く
+python -m playwright install chromium   # 画面(E2E)のテスト用のブラウザ(初回のみ)
 python -m pytest             # テスト
 ```
 

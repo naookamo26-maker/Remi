@@ -281,13 +281,13 @@ class App {
     if (server) this.openRedmine(`${server.url}/issues/${issueId}${note ? `#note-${note}` : ""}`, { external });
   }
 
-  // Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザ(Shift+クリックで常にブラウザ)
+  // Redmineのページを開く。設定に従ってRemi(タブ・別ウィンドウ)か外部ブラウザ(Shift+クリックで常に外部ブラウザ)
   openRedmine(url, { external = false } = {}) {
     return call("openRedmine", { url, external });
   }
 
   /**
-   * リンクを開く。http(s) は、Redmine(serverUrl 以下)ならRedmineの開き方、それ以外は既定のブラウザ。
+   * リンクを開く。http(s) は、Redmine(serverUrl 以下)ならRedmineの開き方、それ以外は外部ブラウザ。
    * ほかのスキーム(link_schemes.json・mailto)は、関連付けられたアプリで開く。
    */
   openLink(href, { serverUrl = "", external = false } = {}) {

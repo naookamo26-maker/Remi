@@ -1154,7 +1154,7 @@ class RemiApi:
 
     @rpc
     def openRedmine(self, url: str, external: bool = False) -> str:  # noqa: N802
-        """Redmineのページを開く。設定に従ってアプリ内のウィンドウか既定のブラウザで開く(設計書 §5.4)。"""
+        """Redmineのページを開く。設定に従ってRemi(タブ・別ウィンドウ)か外部ブラウザで開く(設計書 §5.4)。"""
         if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
             raise RpcError("invalid_url")
         mode = self.ctx.settings.get("redmine_open_in")

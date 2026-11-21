@@ -1,6 +1,6 @@
 # Remi(レミ) 設計書
 
-改訂: 2026-11-17(初版 2026-11-18 案をレビュー・改訂)
+改訂: 2026-11-21(実装に合わせて随時更新する。変更の経緯は CHANGELOG.md)
 
 ## 1. 目的と要件
 
@@ -81,6 +81,12 @@ Redmineのチケットを、チャットアプリのように監視・コメン�
 - **同期スレッドの起動・停止**: 停止・起動・再試行は専用の鍵で直列にする。アプリの終了後は、再起動の要求や待っていた再試行でも起動しない
 
 - **多重起動の防止**: 名前付きパイプ(`multiprocessing.connection`。Windowsでは `\\.\pipe\Remi-<ユーザーのハッシュ>`)で待ち受ける。2つ目を起動したときは、既存のプロセスに「表示」を依頼して終了する
+- **終了の依頼**: `Remi.exe --quit` は、多重起動の防止と同じ名前付きパイプで、起動中のRemiに「終了」を依頼して終わる(起動していなければ何もしない)。
+  ×ボタンではトレイに格納されるので、外から確実に終了させるために使う
+- **配置先を SVN・Git で管理するとき**の更新用に、`packaging/Remi-update.bat` を配布物の `Remi.exe` と同じ場所に入れる。
+  「終了(`--quit`。30秒待っても終わらなければ強制終了)→ `svn update` / `git pull --ff-only` → 再起動」を行う。
+  SVN・Git は配置先で自動判定し、設定(`VCS`・`START_ARGS`・`WAIT_SECONDS`)は先頭で変えるか、環境変数で渡す。
+  更新に失敗しても、いまのファイルで再起動し、エラーを知らせる(終了コード 2)
 - 配布: PyInstaller。`--onefile` は起動のたびに一時展開して遅く、ウイルス対策ソフトに誤検知されやすいので、**`--onedir` + zip(または簡易インストーラー)を第一候補**にする
 
 ### 2.6 画面とバックエンドの接続
@@ -90,13 +96,15 @@ WebView2 ──HTTP──▶ ローカルAPIサーバー(127.0.0.1:ランダム�
    │                 ├ GET  /             画面(index.html, CSS, JS)
    │                 ├ POST /api/<method> RPC(JSON)
    │                 ├ GET  /events       SSE(同期結果・通知クリックなど)
-   │                 └ GET  /attachments/<server_id>/<attachment_id>  キャッシュ済みの画像
+   │                 ├ GET  /attachments/<server_id>/<attachment_id>  キャッシュ済みの画像
+   │                 ├ POST /upload       送信前の添付(Redmineへアップロード)。GET /pending/<id> でその画像を表示
+   │                 └ GET  /external-image?url=…  外部画像(設定で許可した場合のみ)、GET /highlight.css  コードの色
    └─ pywebview: ウィンドウの表示・非表示、閉じる操作の横取り
 ```
 
 - **認証**: 起動のたびにランダムなトークンを作り、最初のURLのクエリで渡す。サーバーは `HttpOnly; SameSite=Strict` のCookieに置き換えてから、トークンを含まないURLへリダイレクトする。以後はCookieがないリクエストを拒否する
 - **DNSリバインディング対策**: `Host` ヘッダーが `127.0.0.1:<ポート>` でなければ拒否する。RPCは `POST` かつ `Content-Type: application/json` のみ受け付ける
-- **Content-Security-Policy**: `default-src 'self'`。外部の画像(設定で許可した場合)は、バックエンドが代わりに取得して配信する。インラインスクリプトは使わない
+- **Content-Security-Policy**: `default-src 'self'`(画像は `data:`、スタイルはインラインも許可)。外部の画像(設定で許可した場合)は、バックエンドが代わりに取得して配信する。インラインスクリプトは使わない
 - RPCのメソッドは、Pythonの `RemiApi` クラスにまとめる。画面から呼べるのはこのクラスのメソッドだけ
 - **開発モード**: `python -m remi --browser` で、ウィンドウを作らずに既定のブラウザで画面を開く(どのOSでも画面を開発できる)
 - **テスト**: 同じローカルAPIサーバーを偽のRedmineにつないで起動し、Playwright(Chromium)で画面を操作して確認する。CIでも実行する
@@ -125,7 +133,7 @@ WebView2 ──HTTP──▶ ローカルAPIサーバー(127.0.0.1:ランダム�
 
 ### 3.2 プロジェクトツリー
 
-- 取得: `GET /projects.json?limit=100&offset=…`。起動時と約1時間ごとに取得する
+- 取得: `GET /projects.json?limit=100&offset=…`。約6時間ごとに取得する(前回の取得時刻を保存し、起動のたびには取り直さない。§4.6)
 - 表示範囲: 既定は「監視対象のチケットを含むプロジェクトとその祖先」。祖先が見えない場合は名前を薄く表示し、親そのものが返らない場合はルートとして扱う。サーバーごとに全プロジェクト表示にも切り替えられる(下のツリーのリンクから)
 - 親を選ぶと、子孫のチケットもまとめて表示する。未読数も子の合計を親に集計する
 - 特別ノード: 各サーバー直下に「すべて」と「未読のみ」、ツリー最上位にサーバー横断の「すべて」
@@ -156,15 +164,19 @@ WebView2 ──HTTP──▶ ローカルAPIサーバー(127.0.0.1:ランダム�
 
 | テーブル | 主なカラム |
 | --- | --- |
-| servers | server\_id, name, url, enabled, poll\_interval, notify\_enabled, watch\_versions, my\_user\_id, my\_group\_ids, proxy, text\_format, last\_sync\_cursor |
-| projects | server\_id, project\_id, parent\_id, name, identifier, status, visible |
-| project\_settings | server\_id, project\_id, notify(NULL=継承/0/1), watch\_authored(NULL=継承/0/1) |
-| issues | server\_id, issue\_id, project\_id, tracker\_id, subject, status\_id, priority\_id, assigned\_to\_id, author\_id, updated\_on, closed\_on, relation\_flags(担当/ウォッチ/作成のビット), monitored, journals\_synced\_on |
-| journals | server\_id, issue\_id, journal\_id, user\_id, user\_name, notes, private\_notes, created\_on, details\_json |
-| attachments | server\_id, attachment\_id, issue\_id, filename, content\_type, filesize, content\_url, local\_path, cached\_at |
-| read\_state | server\_id, issue\_id, last\_read\_journal\_id |
-| drafts | server\_id, issue\_id, body, private\_notes, failed\_at |
-| masters | server\_id, kind(status/tracker/priority/user/custom\_field), id, name, extra\_json |
+| servers | server\_id, name, url, enabled, poll\_interval, notify\_enabled, text\_format, proxy\_mode, proxy\_url, my\_user\_id, my\_login, my\_name, my\_group\_ids, last\_sync\_cursor, initial\_sync\_done, last\_synced\_at, last\_error, sort\_order, show\_all\_projects, visible\_relations(表示するチケットの既定), watch\_versions |
+| projects | server\_id, project\_id, parent\_id, name, identifier, status, accessible(権限がなく名前だけ分かるものは 0) |
+| project\_settings | server\_id, project\_id, notify(NULL=継承/0/1), watch\_versions(NULL=継承/0/1), visible\_relations(NULL=継承。関係のリスト)。`watch_authored` は古いデータとの互換のために残し、使わない |
+| issues | server\_id, issue\_id, project\_id, tracker\_id, subject, description, status\_id, priority\_id, assigned\_to\_id/name, author\_id/name, created\_on, updated\_on, closed\_on, relation\_flags(担当/ウォッチ/作成/グループ担当のビット), monitored, journals\_synced\_on, last\_opened\_at, unmonitored\_at(監視対象外になった時刻。キャッシュ削除の猶予に使う) |
+| journals | server\_id, issue\_id, journal\_id, user\_id, user\_name, notes, private\_notes, created\_on, updated\_on, details\_json |
+| attachments | server\_id, attachment\_id, issue\_id, filename, content\_type, filesize, content\_url, description, author\_name, created\_on, local\_path, cached\_at |
+| read\_state | server\_id, issue\_id, last\_read\_journal\_id, read\_at, read\_baseline(初めて journal を取得したとき、この時刻以前を既読にする) |
+| notified | server\_id, issue\_id, journal\_id(ここまでは通知した。§7.3) |
+| drafts | server\_id, issue\_id, body, private\_notes, failed\_at, error, updated\_at |
+| versions | server\_id, version\_id, project\_id, name, status, due\_date, description, issues\_synced, read\_event\_id, issues\_signature, issues\_full\_at(§5.5) |
+| version\_issues | server\_id, version\_id, issue\_id, closed |
+| version\_events | event\_id, server\_id, version\_id, kind, issue\_id, subject, old\_value, new\_value, created\_at |
+| masters | server\_id, kind(status/tracker/priority/user/custom\_field/version/category), id, name, extra\_json |
 | settings | グローバル設定(通知、自動起動、表示など) |
 
 #### 名前の解決(masters)
@@ -216,7 +228,7 @@ journalの `details` にはIDしか入っていないので、表示には名前
    コメントは、他のチケットと同じく遅延取得する(監視対象外のものは、開いたときに取得する)
 2. この時点で、すべてのチケットを「既読」として初期化する。初回登録で大量の未読や通知が出ないように、このフェーズでは通知を出さない
 3. journalは**遅延取得**する。開いたチケットはすぐ取得し、それ以外は低優先度のキューでゆっくり埋める
-4. 一覧の未読判定は、journalがまだないチケットについては `updated_on` と既読時刻を比べて行う
+4. 未読は、取得済みの journal だけで数える。journalをまだ取得していないチケットは、取得する(先読みで1秒に1件)までは未読に数えない
 
 ### 4.5 開いているチケットの監視
 
@@ -235,7 +247,7 @@ journalの `details` にはIDしか入っていないので、表示には名前
 | 削除の検出 | 1日1回程度 |
 | コメントの遅延取得(キュー) | 1秒に1件(サーバーごと) |
 
-ウィンドウが非アクティブの間は間隔を延ばし(例: 2倍)、エラーが起きたら指数バックオフする(上限30分)。スリープから復帰したら1回すぐに同期する。
+ウィンドウが非アクティブの間は間隔を延ばし(例: 2倍)、エラーが起きたら指数バックオフする(上限30分)。
 
 **多数の利用者が同じRedmineを使う場合の負荷対策**(数百〜千人の利用を想定):
 
@@ -259,7 +271,7 @@ journalの `details` にはIDしか入っていないので、表示には名前
   コメントは先読み・通知をせず、開いたときに取得する。再オープンされたら、差分同期で監視対象に戻る。
   **使い始める前にクローズされたチケットも、初回同期で取り込む**(§4.4)。更新で初回同期の対象を広げたときは、スキーマのマイグレーションで
   `initial_sync_done` を戻し、使い始めている利用者も1回だけ初回同期をやり直す(キャッシュは消さない。既読・下書き・取得済みのコメントは残る)
-- **削除**: 1日1回、監視対象のIDを個別に確認する(404なら削除とみなす)。件数が多い場合は数日に分けて行う
+- **削除**: 1日1回、監視対象のIDを個別に確認する(404なら削除とみなす)。50件ずつまとめて問い合わせる(まず一覧で見えるかを確かめ、見えなかったものだけ個別に404を確認する)
 - **関係が外れた未完了のチケット**のキャッシュは、監視対象外になってから10日たったら削除する(1日1回。`issues.unmonitored_at` から数える)。
   次のものは残す: **クローズ済み**(過去のチケットを見返せるように)、ウォッチしているバージョンに含まれるもの、下書きがあるもの、
   10日以内に開いたもの。削除するときは、キャッシュした画像のファイルも消す。再び関係ができたときは、同期が取得し直す。
@@ -336,7 +348,7 @@ journalの `details` にはIDしか入っていないので、表示には名前
 
 | 値 | 対応するRedmineの設定 | 使うライブラリ |
 | --- | --- | --- |
-| `common_mark` | 「CommonMark Markdown (GitHub Flavored)」(Redmine 5以降)。旧「Markdown」(Redcarpet)もこれで代用する | `markdown-it-py` + `mdit-py-plugins`(表、取り消し線、タスクリスト、自動リンク) |
+| `common_mark` | 「CommonMark Markdown (GitHub Flavored)」(Redmine 5以降)。旧「Markdown」(Redcarpet)もこれで代用する | `markdown-it-py`(表、取り消し線。タスクリスト・自動リンクは自前で処理する) |
 | `textile` | 「Textile」 | `textile`(python-textile) |
 | `plain` | 「なし」 | 使わない(エスケープ + 改行保持 + URLの自動リンクのみ) |
 
@@ -453,7 +465,7 @@ MarkdownとTextileの標準にはない、Redmineの記法を前処理で扱う�
   メニューの名前は「Remiで開く」(タブ・別ウィンドウ)と「外部ブラウザで開く」にそろえる(一覧の「⋯」・右クリック・ツリー・ヘッダ共通)。
   設定が「外部ブラウザ」のときは、「外部ブラウザで開く」の1つだけにする。設定の選択肢は「Remiのタブ(既定)」「Remiの別ウィンドウ」「外部ブラウザ」。メニューには「URLをコピー」も置く
 - Redmineのページにはバックエンドの機能(API)を公開しない。Redmineのページからローカルサーバーへのリクエストは、Cookie(SameSite=Strict)とHostヘッダーの検査、JSON以外の拒否で防ぐ
-- 本文中のリンクのうち、同じRedmineサーバーへのリンクは同じ方法で開き、外部サイトへのリンクは既定のブラウザで開く
+- 本文中のリンクのうち、同じRedmineサーバーへのリンクは同じ方法で開き、外部サイトへのリンクは外部ブラウザで開く
 - 左ペインは幅を可変にし、ツリーの折りたたみ状態とペインの幅を保存する
 
 ### 5.5 ロードマップ(バージョン)の監視
@@ -551,7 +563,7 @@ MarkdownとTextileの標準にはない、Redmineの記法を前処理で扱う�
 - 文字列のカスタムフィールドの値が1つのリンク(本文の自動リンクと同じ種類: `http(s)://`・`www.`(https を補う)・`mailto:`・
   `link_schemes.json` のスキーム)なら、入力欄の右に「リンクを開く」ボタンを出す。入力欄は今までどおり編集でき、
   入力のたびにボタンの表示を切り替える。押すと、本文のリンクと同じ開き方(Redmineのページは設定に従い、それ以外のhttp(s)は
-  既定のブラウザ、ほかのスキームは確認してから関連付けられたアプリ)。Shift+クリックで、常に既定のブラウザ
+  外部ブラウザ、ほかのスキームは確認してから関連付けられたアプリ)。Shift+クリックで、常に外部ブラウザ
 - 変更はステータスなどと同じく「送信前の変更」として持ち、送信時にコメントとまとめて1回の更新で送る
 - カスタムフィールドの形式と選択肢は `/custom_fields.json`(管理者だけが取得できる)から得る。取得できない場合と、
   長文・リンク・添付などの形式は表示だけにする。ワークフローで読み取り専用にした項目はRedmineが無視するので、
@@ -652,7 +664,7 @@ MarkdownとTextileの標準にはない、Redmineの記法を前処理で扱う�
 
 ### 9.3 トレイアイコン
 
-Windowsでは、タスクバーの色(`SystemUsesLightTheme`)とアプリの色(`AppsUseLightTheme`)を別々に設定できる。トレイアイコンは**タスクバー側の設定**を `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` から読み、見やすい色のアイコンを選ぶ。
+Windowsでは、タスクバーの色(`SystemUsesLightTheme`)とアプリの色(`AppsUseLightTheme`)を別々に設定できる。アイコンは、どちらの背景でも見えるよう、青い角丸の背景に白い「R」と「e」を重ねた形で、色は共通にする(未読があるときは右上に赤い点を付ける)。タスクバー側の設定(`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`)は読むが、アイコンの色の切り替えには使っていない。
 
 ## 10. 多言語対応
 
@@ -683,7 +695,7 @@ Windowsでは、タスクバーの色(`SystemUsesLightTheme`)とアプリの色(
 - Pythonのパッケージ規約(PEP 440)とも矛盾しないように、バージョン文字列は `X.Y.Z` の形だけを使う(`-beta` などの付加ラベルは使わない)
 - 変更履歴は `CHANGELOG.md`(Keep a Changelog形式)に書く。開発中の変更は `Unreleased` の節にためておき、リリースのときにバージョン番号の節へ移す
 - リリースのときは `vX.Y.Z` のGitタグを付ける
-- バージョン番号の表示先: 「Remiについて」ダイアログ、User-Agent(`Remi/X.Y.Z`)、exeのファイルバージョン(Windowsの4桁形式 `X.Y.Z.0`)
+- バージョン番号の表示先: ウィンドウのタイトル(`Remi vX.Y.Z`)、User-Agent(`Remi/X.Y.Z`)、exeのファイルバージョン(Windowsの4桁形式 `X.Y.Z.0`)
 - DBのスキーマのバージョンは、アプリのバージョンとは別に `PRAGMA user_version` で管理し、起動時に順番にマイグレーションする。新しいスキーマのDBを古いアプリで開いた場合は、起動を中止してその旨を表示する
 
 ## 12. 開発ステップ
@@ -701,5 +713,4 @@ Windowsでは、タスクバーの色(`SystemUsesLightTheme`)とアプリの色(
 
 ## 13. 未決事項
 
-- コメントを編集・削除する機能(Redmine 5以降は、ブラウザでの編集は可能。REST APIでの対応は要確認)
 - Wikiページの埋め込み表示(今回はブラウザで開くリンクのみ)

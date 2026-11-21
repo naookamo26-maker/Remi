@@ -15,7 +15,6 @@ dependencies = [
     "truststore>=0.10",
     "keyring>=25",
     "markdown-it-py>=3",
-    "linkify-it-py>=2",
     "textile>=4.0.3",
     "nh3>=0.2.18",
     "Pygments>=2.18",

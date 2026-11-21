@@ -1,7 +1,8 @@
 """多重起動の防止(設計書 §2.5)。
 
 最初に起動したプロセスが名前付きパイプ(Windows)/ UNIXソケット(開発用)で待ち受ける。
-2つ目のプロセスはそこへ依頼("show"、または通知を押したときの ("open", サーバー, チケット))を送って終了する。
+2つ目のプロセスはそこへ依頼("show"、通知を押したときの ("open", サーバー, チケット)、
+終了させる "quit")を送って終了する。
 最初のプロセスは on_show を、依頼を引数にして呼ぶ。
 """
 
@@ -26,8 +27,8 @@ _AUTH = b"remi-single-instance"
 
 
 def _valid(msg: Any) -> bool:
-    """受け付ける依頼: "show" か ("open", サーバーID, チケットID)。"""
-    if msg == "show":
+    """受け付ける依頼: "show"・"quit" か ("open", サーバーID, チケットID)。"""
+    if msg in ("show", "quit"):
         return True
     return (isinstance(msg, tuple) and len(msg) == 3 and msg[0] == "open"
             and all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in msg[1:]))

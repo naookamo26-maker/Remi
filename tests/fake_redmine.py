@@ -61,6 +61,7 @@ class FakeRedmine:
         self.watchers: dict[int, set[int]] = {}
         self.requests: list[tuple[str, str]] = []
         self.rest_enabled = True
+        self.prefix = ""  # Redmine を、このサブパス(例: /redmine)の下に置く。それ以外のパスは、HTMLの404
         self.fail_next: int | None = None  # 次のリクエストを指定ステータスで失敗させる
         self.fail_next_put: int | None = None  # 次の更新(PUT)だけを失敗させる
         self.fail_headers: dict[str, str] | None = None  # fail_next の応答に付けるヘッダー(Retry-After など)
@@ -301,6 +302,10 @@ class FakeRedmine:
             time.sleep(self.delay)
         with self._lock:
             self.requests.append((method, path + ("?" + "&".join(f"{k}={v}" for k, v in sorted(query.items())) if query else "")))
+            if self.prefix:
+                if not path.startswith(self.prefix + "/"):
+                    return 404, (b"<html><body>Not Found</body></html>", "text/html")
+                path = path[len(self.prefix):]
             if self.fail_next is not None:
                 code, self.fail_next = self.fail_next, None
                 headers_, self.fail_headers = self.fail_headers, None

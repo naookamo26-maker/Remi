@@ -52,10 +52,12 @@ export function serverDialog(app, server = null) {
     save.disabled = !name.value.trim() || testedWith !== inputs();
     saveHint.textContent = !name.value.trim() ? t("server.hintName") : testedWith !== inputs() ? t("server.hintTest") : "";
   };
-  const show = (kind, text) => {
+  const show = (kind, text, detail = null) => {
     result.hidden = false;
     result.className = `result ${kind}`;
     result.textContent = text;
+    // 失敗したときは、1行目に結果、2行目に原因(確認すること)を出す
+    if (detail) result.replaceChildren(h("div", {}, h("div", {}, text), h("div", {}, detail)));
     if (kind === "busy") result.prepend(spinner()); // 接続している間は、回転する印を出す
   };
   for (const el of [name, url, key]) el.addEventListener("input", update);
@@ -71,9 +73,10 @@ export function serverDialog(app, server = null) {
         url: url.value.trim(), apiKey: key.value.trim(), proxyMode: proxyManual.checked ? "manual" : "system",
         proxyUrl: proxyUrl.value.trim() || null, serverId: server?.serverId ?? null,
       });
-      testedWith = tested;
-      show("ok", t("server.connected", { name: probe.name, id: probe.userId, groups: probe.groupIds.length,
-        assigned: probe.assignedCount, watched: probe.watchedCount }));
+      // プロジェクトのURLなどを入れたときは、Redmine のトップのアドレスに直して返ってくる。欄もそれに合わせる
+      if (probe.url !== url.value.trim().replace(/\/+$/, "")) url.value = probe.url;
+      testedWith = inputs();
+      show("ok", t("server.connected"));
       const g = probe.formatGuess;
       if (g && g.textFormat) {
         guess.textContent = t("server.guessed", { name: g.textFormat === "textile" ? "Textile" : "Markdown", n: g.samples });
@@ -85,7 +88,7 @@ export function serverDialog(app, server = null) {
     } catch (e) {
       probe = null;
       testedWith = null;
-      show("error", t(`errors.${e.code}`));
+      show("error", t("server.failed"), t(`errors.${e.code}`));
     }
     update();
   });

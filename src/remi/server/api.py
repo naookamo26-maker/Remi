@@ -24,7 +24,7 @@ from typing import Any, Protocol
 from remi import __version__
 from remi.api.client import RedmineClient, interactive, normalize_url
 from remi.api.errors import ErrorCode, RedmineError
-from remi.api.probe import probe_server
+from remi.api.probe import find_redmine_root, probe_server
 from remi.context import AppContext
 from remi.i18n import SUPPORTED_LANGUAGES, catalog, resolve_language
 from remi.paths import attachment_cache_dir
@@ -314,7 +314,9 @@ class RemiApi:
         if not key:
             raise RpcError("unauthorized")
         try:
-            client = RedmineClient(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None)
+            # プロジェクトのURLなどが入力されたときは、Redmine のトップのアドレスを探す(見つかれば、url に入れて返す)
+            root = find_redmine_root(url, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None)
+            client = RedmineClient(root, key, proxy_mode=proxyMode, proxy_url=proxyUrl or None)
         except RedmineError as e:
             raise RpcError(e.code.value, e.detail) from e
         try:

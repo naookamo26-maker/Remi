@@ -7,7 +7,7 @@ from fake_redmine import ME
 
 from remi.api.client import RedmineClient, normalize_url
 from remi.api.errors import ErrorCode, RedmineError
-from remi.api.probe import guess_text_format, probe_server
+from remi.api.probe import candidate_roots, find_redmine_root, guess_text_format, probe_server
 
 
 def test_normalize_url():
@@ -406,3 +406,71 @@ def test_issues_signature(fake, client):
     assert client.issues_signature(project_id=1, status_id="*") == "2|2026-01-02T00:00:00Z"
     assert client.issues_signature(project_id=99, status_id="*") == "0|"
     assert fake.requests[-1][1].count("limit=1") == 1  # 1件だけ取得する軽い問い合わせ
+
+
+@pytest.mark.parametrize("url,expected", [
+    # 入力されたまま → /projects/ などの手前 → 短い方から
+    ("https://h.example.com/redmine/projects/foo/issues",
+     ["https://h.example.com/redmine/projects/foo/issues", "https://h.example.com/redmine", "https://h.example.com",
+      "https://h.example.com/redmine/projects", "https://h.example.com/redmine/projects/foo"]),
+    ("https://h.example.com/projects/foo?x=1#a", ["https://h.example.com/projects/foo", "https://h.example.com",
+                                                   "https://h.example.com/projects"]),
+    ("h.example.com/", ["https://h.example.com"]),
+    ("https://h.example.com/redmine/", ["https://h.example.com/redmine", "https://h.example.com"]),
+    ("http://h:8080/a/b/c/d/e/f/g/h", ["http://h:8080/a/b/c/d/e/f", "http://h:8080", "http://h:8080/a",
+                                       "http://h:8080/a/b", "http://h:8080/a/b/c", "http://h:8080/a/b/c/d",
+                                       "http://h:8080/a/b/c/d/e"]),
+])
+def test_candidate_roots(url, expected):
+    assert candidate_roots(url) == expected
+
+
+@pytest.mark.parametrize("suffix", ["", "/", "/projects/foo", "/projects/foo/issues?set_filter=1", "/issues/10#note-3",
+                                    "/my/page", "/redmine"])
+def test_find_redmine_root_under_a_subpath(fake, suffix):
+    from fake_redmine import API_KEY
+
+    fake.prefix = "/redmine"
+    root = f"{fake.base_url}/redmine"
+    url = root + suffix if suffix != "/redmine" else fake.base_url + suffix
+    assert find_redmine_root(url, API_KEY) == root
+    assert find_redmine_root(fake.base_url + "/other/path", API_KEY) == fake.base_url + "/other/path"  # 見つからない
+
+
+def test_find_redmine_root_at_the_top_and_from_a_project_url(fake):
+    from fake_redmine import API_KEY
+
+    assert find_redmine_root(fake.base_url, API_KEY) == fake.base_url
+    n = len(fake.requests)
+    assert find_redmine_root(fake.base_url + "/projects/foo/issues", API_KEY) == fake.base_url
+    assert len(fake.requests) - n <= 2  # 入力されたまま(404)→ /projects の手前、の2回で見つかる
+
+
+def test_find_redmine_root_prefers_the_entered_url_and_keeps_wrong_key(fake):
+    from fake_redmine import API_KEY
+
+    n = len(fake.requests)
+    assert find_redmine_root(fake.base_url, API_KEY) == fake.base_url
+    assert len(fake.requests) - n == 1  # 正しい URL なら、1回だけ
+    fake.prefix = "/redmine"
+    # キーが違っても、Redmine のあったところ(401が返ったところ)を返す。理由は、そのあとの接続テストが返す
+    assert find_redmine_root(fake.base_url + "/redmine/projects/foo", "wrong") == fake.base_url + "/redmine/projects/foo"
+    fake.prefix = ""
+    assert find_redmine_root(fake.base_url + "/projects/foo", "wrong") == fake.base_url + "/projects/foo"
+
+
+def test_find_redmine_root_stops_on_host_errors():
+    with pytest.raises(RedmineError) as e:
+        find_redmine_root("http://127.0.0.1:1/projects/foo", "k")
+    assert e.value.code in (ErrorCode.CONNECTION_FAILED, ErrorCode.TIMEOUT)
+
+
+def test_probe_reports_a_url_hint_for_a_non_redmine_response(fake):
+    """Redmine でない(JSONでない)応答や 404 のときは、URLの確認と REST API の可能性を伝えるエラー(rest_disabled)にする。"""
+    from fake_redmine import API_KEY
+
+    fake.prefix = "/redmine"
+    c = RedmineClient(fake.base_url + "/nowhere", API_KEY, min_interval=0)
+    with pytest.raises(RedmineError) as e:
+        probe_server(c)
+    assert e.value.code == ErrorCode.REST_DISABLED

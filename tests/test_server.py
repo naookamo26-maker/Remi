@@ -101,6 +101,11 @@ def test_full_flow(app, fake):
     assert app.rpc_error("testConnection", url=fake.base_url, apiKey="wrong")["code"] == "unauthorized"
     probe = app.rpc("testConnection", url=fake.base_url, apiKey=API_KEY)
     assert probe["userId"] == ME and probe["formatGuess"]["textFormat"] == "common_mark"
+    # プロジェクトのURLを入れても、Redmine のトップのアドレスを探して、そのURLで接続できる
+    assert app.rpc("testConnection", url=fake.base_url + "/projects/2/issues?set_filter=1", apiKey=API_KEY)["url"] == fake.base_url
+    fake.rest_enabled = False  # どこにも Redmine の応答がなければ、URLの確認と REST API の可能性を伝える
+    assert app.rpc_error("testConnection", url=fake.base_url + "/projects/2", apiKey=API_KEY)["code"] == "rest_disabled"
+    fake.rest_enabled = True
     assert app.rpc_error("saveServer", data={"name": "S", "url": fake.base_url, "apiKey": API_KEY})["code"] == "not_tested"
     saved = app.rpc("saveServer", data={
         "name": "社内", "url": fake.base_url, "apiKey": API_KEY, "textFormat": "common_mark",

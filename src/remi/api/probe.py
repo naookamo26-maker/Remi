@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
-from remi.api.client import RedmineClient
+from remi.api.client import RedmineClient, normalize_url
 from remi.api.errors import ErrorCode, RedmineError
 
 TEXT_FORMATS = ("common_mark", "textile", "plain")
@@ -47,6 +48,61 @@ def guess_text_format(texts: list[str]) -> FormatGuess:
     return FormatGuess("common_mark" if md >= tx else "textile", md, tx, samples)
 
 
+# Redmine の画面のURLに出てくる、決まった部分。ここより手前が、Redmine のトップのアドレス
+_REDMINE_PATHS = frozenset({
+    "projects", "issues", "versions", "users", "my", "login", "logout", "account", "admin", "groups",
+    "time_entries", "activity", "search", "news", "boards", "wiki", "documents", "files", "attachments", "queries",
+})
+MAX_DISCOVERY_DEPTH = 6  # 区切り(/)の何階層目まで試すか
+
+
+def candidate_roots(url: str) -> list[str]:
+    """入力されたURLから、Redmine のトップのアドレスの候補を、試す順に返す(重複なし)。
+
+    入力されたまま → Redmine の画面のURLの決まった部分(/projects/ など)の手前 → 区切り(/)ごとに、短い方から。
+    サーバー登録で、プロジェクトのURLなどを入れてしまった人のため。検索部分(?...)・#... は捨てる。
+    """
+    parts = urlsplit(normalize_url(url))
+    root = f"{parts.scheme}://{parts.netloc}"
+    segs = [x for x in parts.path.split("/") if x][:MAX_DISCOVERY_DEPTH]
+
+    def join(n: int) -> str:
+        return "/".join([root, *segs[:n]])
+
+    order = [len(segs)]
+    marker = next((i for i, x in enumerate(segs) if x.lower() in _REDMINE_PATHS), None)
+    if marker is not None:
+        order.append(marker)
+    order.extend(range(len(segs) + 1))
+    return list(dict.fromkeys(join(n) for n in order))
+
+
+def find_redmine_root(url: str, api_key: str, *, proxy_mode: str = "system", proxy_url: str | None = None) -> str:
+    """入力されたURLから、Redmine のトップのアドレスを探す。
+
+    候補ごとに /users/current.json を試し、Redmine の応答(ユーザー)が返ったものを採用する。
+    404・403・JSONでない応答のときは、次の候補を試す。接続できない・証明書・タイムアウトなど、
+    ホストそのものの失敗は、そのまま返す(ほかの候補でも同じため)。見つからなければ、入力されたまま返す
+    (接続テストが、その理由を返す)。APIキーを送るのは、入力されたホストの中だけ(client が検査する)。
+    """
+    candidates = candidate_roots(url)
+    key_rejected: str | None = None  # キーが拒否された=Redmine があった(ほかに見つからなければ、ここを使う)
+    for cand in candidates:
+        client = RedmineClient(cand, api_key, proxy_mode=proxy_mode, proxy_url=proxy_url, min_interval=0)
+        try:
+            if "user" in client.get_json("/users/current.json"):
+                return client.base_url
+        except RedmineError as e:
+            if e.code == ErrorCode.UNAUTHORIZED:
+                key_rejected = key_rejected or cand
+            elif e.code not in (ErrorCode.NOT_FOUND, ErrorCode.FORBIDDEN, ErrorCode.INVALID_RESPONSE,
+                                ErrorCode.UNPROCESSABLE, ErrorCode.SERVER_ERROR):
+                raise
+        finally:
+            client.close()
+    return key_rejected or candidates[0]
+
+
 @dataclass
 class ProbeResult:
     user_id: int
@@ -63,8 +119,8 @@ def probe_server(client: RedmineClient, sample_issues: int = 5) -> ProbeResult:
     try:
         user = client.current_user()
     except RedmineError as e:
-        # /users/current.json で 403/404 なら、REST APIが無効の可能性が高い
-        if e.code in (ErrorCode.FORBIDDEN, ErrorCode.NOT_FOUND):
+        # /users/current.json で 403/404 や、JSONでない応答なら、URLの誤りか、REST APIが無効の可能性が高い
+        if e.code in (ErrorCode.FORBIDDEN, ErrorCode.NOT_FOUND, ErrorCode.INVALID_RESPONSE):
             raise RedmineError(ErrorCode.REST_DISABLED, e.status, e.detail) from e
         raise
     name = " ".join(p for p in (user.get("lastname"), user.get("firstname")) if p) or user.get("login", "")

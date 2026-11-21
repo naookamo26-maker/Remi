@@ -1479,3 +1479,42 @@ def test_narrow_list_pane_does_not_overflow(page, remi, fake):
         tops.add(round(b["y"]))
     assert len(tops) == 1
     assert not page.errors, page.errors
+
+
+def test_server_dialog_finds_the_top_url_from_a_project_url(page, remi, fake):
+    """プロジェクトのURLを入れても、Redmine のトップのアドレスを探して、URLの欄を直す。結果は「接続できました。」だけ。"""
+    seed(fake)
+    fake.prefix = "/redmine"
+    page.goto(remi.server.start_url)
+    page.get_by_role("button", name="Redmineサーバーを登録").click()
+    dialog = page.get_by_role("dialog", name="サーバーの登録")
+    dialog.get_by_label("URL", exact=True).fill(f"{fake.base_url}/redmine/projects/1/issues?set_filter=1")
+    dialog.get_by_label("APIアクセスキー").fill(API_KEY)
+    dialog.get_by_role("button", name="接続テスト").click()
+    status = dialog.get_by_role("status")
+    playwright_api.expect(status).to_have_text("接続できました。")
+    playwright_api.expect(dialog.get_by_label("URL", exact=True)).to_have_value(f"{fake.base_url}/redmine")
+    dialog.get_by_label("表示名").fill("社内Redmine")
+    dialog.get_by_role("button", name="登録").click()  # 直したURLのまま、テスト済みとして登録できる
+    playwright_api.expect(dialog).to_be_hidden()
+    assert remi.ctx.servers.list()[0].url == f"{fake.base_url}/redmine"
+    assert not page.errors, page.errors
+
+
+def test_server_dialog_failure_shows_two_short_lines(page, remi, fake):
+    """失敗したときは、「接続できませんでした。」と、確認すること(URLとREST APIの可能性)の2行だけ。管理者への依頼は出さない。"""
+    seed(fake)
+    fake.rest_enabled = False
+    page.goto(remi.server.start_url)
+    page.get_by_role("button", name="Redmineサーバーを登録").click()
+    dialog = page.get_by_role("dialog", name="サーバーの登録")
+    dialog.get_by_label("URL", exact=True).fill(f"{fake.base_url}/projects/1")
+    dialog.get_by_label("APIアクセスキー").fill(API_KEY)
+    dialog.get_by_role("button", name="接続テスト").click()
+    status = dialog.get_by_role("status")
+    playwright_api.expect(status).to_contain_text("接続できませんでした。")
+    playwright_api.expect(status).to_contain_text("URLが正しいか確認してください。RedmineのREST APIが無効になっている可能性もあります。")
+    assert "管理者" not in status.inner_text()
+    playwright_api.expect(dialog.get_by_label("URL", exact=True)).to_have_value(f"{fake.base_url}/projects/1")  # 直さない
+    playwright_api.expect(dialog.get_by_role("button", name="登録")).to_be_disabled()
+    assert not page.errors, page.errors

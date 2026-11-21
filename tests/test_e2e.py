@@ -1567,8 +1567,9 @@ def test_mark_unread_is_disabled_when_it_cannot_be_done(page, remi, fake):
 def test_tree_menu_opens_redmine_like_other_menus(page, remi, fake):
     _open_app(page, remi, fake)
     page.locator(".tree .node", has_text="受注管理").first.click(button="right")
-    assert page.get_by_role("menuitem", name="Remiで開く").count() == 1
-    assert page.get_by_role("menuitem", name="外部ブラウザで開く").count() == 1
+    # メニューは、プロジェクトのURLを問い合わせてから開く
+    playwright_api.expect(page.get_by_role("menuitem", name="Remiで開く")).to_have_count(1)
+    playwright_api.expect(page.get_by_role("menuitem", name="外部ブラウザで開く")).to_have_count(1)
 
 
 def test_changing_server_address_requires_the_key(page, remi, fake):

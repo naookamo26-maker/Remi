@@ -331,7 +331,7 @@ def test_redmine_tabs(page, remi, fake, monkeypatch):
     conv = page.locator(".pane-conv")
     # タブがないときは、タブの列を出さない(これまでと同じ画面)
     playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden()
-    conv.get_by_role("button", name="Redmineで開く").click()
+    conv.get_by_role("button", name="Remiで開く").click()
     tabs = page.locator(".apptabs .atab")
     playwright_api.expect(tabs).to_have_count(2, timeout=10000)
     playwright_api.expect(tabs.nth(0)).to_have_text("Remi")
@@ -348,7 +348,7 @@ def test_redmine_tabs(page, remi, fake, monkeypatch):
     playwright_api.expect(page.locator(".layout")).to_be_visible()
     playwright_api.expect(page.locator(".tab-tools")).to_be_hidden()
     # 同じ操作で、もう1つ開ける。Ctrl+W で、選んでいるタブを閉じる
-    conv.get_by_role("button", name="Redmineで開く").click()
+    conv.get_by_role("button", name="Remiで開く").click()
     playwright_api.expect(tabs).to_have_count(3, timeout=10000)
     page.keyboard.press("Control+w")
     playwright_api.expect(tabs).to_have_count(2, timeout=10000)
@@ -358,7 +358,7 @@ def test_redmine_tabs(page, remi, fake, monkeypatch):
     assert window.detached == [f"{fake.base_url}/issues/10"] and opened == []
     playwright_api.expect(page.locator(".layout")).to_be_visible()
     # ×で閉じる
-    conv.get_by_role("button", name="Redmineで開く").click()
+    conv.get_by_role("button", name="Remiで開く").click()
     playwright_api.expect(tabs).to_have_count(2, timeout=10000)
     page.get_by_role("button", name="閉じる").click()
     playwright_api.expect(page.locator(".tabs-chrome")).to_be_hidden(timeout=10000)
@@ -462,7 +462,7 @@ def test_open_redmine_menu(page, remi, fake, monkeypatch):
     page.goto(remi.server.start_url)
     page.locator(".issue", has_text="CSVが文字化けする").click()
     conv = page.locator(".pane-conv")
-    conv.get_by_role("button", name="Redmineで開く").click()
+    conv.get_by_role("button", name="Remiで開く").click()
     for _ in range(50):
         if opened:
             break
@@ -952,3 +952,115 @@ def test_edit_delete_note_attachment_and_uri_link(page, remi, fake, monkeypatch)
     playwright_api.expect(conv.get_by_role("button", name="ファイルの操作")).to_have_count(0, timeout=15000)
     # 削除した添付の画像は、削除と同時に描き直されると、一瞬だけ読み込みに失敗することがある(次の描き直しで消える)
     assert not [e for e in page.errors if "/attachments/1/77" not in e], page.errors
+
+
+# --- 全体の確認(レビュー)で決めた使い勝手の改善 ---------------------------------------------
+def _open_app(page, remi, fake):
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+
+
+def test_list_order_stays_while_reading_with_arrow_keys(page, remi, fake):
+    """↓で未読を順に読んでも、既読になったチケットが下へ移って、次の未読を飛ばすことがない。"""
+    seed(fake)
+    fake.add_issue(12, 2, "三つ目", watchers={ME})
+    fake.add_journal(11, 7, "二つ目の新着")
+    fake.add_journal(12, 7, "三つ目の新着")
+    add_server(remi, fake)
+    end = time.monotonic() + 20
+    while time.monotonic() < end and not remi.ctx.issues.journals_synced(1, 12):
+        time.sleep(0.1)
+    for i in (10, 11, 12):
+        remi.ctx.issues.mark_unread(1, i)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue.unread")
+    unread = [li.get_attribute("data-issue") for li in page.locator(".issue-list li.issue.unread").all()]
+    assert len(unread) == 3
+    page.locator(".issue-list li.issue").first.click()
+    page.locator(".issue-list").focus()
+    opened = [page.evaluate("() => window.remi.current.issueId")]
+    for _ in range(2):
+        page.keyboard.press("ArrowDown")
+        page.wait_for_function("(prev) => window.remi.current.issueId !== prev", arg=opened[-1])
+        page.wait_for_timeout(700)  # 既読になって、一覧が更新されるのを待つ
+        opened.append(page.evaluate("() => window.remi.current.issueId"))
+    assert sorted(map(str, opened)) == sorted(unread)  # 3件とも、飛ばさずに開けた
+    page.evaluate("() => window.remi.closeIssue()")  # 会話を閉じたら、既読になったものが下へ移る
+    assert page.locator(".issue-list li.issue.unread").count() == 0
+
+
+def test_new_messages_button_when_scrolled_up(page, remi, fake):
+    seed(fake)
+    for n in range(30):
+        fake.add_journal(10, 7, f"長い会話のコメント{n}\n\n" + "行\n" * 6)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue-list li.issue", has_text="#10").click()
+    page.wait_for_selector(".timeline .msg")
+    page.wait_for_timeout(800)
+    page.evaluate("document.querySelector('.timeline').scrollTop = 0")
+    page.wait_for_timeout(200)
+    fake.add_journal(10, 7, "上を読んでいる間の新着")
+    fake.issues[10]["updated_on"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 5))
+    remi.sync.sync_now()
+    btn = page.locator(".timeline .new-messages")
+    btn.wait_for(timeout=15000)
+    assert "新着 1 件" in btn.inner_text()
+    assert remi.ctx.issues.unread_count(1, 10) == 1  # 最下部まで見るまでは、既読にしない
+    btn.click()
+    page.wait_for_function("() => !document.querySelector('.timeline .new-messages')")
+    time.sleep(0.8)
+    assert remi.ctx.issues.unread_count(1, 10) == 0
+
+
+def test_dialogs_keep_input_and_escape_closes_only_the_top_one(page, remi, fake):
+    _open_app(page, remi, fake)
+    page.evaluate("window.remi.openSettings()")
+    page.evaluate("window.remi.openServerDialog()")
+    page.locator(".dialog input[type=url]").fill("https://x.example.com")
+    page.mouse.click(5, 400)  # 外側をクリックしても、入力の途中のダイアログは閉じない
+    assert page.locator(".backdrop").count() == 2
+    page.keyboard.press("Escape")  # Escは手前の1つだけ
+    assert page.locator(".backdrop").count() == 1
+    page.keyboard.press("Escape")
+    assert page.locator(".backdrop").count() == 0
+
+
+def test_sync_button_spins_and_second_press_is_refused(page, remi, fake):
+    _open_app(page, remi, fake)
+    fake.delay = 0.6
+    page.keyboard.press("F5")
+    page.wait_for_selector(".tree-header .icon-only .spin")
+    page.keyboard.press("F5")
+    page.wait_for_selector(".toast:has-text('同期中です')")
+    page.wait_for_function("() => !document.querySelector('.tree-header .icon-only .spin')", timeout=20000)
+
+
+def test_row_more_button_and_menu_names(page, remi, fake):
+    _open_app(page, remi, fake)
+    row = page.locator(".issue-list li.issue").first
+    row.hover()
+    row.get_by_role("button", name="操作").click()
+    assert page.get_by_role("menuitem", name="Remiで開く").count() == 1
+    assert page.get_by_role("menuitem", name="外部ブラウザで開く").count() == 1
+    page.keyboard.press("Escape")
+    remi.ctx.settings.set("redmine_open_in", "browser")
+    page.reload()
+    page.wait_for_selector(".issue-list li.issue")
+    page.locator(".issue-list li.issue").first.click(button="right")
+    assert page.get_by_role("menuitem", name="Remiで開く").count() == 0  # 設定が外部ブラウザなら、1つだけ
+    assert page.get_by_role("menuitem", name="外部ブラウザで開く").count() == 1
+
+
+def test_assignee_shows_my_name_not_the_action(page, remi, fake):
+    seed(fake)
+    fake.add_issue(12, 2, "自分が担当", assigned_to=ME)
+    fake.members[2] = [ME, 7, 8]
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue-list li.issue", has_text="#12").click()
+    page.wait_for_selector(".conv-header select:not([disabled])")
+    shown = page.locator(".conv-header select").nth(1).evaluate("e => e.selectedOptions[0].textContent")
+    assert shown == "岡本 ナオ"

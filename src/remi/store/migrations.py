@@ -251,6 +251,13 @@ ALTER TABLE servers ADD COLUMN watch_versions INTEGER NOT NULL DEFAULT 0;
 DELETE FROM settings WHERE key = 'closed_retention_days'
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7, V8]
+# V9: 監視対象外になった時刻。関係が外れた未完了のチケットのキャッシュを、この時刻から一定期間(10日)経ってから削除する
+# (更新日時から数えると、古いチケットは外れた直後に消えてしまうため)。すでに監視対象外のものは、更新した時点から数える
+V9 = """
+ALTER TABLE issues ADD COLUMN unmonitored_at TEXT;
+UPDATE issues SET unmonitored_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE monitored = 0
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7, V8, V9]
 
 SCHEMA_VERSION = len(MIGRATIONS)

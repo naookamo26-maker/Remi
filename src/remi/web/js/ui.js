@@ -67,27 +67,35 @@ addEventListener("keydown", (e) => {
 });
 addEventListener("blur", closeMenu);
 
-// モーダルダイアログ。close() で閉じる。
-export function modal({ title, body, footer = [], onClose = null, width = null }) {
+// 開いているモーダルダイアログ(重なったときは、いちばん手前のものだけがEscで閉じる)
+const modals = [];
+
+// モーダルダイアログ。close() で閉じる。closeOnBackdrop が false なら、外側をクリックしても閉じない
+// (入力の途中で、うっかり消さないように。Escと閉じるボタンでは閉じる)
+export function modal({ title, body, footer = [], onClose = null, width = null, closeOnBackdrop = true }) {
   const previous = document.activeElement;
+  const token = {};
   const close = () => {
     backdrop.remove();
     removeEventListener("keydown", onKey, true);
+    const i = modals.indexOf(token);
+    if (i >= 0) modals.splice(i, 1);
     onClose?.();
     previous?.focus?.();
   };
   const onKey = (e) => {
-    if (e.key === "Escape" && !openMenu) {
+    if (e.key === "Escape" && !openMenu && modals.at(-1) === token) {
       e.stopPropagation();
       close();
     }
   };
+  modals.push(token);
   const dialog = h("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title, style: width ? { width } : null },
     h("header", {}, h("h2", {}, title),
       h("button", { type: "button", class: "btn icon-only", "aria-label": t("common.close"), onClick: () => close() }, icon("close"))),
     body,
     footer.length ? h("footer", {}, footer) : null);
-  const backdrop = h("div", { class: "backdrop", onMousedown: (e) => { if (e.target === backdrop) close(); } }, dialog);
+  const backdrop = h("div", { class: "backdrop", onMousedown: (e) => { if (closeOnBackdrop && e.target === backdrop) close(); } }, dialog);
   document.body.append(backdrop);
   addEventListener("keydown", onKey, true);
   setTimeout(() => dialog.querySelector("input, select, textarea, button.primary, button")?.focus(), 0);

@@ -327,6 +327,22 @@ class ServerSync:
             self._unconfirmed.pop(issue_id, None)  # 確認できた: 次からは updated_on だけで判定する
         return result
 
+    def issue_unavailable(self, issue_id: int, err: RedmineError) -> SyncResult:
+        """個別のチケットを取得したら 404(削除された)・403(見えなくなった)だった。そのチケットだけの問題として扱い、
+        サーバー全体のエラーにはしない(同期を止めない)。削除されたものはキャッシュも消し、見えなくなったものは監視対象外にする。"""
+        result = SyncResult()
+        if err.code == ErrorCode.NOT_FOUND:
+            self.issues.delete_issues(self.server_id, [issue_id])
+            result.deleted_issue_ids.add(issue_id)
+        else:
+            self.issues.set_monitored(self.server_id, [issue_id], False)
+            result.unmonitored_issue_ids.add(issue_id)
+        return result
+
+    def purge_stale(self) -> int:
+        """関係が外れて十分経った未完了のチケットのキャッシュを削除する(IssueStore.purge_stale)。"""
+        return self.issues.purge_stale(server_id=self.server_id)
+
     def pending_journal_issue_ids(self, limit: int = 20) -> list[int]:
         return self.issues.issues_needing_journals(self.server_id, limit)
 

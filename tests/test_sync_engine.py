@@ -168,6 +168,8 @@ def test_purge_stale_keeps_closed_issues(setup, fake):
     fake.add_issue(2, 2, "古い未完了", updated_on=ts(60 * 24 * 200))
     sync.sync_changes()
     issues.set_monitored(sid, [2], False)  # 関係が外れた古い未完了のチケット
+    assert issues.purge_stale() == 0  # 外れてから10日たつまでは残す(更新日時が古くても、すぐには消えない)
+    issues.db.query("UPDATE issues SET unmonitored_at = '2000-01-01T00:00:00Z'")  # 10日以上前に外れた
     assert issues.purge_stale() == 1
     assert issues.get(sid, 1) is not None
     assert issues.get(sid, 2) is None

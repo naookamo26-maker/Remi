@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from remi.store.db import Database
@@ -23,6 +24,10 @@ _RELATION_SQL = {
     "watching": f"(i.relation_flags & {REL_WATCHING})",
     "authored": f"(i.relation_flags & {REL_AUTHORED})",
 }
+
+
+# 関係が外れた未完了のチケットのキャッシュを残す日数(監視対象外になってから)
+PURGE_DAYS = 10
 
 
 # 「表示するチケット」の既定。「自分が作成」は含めない(含めたプロジェクトでは、作成したチケットも取得する。通信が増えるため)
@@ -233,8 +238,8 @@ class IssueStore:
             c.execute(
                 """INSERT INTO issues(server_id, issue_id, project_id, tracker_id, subject, description,
                        status_id, priority_id, assigned_to_id, assigned_to_name, author_id, author_name,
-                       created_on, updated_on, closed_on, relation_flags, monitored)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       created_on, updated_on, closed_on, relation_flags, monitored, unmonitored_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(server_id, issue_id) DO UPDATE SET
                        project_id=excluded.project_id, tracker_id=excluded.tracker_id,
                        subject=excluded.subject, description=excluded.description,
@@ -243,14 +248,16 @@ class IssueStore:
                        author_id=excluded.author_id, author_name=excluded.author_name,
                        created_on=excluded.created_on, updated_on=excluded.updated_on,
                        closed_on=excluded.closed_on, relation_flags=excluded.relation_flags,
-                       monitored=excluded.monitored""",
+                       monitored=excluded.monitored,
+                       unmonitored_at=CASE WHEN excluded.monitored = 1 THEN NULL
+                                           ELSE COALESCE(issues.unmonitored_at, excluded.unmonitored_at) END""",
                 (
                     server_id, int(data["id"]), int(data["project"]["id"]),
                     (data.get("tracker") or {}).get("id"), data.get("subject", ""), data.get("description"),
                     (data.get("status") or {}).get("id"), (data.get("priority") or {}).get("id"),
                     assigned.get("id"), assigned.get("name"), author.get("id"), author.get("name"),
                     data.get("created_on"), data.get("updated_on"), data.get("closed_on"),
-                    relation_flags, int(monitored),
+                    relation_flags, int(monitored), None if monitored else utcnow(),
                 ),
             )
 
@@ -275,8 +282,11 @@ class IssueStore:
 
     def set_monitored(self, server_id: int, issue_ids: list[int], monitored: bool) -> None:
         with self.db.tx() as c:
-            c.executemany("UPDATE issues SET monitored = ? WHERE server_id = ? AND issue_id = ?",
-                          [(int(monitored), server_id, i) for i in issue_ids])
+            # 監視対象外になった時刻を覚える(キャッシュの削除の猶予に使う)。すでに外れているものは、時刻を変えない
+            c.executemany("UPDATE issues SET monitored = ?, "
+                          "unmonitored_at = CASE WHEN ? THEN NULL ELSE COALESCE(unmonitored_at, ?) END "
+                          "WHERE server_id = ? AND issue_id = ?",
+                          [(int(monitored), int(monitored), utcnow(), server_id, i) for i in issue_ids])
 
     def set_relation_flags(self, server_id: int, issue_id: int, flags: int) -> None:
         with self.db.tx() as c:
@@ -296,27 +306,40 @@ class IssueStore:
         return int(r[0]), int(r[1])
 
     def delete_issues(self, server_id: int, issue_ids: list[int]) -> None:
+        """チケットのキャッシュを消す。キャッシュした画像のファイルも消す(消さないと、どこからも数えられず残り続ける)。"""
+        paths: list[str] = []
         with self.db.tx() as c:
             for iid in issue_ids:
+                paths += [r[0] for r in c.execute(
+                    "SELECT local_path FROM attachments WHERE server_id = ? AND issue_id = ? "
+                    "AND local_path IS NOT NULL", (server_id, iid))]
                 for t in ("issues", "journals", "attachments", "read_state", "drafts"):
                     c.execute(f"DELETE FROM {t} WHERE server_id = ? AND issue_id = ?", (server_id, iid))
+        for path in paths:
+            Path(path).unlink(missing_ok=True)
 
     def mark_opened(self, server_id: int, issue_id: int) -> None:
         with self.db.tx() as c:
             c.execute("UPDATE issues SET last_opened_at = ? WHERE server_id = ? AND issue_id = ?",
                       (utcnow(), server_id, issue_id))
 
-    def purge_stale(self, days: int = 90) -> int:
-        """監視対象外で、長く開かれていないチケットのキャッシュを削除する。クローズ済みは残す(過去のチケットを見返せるように)。"""
+    def purge_stale(self, days: int = PURGE_DAYS, server_id: int | None = None) -> int:
+        """関係が外れた(監視対象外になって days 日経った)未完了のチケットのキャッシュを削除する。
+
+        残すもの: クローズ済み(過去のチケットを見返せるように)、ウォッチしているバージョンに含まれるもの
+        (バージョンの一覧に出す)、下書きがあるもの、最近開いたもの。戻ってきたときは、同期が取得し直す。
+        """
         rows = self.db.query(
-            "SELECT server_id, issue_id FROM issues i WHERE monitored = 0 AND "
-            "COALESCE(last_opened_at, updated_on, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) "
-            # ウォッチしているバージョンに含まれるチケットは残す(バージョンの一覧に出す)
+            "SELECT server_id, issue_id FROM issues i WHERE monitored = 0 AND unmonitored_at IS NOT NULL "
+            "AND unmonitored_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) "
+            "AND COALESCE(last_opened_at, '') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) "
+            "AND (? IS NULL OR server_id = ?) "
             "AND NOT EXISTS (SELECT 1 FROM version_issues v WHERE v.server_id = i.server_id "
             "AND v.issue_id = i.issue_id) "
+            "AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.server_id = i.server_id AND d.issue_id = i.issue_id) "
             "AND NOT EXISTS (SELECT 1 FROM masters m WHERE m.server_id = i.server_id AND m.kind = 'status' "
             "AND m.id = i.status_id AND json_extract(m.extra_json, '$.is_closed'))",
-            (f"-{int(days)} days",),
+            (f"-{int(days)} days", f"-{int(days)} days", server_id, server_id),
         )
         by_server: dict[int, list[int]] = {}
         for r in rows:

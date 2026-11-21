@@ -21,6 +21,8 @@ export class Tree {
     this.data = null;
     /** チケットの取得に失敗したバージョン(「取得中」の表示を止める) */
     this.failedVersions = new Set();
+    // 再試行までの目安(「約N分後」)を、時間がたったら描き直す
+    setInterval(() => { if (this.data?.servers.some((s) => s.error && s.retryAt)) this.render(); }, 30000);
     this.el = h("ul", { class: "tree", role: "tree", "aria-label": t("tree.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.status = h("div", { class: "sync-status", "aria-live": "polite" });
@@ -32,8 +34,8 @@ export class Tree {
         textButton("gear", t("tree.settings"), () => app.openSettings()),
         textButton("plus", t("tree.addServer"), () => app.openServerDialog()),
         h("span", { class: "spacer" }),
-        h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"), "aria-label": t("tree.syncNow"),
-          onClick: () => app.syncNow() }, icon("sync"))),
+        this.syncButton = h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"),
+          "aria-label": t("tree.syncNow"), onClick: () => app.syncNow() }, icon("sync"))),
       this.el,
       h("div", { class: "tree-footer" }, this.status));
   }
@@ -181,13 +183,24 @@ export class Tree {
       });
       this.el.append(server);
       if (s.error) {
-        const msg = t(`errors.${s.error}`);
-        server.querySelector(":scope > .node").after(h("div", { class: "node-error" }, t("tree.cannotSync"), " ", msg));
+        // 原因と、次に再試行する目安。キーの誤り・権限がないときだけ、サーバー設定を開くボタンを出す
+        const wait = s.retryAt ? Math.round((s.retryAt - Date.now()) / 60000) : null;
+        const retry = wait === null ? "" : wait >= 1 ? t("tree.retryIn", { count: wait, minutes: wait }) : t("tree.retrySoon");
+        const fix = ["unauthorized", "forbidden"].includes(s.error)
+          ? h("div", {}, h("button", { type: "button", class: "btn", onClick: () => this.openServerSettings(s.serverId) },
+            t("tree.openServerSettings"))) : null;
+        server.querySelector(":scope > .node").after(
+          h("div", { class: "node-error" }, t("tree.cannotSync"), " ", t(`errors.${s.error}`), retry ? h("div", {}, retry) : null, fix));
       }
     }
     if (!data.servers.length) {
       this.el.append(h("li", { class: "empty" }, t("tree.noServers")));
     }
+    // 同期ボタン: 「今すぐ同期」の最中は、回転する印にする
+    const syncing = data.servers.some((s) => s.syncing);
+    this.syncButton.replaceChildren(syncing ? h("span", { class: "spin", "aria-hidden": "true" }) : icon("sync"));
+    this.syncButton.title = syncing ? t("tree.syncRunning") : t("tree.syncNow");
+    this.syncButton.setAttribute("aria-busy", String(syncing));
     // 下の状態欄: 取得している最中は回転する印と内容を、ふだんは最後に同期した時刻を出す
     const loading = data.servers.map((s) => s.loading).find(Boolean);
     const times = data.servers.map((s) => s.lastSyncedAt).filter(Boolean).sort();
@@ -251,15 +264,19 @@ export class Tree {
   serverSettingsButton(server) {
     return h("button", { type: "button", class: "node-tool node-gear", title: t("tree.serverSettingsShort"),
       "aria-label": t("tree.serverSettings", { name: server.name }),
-      onClick: async (e) => {
+      onClick: (e) => {
         e.stopPropagation();
-        try {
-          const sv = (await call("listServers")).find((x) => x.serverId === server.serverId);
-          if (sv) this.app.openServerDialog(sv);
-        } catch (err) {
-          toast(t(`errors.${err.code || "connection_failed"}`));
-        }
+        this.openServerSettings(server.serverId);
       } }, icon("gear"));
+  }
+
+  async openServerSettings(serverId) {
+    try {
+      const sv = (await call("listServers")).find((x) => x.serverId === serverId);
+      if (sv) this.app.openServerDialog(sv);
+    } catch (err) {
+      toast(t(`errors.${err.code || "connection_failed"}`));
+    }
   }
 
   // プロジェクトの横の歯車ボタン: 通知・マイルストーンの表示の設定を開く
@@ -380,10 +397,7 @@ export class Tree {
     if (sel.kind === "version") {
       const server = this.data.servers.find((x) => x.serverId === sel.serverId);
       const url = `${server?.url}/versions/${sel.versionId}`;
-      contextMenu(e.clientX, e.clientY, [
-        { label: t("menu.openRedmine"), onClick: () => this.app.openRedmine(url) },
-        { label: t("menu.openInBrowser"), onClick: () => this.app.openRedmine(url, { external: true }) },
-      ]);
+      contextMenu(e.clientX, e.clientY, this.app.openMenuItems(() => url));
       return;
     }
     const items = [{ label: t("menu.markAllRead"), onClick: () => call("markAllRead", { serverId: sel.serverId ?? null, projectId: sel.projectId ?? null }) }];

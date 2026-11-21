@@ -19,8 +19,10 @@
  * @property {"ok"|"error"|"unknown"} status
  * @property {string|null} error           エラーコード(errors.* で翻訳する)
  * @property {string|null} lastSyncedAt    ISO 8601
+ * @property {number|null} retryAt         次に再試行する目安の時刻(ミリ秒)。エラーで待っているときだけ
  * @property {number} unread
  * @property {number} count
+ * @property {boolean} syncing            「今すぐ同期」の最中か(同期ボタンの回転表示に使う)
  * @property {boolean} showAllProjects    チケットのないプロジェクトも表示するか(サーバーごと)
  * @property {"initial"|"sync"|"versions"|null} loading  いま取得している内容(最初の取得・今すぐ同期・ロードマップ)。下の状態欄に出す
  * @property {number} hiddenProjects      表示するものがなくて、ふだんは隠れているプロジェクトの数(「すべてのプロジェクトを表示」のリンクに出す)
@@ -179,6 +181,7 @@
  * @property {{id: number, name: string, group: boolean}[]} assignees
  * @property {{id: number, name: string}[]} priorities
  * @property {number|null} me
+ * @property {string|null} meName        自分の名前(担当者の選択肢に、自分の名前を出すのに使う)
  * @property {{status_id: number|null, assigned_to_id: number|null, priority_id: number|null}} current
  * @property {WritePermissions} permissions  書き込めるか(できない操作の入力欄は無効にする)
  */

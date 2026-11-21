@@ -48,6 +48,7 @@ class WebviewWindow:
         self._window_states: dict[int, dict] = {}
         self._next_window_id = 1
         self.minimize_to_tray = False  # トレイが使えるときに True にする
+        self.on_first_hide = None  # ×でトレイへ格納したときの案内(Notifier.tray_hint。初回だけ案内する)
         self._quitting = False
 
     def run(self, url: str) -> None:
@@ -58,7 +59,7 @@ class WebviewWindow:
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
 
         self.window = webview.create_window(
-            f"{APP_NAME} v{__version__}", url, width=1280, height=800, min_size=(900, 560), hidden=self.start_hidden,
+            f"{APP_NAME} v{__version__}", url, width=1280, height=800, min_size=(900, 680), hidden=self.start_hidden,
             background_color="#1E1F22" if self._dark() else "#FFFFFF", text_select=True,
         )
         if self.start_hidden:
@@ -95,6 +96,8 @@ class WebviewWindow:
         if self._quitting or not self.minimize_to_tray:
             return True
         self.hide()
+        if self.on_first_hide is not None:
+            self.on_first_hide()
         return False  # 閉じる操作を取り消して、トレイへ格納する
 
     # --- WindowController ---
@@ -417,6 +420,8 @@ def run(argv: list[str]) -> int:
         tray = Tray(ctx, on_open=window.show, on_sync=sync.sync_now, on_quit=window.quit, notifier=notifier,
                     on_settings=lambda: (window.show(), ctx.bus.publish("openSettings")))
         window.minimize_to_tray = tray.start()
+        if isinstance(window, WebviewWindow):
+            window.on_first_hide = notifier.tray_hint
         # トレイがない環境で非表示のまま起動すると操作できなくなるので、その場合は表示する
         window.start_hidden = args.background and window.minimize_to_tray and not show_requested.is_set()
         if ctx.settings.get("autostart"):

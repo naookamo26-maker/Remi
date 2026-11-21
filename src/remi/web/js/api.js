@@ -24,7 +24,7 @@ export async function call(method, params = {}) {
   try {
     body = await res.json();
   } catch {
-    throw new RpcError(res.ok ? "invalid_response" : `http_${res.status}`);
+    throw new RpcError(res.ok ? "invalid_response" : "internal");
   }
   if (body.error) throw new RpcError(body.error.code, body.error.detail || "");
   return body.result;

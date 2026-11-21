@@ -49,6 +49,8 @@ class EventBus:
         self._callbacks: list[Callable[[Event], None]] = []
         # サーバーごとの、今動いている同期の種類(例: {1: {"versions"}})。画面の「読み込み中」の表示に使う
         self._activity: dict[int, set[str]] = {}
+        # サーバーごとの、次に再試行する時刻(エポック秒)。同期に失敗して待っている間だけ持つ(画面の「約N分後に再試行」に使う)
+        self._retry_at: dict[int, float] = {}
 
     def set_activity(self, server_id: int, name: str, on: bool) -> None:
         """同期の活動(name)が始まった・終わったことを記録し、画面に知らせる。"""
@@ -58,6 +60,17 @@ class EventBus:
                 return
             current.add(name) if on else current.discard(name)
         self.publish("syncState", serverId=server_id)
+
+    def set_retry_at(self, server_id: int, when: float | None) -> None:
+        with self._lock:
+            if when is None:
+                self._retry_at.pop(server_id, None)
+            else:
+                self._retry_at[server_id] = when
+
+    def retry_at(self, server_id: int) -> float | None:
+        with self._lock:
+            return self._retry_at.get(server_id)
 
     def activity(self, server_id: int) -> set[str]:
         with self._lock:

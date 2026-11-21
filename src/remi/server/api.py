@@ -77,6 +77,8 @@ PERMISSIONS_TTL = 600
 # 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
 SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters",
                        "versions", "version_issues", "version_events")
+# サーバーごとに settings に持つ取得状況の記録(キーは「名前:サーバーID」)
+SERVER_SETTING_KEYS = ("versions_seen_projects", "last_metadata", "last_delete_check")
 # 初期化の前に同期スレッドを止めるときの待ち時間。取得の通信は止めればすぐ終わる。
 # 変更を送っている途中なら、その応答(読み取りのタイムアウトは30秒)を待つ
 SYNC_STOP_TIMEOUT = 40.0
@@ -376,6 +378,9 @@ class RemiApi:
         with self.ctx.db.tx() as c:
             for table in SERVER_CACHE_TABLES:
                 c.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
+            # このサーバーの取得状況の記録も捨てる(残すと、取り直したバージョンがすべて「作成」の変化になる)
+            c.execute("DELETE FROM settings WHERE key IN (?, ?, ?)",
+                      tuple(f"{k}:{server_id}" for k in SERVER_SETTING_KEYS))
         shutil.rmtree(attachment_cache_dir(server_id), ignore_errors=True)
         with self._members_lock:
             for key in [k for k in self._members if k[0] == server_id]:
@@ -519,8 +524,8 @@ class RemiApi:
             if version:
                 if closed and not show_closed:
                     continue
-            elif not r.monitored and not closed:
-                continue  # 「クローズ済みも表示」でも、関係が外れた未完了チケットは出さない
+            elif not r.relation_flags or (not r.monitored and not closed):
+                continue  # 自分と関係ない(バージョンで見ているだけの)チケットと、関係が外れた未完了チケットは出さない
             out.append({
                 "serverId": r.server_id, "serverName": n["server"], "issueId": r.issue_id,
                 "projectId": r.project_id, "subject": r.subject,
@@ -968,7 +973,7 @@ class RemiApi:
         priorities = [{"id": k, "name": v} for k, v in self.ctx.masters.names(serverId, "priority").items()]
         return {
             "statuses": statuses, "statusesExact": allowed is not None,
-            "assignees": members, "priorities": priorities, "me": server.my_user_id,
+            "assignees": members, "priorities": priorities, "me": server.my_user_id, "meName": server.my_name,
             "current": {"status_id": row.status_id, "assigned_to_id": row.assigned_to_id,
                         "priority_id": row.priority_id},
             "permissions": permissions,
@@ -1111,13 +1116,15 @@ class RemiApi:
 
     # --- 同期・ウィンドウ ----------------------------------------------------------------
     @rpc
-    def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> None:  # noqa: N802,N803
-        """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。"""
+    def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> dict[str, bool]:  # noqa: N802,N803
+        """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。
+        前の「今すぐ同期」がまだ終わっていなければ受け付けない(started が False)。"""
         if self.sync is None:
-            return
-        self.sync.sync_now()
+            return {"started": False}
+        started = self.sync.sync_now()
         if serverId and issueId:
             self.setOpenIssue(serverId, issueId)  # 開き直すと、同期スレッドがコメントごと取り直す
+        return {"started": started}
 
     @rpc
     def setActive(self, active: bool) -> None:  # noqa: N802

@@ -1101,3 +1101,24 @@ def test_stale_conversation_response_does_not_overwrite_newer(page, remi, fake):
     page.evaluate("() => window.remi.conv.load(1, 10, { markRead: false })")  # あとから始めた読み込み(新しい内容)
     page.wait_for_timeout(2500)  # 遅れた古い応答が届いたあと
     assert page.locator(".conv-header h1").inner_text() == "新しい件名"
+
+
+def test_late_not_found_does_not_wipe_other_view(page, remi, fake):
+    """チケットを開く途中で閉じたあとに「見つからない」が届いても、いまの表示を消さない。"""
+    seed(fake)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    page.evaluate("""() => { const orig = window.fetch.bind(window);
+      window.fetch = async (u, o) => { if (String(u).includes('getConversation')) {
+        await new Promise((r) => setTimeout(r, 1200));
+        return new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 200 }); }
+        return orig(u, o); }; }""")
+    page.locator(".issue-list li.issue", has_text="#10").click()
+    page.wait_for_timeout(100)
+    page.evaluate("""() => { window.remi.closeIssue();
+      window.remi.conv.root.replaceChildren(Object.assign(document.createElement('div'),
+        { id: 'other-view', textContent: '別の画面' })); }""")
+    page.wait_for_timeout(2000)
+    assert page.locator("#other-view").count() == 1
+    assert page.locator(".pane-conv .spin").count() == 0  # 読み込み中の表示のタイマーも、閉じたあとは効かない

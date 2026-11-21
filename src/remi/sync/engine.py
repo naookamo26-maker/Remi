@@ -339,9 +339,10 @@ class ServerSync:
             result.unmonitored_issue_ids.add(issue_id)
         return result
 
-    def purge_stale(self) -> int:
-        """関係が外れて十分経った未完了のチケットのキャッシュを削除する(IssueStore.purge_stale)。"""
-        return self.issues.purge_stale(server_id=self.server_id)
+    def purge_stale(self, keep: set[int] | None = None) -> int:
+        """関係が外れて十分経った未完了のチケットのキャッシュを削除する(IssueStore.purge_stale)。
+        keep のチケット(いま開いているもの)は消さない。"""
+        return self.issues.purge_stale(server_id=self.server_id, keep=keep)
 
     def pending_journal_issue_ids(self, limit: int = 20) -> list[int]:
         return self.issues.issues_needing_journals(self.server_id, limit)

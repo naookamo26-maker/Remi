@@ -53,6 +53,7 @@ export class Conversation {
   }
 
   showEmpty() {
+    this._loadSeq = (this._loadSeq || 0) + 1; // 読み込み中のチケットの応答・表示のタイマーは、もう使わない
     this.data = null;
     this.version = null;
     this._versionToken = null; // 読み込み中のバージョンの表示は描かない
@@ -68,6 +69,7 @@ export class Conversation {
   async showVersion(serverId, versionId, { markRead = true } = {}) {
     const token = Symbol();
     this._versionToken = token;
+    this._loadSeq = (this._loadSeq || 0) + 1; // 読み込み中のチケットの応答・表示のタイマーは、もう使わない
     this.data = null; // 閉じたチケットの内容は使わない(読み込み中にチケットを開いたら、load が token を消す)
     this.composer = null;
     let d;
@@ -85,6 +87,7 @@ export class Conversation {
   }
 
   showWelcome() {
+    this._loadSeq = (this._loadSeq || 0) + 1; // 読み込み中のチケットの応答・表示のタイマーは、もう使わない
     this.data = null;
     this.version = null;
     this.composer = null;
@@ -114,8 +117,7 @@ export class Conversation {
         // 削除された: 開いていた扱いも外す(残すと、存在しないチケットを同期が確かめ続ける)
         const cur = this.app.current;
         if (cur && cur.serverId === serverId && cur.issueId === issueId) this.app.closeIssue();
-        else this.showEmpty();
-        return;
+        return; // すでに閉じた・別の表示に移っているときは、その表示を変えない
       }
       // 別のチケットを開こうとして失敗した: 読み込み中(または前のチケット)のままにせず、原因と再試行の手段を出す。
       // すでにそのチケットを表示している(更新の失敗)ときは、表示を残して呼び出し側の通知に任せる

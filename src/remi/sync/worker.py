@@ -3,15 +3,15 @@
 - サーバーごとに独立したスレッドで動き、1台が落ちても他に影響しない
 - 約1秒ごとに、期限が来た処理だけを実行する
 - 画面などからの依頼はコマンドキューで受け取り、ワーカースレッドで実行する
-- エラーが起きたら指数バックオフする(サーバー別)。サーバーが Retry-After を返したら、それ以上待つ
+- エラーが起きたら指数バックオフする(サーバー別)。サーバーが Retry-After を返したら、それ以上待つ(最大1時間まで)
 - 結果はイベントバスへ流す
 
 多数の利用者が同じRedmineを使っても叩きすぎないよう、次のようにする:
 - 各処理の間隔とバックオフにジッター(ばらつき)を入れ、起動・回復のタイミングがそろわないようにする
-- アプリの起動時は、最初の同期を少しずらす(朝に一斉に起動しても集中しない)
 - プロジェクト一覧・マスタは数時間ごと。前回の取得時刻を保存し、起動のたびには取り直さない
 - 画面が見えていない(トレイに格納・最小化)間は、開いているチケットの確認を止める
-- コメントの遅延取得は数秒に1件にする。「今すぐ同期」には最短間隔を設ける
+- コメントの遅延取得は1秒に1件にする(開いているチケットは、待たずにすぐ取得する)
+- 「今すぐ同期」は、前の「今すぐ同期」が終わるまでは受け付けない(連打しても、同期は重ならない)
 """
 
 from __future__ import annotations
@@ -406,7 +406,8 @@ class ServerWorker(threading.Thread):
             did_network = True
         if now >= self.sched.delete_check:
             self._emit(sync.detect_deleted())
-            sync.purge_stale()  # 関係が外れて10日経った未完了のチケットのキャッシュ(1日1回)
+            # 関係が外れて10日経った未完了のチケットのキャッシュ(1日1回)。いま開いているチケットは消さない
+            sync.purge_stale(keep={self.open_issue} if self.open_issue is not None else set())
             Settings(self.db).set(f"last_delete_check:{self.server_id}", time.time())
             self.sched.delete_check = now + jittered(DELETE_CHECK_INTERVAL)
             did_network = True
@@ -577,9 +578,12 @@ class SyncManager:
                 w.visible = self._visible
                 self._workers[server.server_id] = w
                 w.start()
+            # 開いているチケットは、同じ鍵の中で、いまの値をそのまま伝える(鍵を放してから伝えると、
+            # その間に開かれた別のチケットを、古い値で上書きしてしまう)
             sid, iid = self._open
-        if sid is not None:
-            self.set_open_issue(sid, iid)
+            if sid is not None:
+                for wsid, w in self._workers.items():
+                    w.send("open", iid if wsid == sid else None)
 
     def stop_all(self, timeout: float = 5.0) -> bool:
         """すべての同期スレッドを止める(一時的。あとで restart で動かし直せる)。時間内に止まらないものがあれば False。

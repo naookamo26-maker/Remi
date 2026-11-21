@@ -1356,15 +1356,13 @@ def test_sort_applies_while_an_issue_is_open(page, remi, fake):
     playwright_api.expect(page.locator(".pane-conv h1")).to_be_visible()
     page.get_by_role("button", name="並べ替え", exact=True).click()
     page.get_by_role("menuitemcheckbox", name="チケット番号").click()
-    page.locator(".lbtn-sort").click()
-    page.get_by_role("button", name="昇順 ↑").click()
-    page.wait_for_function("() => document.querySelector('.cchip-sort .t')?.textContent.includes('↑')")
-    page.wait_for_timeout(300)
-    assert page.evaluate(ids) == [10, 11]
+    # 保存が終わって、一覧が変わってから、次のメニューを開く(メニューは、開いたときの設定で作る)
+    playwright_api.expect(page.locator(".cchip-sort")).to_contain_text("並べ替え: チケット番号 ↑")
+    page.wait_for_function(f"() => JSON.stringify(({ids})()) === '[10,11]'")  # チケットを開いていても、すぐ新しい並び
     page.locator(".lbtn-sort").click()
     page.get_by_role("button", name="降順 ↓").click()
-    page.wait_for_timeout(500)
-    assert page.evaluate(ids) == [11, 10]
+    playwright_api.expect(page.locator(".cchip-sort")).to_contain_text("並べ替え: チケット番号 ↓")
+    page.wait_for_function(f"() => JSON.stringify(({ids})()) === '[11,10]'")
     assert not page.errors, page.errors
 
 
@@ -1427,7 +1425,10 @@ def test_closed_only_scope_offers_all_statuses(page, remi, fake):
     fake.add_project(1, "基幹システム")
     fake.add_project(2, "受注管理", parent=1)
     fake.add_issue(12, 2, "終了済みの件", status_id=5, watchers={ME})
-    add_server(remi, fake)
+    from remi.store.servers import Server
+
+    remi.ctx.servers.save(Server(name="社内Redmine", url=fake.base_url), api_key=API_KEY)
+    remi.sync.restart()
     page.goto(remi.server.start_url)
     page.wait_for_selector(".list-header")
     empty = page.locator(".empty")
@@ -1451,6 +1452,7 @@ def test_narrow_list_pane_does_not_overflow(page, remi, fake):
     page.evaluate("() => { document.querySelector('.pane-list').style.width = '360px'; }")
     playwright_api.expect(page.locator(".pane-list.narrow")).to_have_count(0)
     page.evaluate("() => { document.querySelector('.pane-list').style.width = '240px'; }")
+    playwright_api.expect(page.locator(".pane-list.narrow")).to_have_count(1)  # 幅の変化の検知は、少し遅れる
 
     # ヘッダ: タイトルは1行で、件数は数字だけ。ボタンの隙間は詰まる
     title = page.locator(".list-title h2")

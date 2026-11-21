@@ -258,6 +258,22 @@ ALTER TABLE issues ADD COLUMN unmonitored_at TEXT;
 UPDATE issues SET unmonitored_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE monitored = 0
 """
 
-MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7, V8, V9]
+# V10: チケットの期日(一覧の並べ替え・絞り込みに使う)。これまでは保存していなかったので、使い始めている利用者も、
+# 1回だけ初回同期をやり直して取り込む(V7 と同じ。キャッシュは消さない。既読・下書き・取得済みのコメントはそのまま残る)
+# 同じバージョンで、「クローズ済みも表示」(show_closed・version_show_closed)を、ステータスの絞り込み
+# (list_status・version_status)に置き換えた。保存していた値を引き継ぐ(オフ→未完了、オン→すべて)
+V10 = """
+ALTER TABLE issues ADD COLUMN due_date TEXT;
+UPDATE servers SET initial_sync_done = 0;
+INSERT OR IGNORE INTO settings(key, value)
+    SELECT 'list_status', CASE value WHEN 'true' THEN '{"mode":"all","names":[]}' ELSE '{"mode":"open","names":[]}' END
+    FROM settings WHERE key = 'show_closed';
+INSERT OR IGNORE INTO settings(key, value)
+    SELECT 'version_status', CASE value WHEN 'false' THEN '{"mode":"open","names":[]}' ELSE '{"mode":"all","names":[]}' END
+    FROM settings WHERE key = 'version_show_closed';
+DELETE FROM settings WHERE key IN ('show_closed', 'version_show_closed')
+"""
+
+MIGRATIONS: list[str] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10]
 
 SCHEMA_VERSION = len(MIGRATIONS)

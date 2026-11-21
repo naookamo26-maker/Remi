@@ -283,3 +283,39 @@ def test_migrate_v8_adds_server_watch_versions_and_drops_retention(tmp_path):
         assert d.query_one("SELECT 1 FROM settings WHERE key = 'closed_retention_days'") is None
     finally:
         d.close_all()
+
+
+def test_migrate_v10_adds_due_date_and_redoes_initial_sync(tmp_path):
+    """期日の列を足し、使い始めている利用者も1回だけ初回同期をやり直す(キャッシュは消さない)。"""
+    import sqlite3
+
+    from remi.store.migrations import MIGRATIONS
+
+    p = tmp_path / "v9.db"
+    c = sqlite3.connect(p)
+    for sql in MIGRATIONS[:9]:
+        c.executescript(sql)
+    c.execute("PRAGMA user_version = 9")
+    c.execute("INSERT INTO servers(server_id, name, url, initial_sync_done) VALUES(1, 'S', 'http://s', 1)")
+    c.execute("INSERT INTO issues(server_id, issue_id, project_id, subject) VALUES(1, 10, 1, '件名')")
+    # 旧「クローズ済みも表示」(チケット一覧: オン、マイルストーン: オフ)
+    c.execute("INSERT INTO settings(key, value) VALUES('show_closed', 'true')")
+    c.execute("INSERT INTO settings(key, value) VALUES('version_show_closed', 'false')")
+    c.commit()
+    c.close()
+    d = open_database(p)
+    try:
+        from remi.store.servers import ServerStore
+        from remi.store.settings import Settings
+
+        assert d.schema_version() == SCHEMA_VERSION
+        assert ServerStore(d).get(1).initial_sync_done is False
+        row = d.query_one("SELECT subject, due_date FROM issues WHERE issue_id = 10")
+        assert row[0] == "件名" and row[1] is None  # キャッシュは残り、期日は次の同期で入る
+        # 旧設定は、ステータスの絞り込みに引き継ぎ(オン→すべて、オフ→未完了)、旧キーは消える
+        st = Settings(d)
+        assert st.get("list_status") == {"mode": "all", "names": []}
+        assert st.get("version_status") == {"mode": "open", "names": []}
+        assert d.query_one("SELECT COUNT(*) FROM settings WHERE key IN ('show_closed', 'version_show_closed')")[0] == 0
+    finally:
+        d.close_all()

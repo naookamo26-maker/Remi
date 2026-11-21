@@ -114,16 +114,17 @@ class FakeRedmine:
     def add_issue(self, iid: int, project_id: int, subject: str, *, assigned_to: int | None = ME,
                   author: int = 7, watchers: set[int] | None = None, status_id: int = 1,
                   description: str = "", updated_on: str | None = None, version: int | None = None,
-                  custom_fields: list[dict] | None = None) -> dict:
+                  custom_fields: list[dict] | None = None, tracker_id: int = 1, priority_id: int = 2,
+                  due_date: str | None = None) -> dict:
         with self._lock:
             ts = updated_on or now()
             proj = next((p for p in self.projects if p["id"] == project_id), {"id": project_id, "name": "?"})
             issue = {
                 "id": iid,
                 "project": {"id": project_id, "name": proj["name"]},
-                "tracker": {"id": 1, "name": "バグ"},
+                "tracker": next(dict(t) for t in self.trackers if t["id"] == tracker_id),
                 "status": self._status(status_id),
-                "priority": {"id": 2, "name": "通常"},
+                "priority": next(dict(p) for p in self.priorities if p["id"] == priority_id),
                 "author": self._user_ref(author),
                 "subject": subject,
                 "description": description,
@@ -131,6 +132,8 @@ class FakeRedmine:
                 "updated_on": ts,
                 "closed_on": ts if self._status(status_id).get("is_closed") else None,
             }
+            if due_date is not None:
+                issue["due_date"] = due_date
             if assigned_to is not None:
                 issue["assigned_to"] = self._user_ref(assigned_to)
             if version is not None:

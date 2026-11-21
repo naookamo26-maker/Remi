@@ -104,9 +104,8 @@ def test_unrelated_closed_issue_is_not_in_main_list(db, fake, client):
     sync.sync_changes()
     sync.sync_versions()
     api = RemiApi(ctx)
-    api.setSetting("show_closed", True)
     api.setProjectSetting(sid, 1, "visible_relations", ["assigned", "group", "watching", "authored"])
-    assert [i["issueId"] for i in api.listIssues()["issues"]] == [1]
+    assert [i["issueId"] for i in api.listIssues(statusMode="all")["issues"]] == [1]
     # バージョンで開けば、無関係のものも出る
     assert {i["issueId"] for i in api.listIssues(serverId=sid, versionId=10)["issues"]} == {2}
 

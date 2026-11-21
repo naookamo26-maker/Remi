@@ -17,9 +17,9 @@ def refresh_projects(client: RedmineClient, db: Database, server_id: int) -> int
 
 def refresh_masters(client: RedmineClient, db: Database, server_id: int) -> None:
     ms = MasterStore(db)
-    ms.replace(server_id, "status", client.issue_statuses(), ("is_closed",))
-    ms.replace(server_id, "tracker", client.trackers())
-    ms.replace(server_id, "priority", client.issue_priorities(), ("is_default",))
+    ms.replace(server_id, "status", client.issue_statuses(), ("is_closed",), with_position=True)
+    ms.replace(server_id, "tracker", client.trackers(), with_position=True)
+    ms.replace(server_id, "priority", client.issue_priorities(), ("is_default",), with_position=True)
     # カスタムフィールドの形式と選択肢(変更履歴の値を名前にするのに使う)。管理者でなければ取得できない
     try:
         defs = client.custom_fields()

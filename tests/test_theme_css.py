@@ -13,6 +13,7 @@ PAIRS = [
     ("on-accent", "accent"), ("link", "window"), ("link", "surface-alt"),
     ("text", "bubble-other"), ("text", "bubble-mine"), ("text", "bubble-private"), ("text", "code-bg"),
     ("mention-fg", "mention-bg"), ("danger", "window"), ("success", "window"), ("warning-fg", "warning-bg"),
+    ("c-filter", "window"), ("c-sort", "window"),
 ]
 
 

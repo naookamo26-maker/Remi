@@ -786,16 +786,13 @@ def test_versions_api_list_tree_and_read(app, fake):
     tree = app.rpc("getTree")["servers"][0]
     assert tree["count"] == 1  # バージョンのチケットは件数に入れない
     assert [i["issueId"] for i in app.rpc("listIssues")["issues"]] == [10]
-    # マイルストーンの「クローズ済みも表示」は、チケット一覧の設定(show_closed)とは別で、既定はオン
-    vids = lambda: sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5)["issues"])  # noqa: E731
+    # マイルストーンのステータスの絞り込みは、既定が「すべて」(チケット一覧は「未完了」)
+    vids = lambda **kw: sorted(i["issueId"] for i in app.rpc("listIssues", serverId=sid, versionId=5, **kw)["issues"])  # noqa: E731
     assert vids() == [20, 21]
-    app.rpc("setSetting", key="version_show_closed", value=False)
-    assert vids() == [20]
-    app.rpc("setSetting", key="show_closed", value=True)  # 一覧の設定は、バージョンには効かない
-    assert vids() == [20]
-    app.rpc("setSetting", key="version_show_closed", value=True)
-    assert vids() == [20, 21]
-    app.rpc("setSetting", key="show_closed", value=False)
+    assert vids(statusMode="open") == [20]
+    assert vids(statusMode="closed") == [21]
+    assert app.rpc("bootstrap")["settings"]["version_status"] == {"mode": "all", "names": []}
+    assert app.rpc("bootstrap")["settings"]["list_status"] == {"mode": "open", "names": []}
     assert app.rpc_error("listIssues", serverId=sid, versionId=999)["code"] == "not_found"
 
     # 変化があれば印が付き、表示したら消える

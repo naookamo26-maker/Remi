@@ -12,8 +12,12 @@ DEFAULTS: dict[str, Any] = {
     "language": "system",  # system / ja / en(設計書 §10)
     "notify_enabled": True,
     "autostart": False,
-    "show_closed": False,
-    "version_show_closed": True,  # マイルストーン(バージョン)を開いたときの「クローズ済みも表示」。一覧とは別
+    # 一覧の検索・絞り込み・並べ替え(設計書 §5.1)。保存して、次に起動したときも使う
+    "list_search": "",
+    "list_status": {"mode": "open", "names": []},  # ステータスの絞り込み: mode は open(未完了)/ closed(クローズ済み)/ all。names を選ぶと、そのステータスだけ
+    "version_status": {"mode": "all", "names": []},  # マイルストーン(バージョン)を開いたときの、ステータスの絞り込み。一覧とは別で、既定はすべて
+    "list_filter": {"trackers": [], "priorities": [], "assignees": [], "due": []},  # 属性の絞り込み(名前で持つ)
+    "list_sort": {"key": "updated", "desc": True},  # 並べ替え: key は updated / number / subject / status / tracker / priority / due
     "unread_first": True,
     "list_density": "standard",  # 一覧の表示密度: standard / compact(設計書 §5.1)
     "allow_external_images": False,

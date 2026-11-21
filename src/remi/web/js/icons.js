@@ -18,6 +18,7 @@ const PATHS = {
   reload: '<path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5"/>',
   warning: '<path d="M12 3 2 20h20z"/><path d="M12 10v5M12 17.5h.01"/>',
   density: '<path d="M4 5h16M4 9.7h16M4 14.3h16M4 19h16"/>',
+  sort: '<path d="M8 4v16M4 16l4 4 4-4M16 20V4M12 8l4-4 4 4"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
 };
 

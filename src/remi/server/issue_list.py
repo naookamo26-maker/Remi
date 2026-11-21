@@ -121,12 +121,17 @@ def sort_items(items: list[dict[str, Any]], cond: Conditions) -> list[dict[str, 
         dated = [i for i in items if i["dueDate"]]
         dated.sort(key=lambda i: i["dueDate"], reverse=cond.desc)
         return dated + [i for i in items if not i["dueDate"]]
+    if key in ("status", "tracker", "priority"):
+        # Redmine での順序を知らないもの(マスターを取得し直す前)は、昇順でも降順でも最後に置く。
+        # 降順を reverse で全体に掛けると、順序を知らないものが先頭に来てしまうので、知っているものだけを並べる
+        known = [i for i in items if i["_pos"][key] != POSITION_UNKNOWN]
+        unknown = [i for i in items if i["_pos"][key] == POSITION_UNKNOWN]
+        known.sort(key=lambda i: (i["_pos"][key], i[key]), reverse=cond.desc)
+        unknown.sort(key=lambda i: i[key])
+        return known + unknown
     getters = {
         "number": lambda i: i["issueId"],
         "subject": lambda i: (i["subject"].casefold(), i["subject"]),
-        "status": lambda i: (i["_pos"]["status"], i["status"]),
-        "tracker": lambda i: (i["_pos"]["tracker"], i["tracker"]),
-        "priority": lambda i: (i["_pos"]["priority"], i["priority"]),
     }
     return sorted(items, key=getters[key], reverse=cond.desc)
 

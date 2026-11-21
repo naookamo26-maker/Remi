@@ -619,15 +619,28 @@ class IssueStore:
             )
 
     def mark_all_read(self, server_id: int, project_ids: set[int] | None = None) -> None:
-        sql = "SELECT issue_id FROM issues WHERE server_id = ? AND monitored = 1"
-        params: list[Any] = [server_id]
+        """監視対象のチケット(project_ids があれば、そのプロジェクトのもの)を、保存済みの最新の journal まで既読にする。
+
+        チケットごとに mark_read を呼ぶと、最新の journal の取得と更新で、チケットの数だけデータベースを使う。
+        ここでは、1回の文(1つのトランザクション)にまとめる。既読位置は戻さない。"""
+        where = "i.server_id = ? AND i.monitored = 1"
+        params: list[Any] = [utcnow(), server_id]
         if project_ids is not None:
             if not project_ids:
                 return
-            sql += f" AND project_id IN ({','.join('?' * len(project_ids))})"
+            where += f" AND i.project_id IN ({','.join('?' * len(project_ids))})"
             params.extend(sorted(project_ids))
-        for r in self.db.query(sql, params):
-            self.mark_read(server_id, r[0])
+        with self.db.tx() as c:
+            c.execute(
+                f"""INSERT INTO read_state(server_id, issue_id, last_read_journal_id, read_at)
+                    SELECT i.server_id, i.issue_id,
+                           COALESCE((SELECT MAX(j.journal_id) FROM journals j
+                                     WHERE j.server_id = i.server_id AND j.issue_id = i.issue_id), 0), ?
+                    FROM issues i WHERE {where}
+                    ON CONFLICT(server_id, issue_id) DO UPDATE SET
+                        last_read_journal_id = MAX(last_read_journal_id, excluded.last_read_journal_id),
+                        read_at = excluded.read_at""",
+                params)
 
     # --- 下書き ---------------------------------------------------------------
     def get_draft(self, server_id: int, issue_id: int) -> tuple[str, bool, str | None]:

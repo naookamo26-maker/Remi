@@ -544,15 +544,17 @@ class RemiApi:
         scope = self.ctx.relation_scope(relation)
         rows = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=True,
                                            unread_only=unreadOnly, search=search, relations=scope)
-        res = self._issue_summaries(rows, cond)
+        res = self._issue_summaries(rows, cond, unread_only=unreadOnly)
         if not res["issues"]:
             # 検索・関係・ステータス・属性を当てる前に、表示できるチケットがあるか(「条件に一致するものがない」の判定)
             every = self.ctx.issues.list_issues(server_ids, project_ids, include_unmonitored=True,
                                                 unread_only=unreadOnly, relations=self.ctx.relation_scope("all"))
-            res["scopeTotal"] = len(self._issue_summaries(every, issue_list.Conditions(status_mode="all"))["issues"])
+            res["scopeTotal"] = len(self._issue_summaries(every, issue_list.Conditions(status_mode="all"),
+                                                          unread_only=unreadOnly)["issues"])
         return res
 
-    def _issue_summaries(self, rows, cond: issue_list.Conditions, version: bool = False) -> dict[str, Any]:
+    def _issue_summaries(self, rows, cond: issue_list.Conditions, version: bool = False,
+                         unread_only: bool = False) -> dict[str, Any]:
         names: dict[int, dict[str, Any]] = {}
         base = []
         today = date.today()
@@ -573,6 +575,11 @@ class RemiApi:
             closed = r.status_id in n["closed"]
             if not version and (not r.relation_flags or (not r.monitored and not closed)):
                 continue  # 自分と関係ない(バージョンで見ているだけの)チケットと、関係が外れた未完了チケットは出さない
+            # クローズ済み(監視対象外)は、未読数の対象外(ツリー・トレイ・「すべて既読にする」と同じ)。
+            # 自分と関係ないチケット(バージョンで見ているもの)も、未読として数えない
+            unread = r.unread if r.relation_flags and r.monitored else 0
+            if unread_only and not unread:
+                continue
             state = issue_list.due_state(r.due_date, closed, today)
             base.append({
                 "serverId": r.server_id, "serverName": n["server"], "issueId": r.issue_id,
@@ -580,9 +587,8 @@ class RemiApi:
                 "status": n["status"].get(r.status_id, ""), "closed": closed,
                 "tracker": n["tracker"].get(r.tracker_id, ""), "priority": n["priority"].get(r.priority_id, ""),
                 "dueDate": r.due_date, "overdue": state == "overdue", "dueState": state,
-                # 自分と関係ないチケット(バージョンで見ているもの)のコメントは未読として数えない
                 "assignee": r.assigned_to_name, "updatedOn": r.updated_on,
-                "unread": r.unread if r.relation_flags else 0,
+                "unread": unread,
                 "relations": _flags(r.relation_flags), "monitored": r.monitored,
                 "lastNoteUser": r.last_note_user, "lastNote": (r.last_note or "")[:120].replace("\n", " "),
                 "_pos": {"status": n["pos"]["status"].get(r.status_id, issue_list.POSITION_UNKNOWN),

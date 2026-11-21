@@ -22,18 +22,36 @@ Event = dict[str, Any]
 class Subscription:
     def __init__(self, maxsize: int = 1000) -> None:
         self.queue: queue.Queue[Event] = queue.Queue(maxsize)
+        # 複数のスレッドが同時に publish しても、あふれたときの「空にして resync だけを残す」を、1つずつ行う
+        self._put_lock = threading.Lock()
+
+    def put(self, event: Event) -> None:
+        """イベントを入れる。いっぱいなら、古いイベントをすべて捨て、全体の再読み込み(resync)だけを残す。
+
+        入れる側(publish するスレッド)は、購読ごとの鍵で1つずつにする。取り出す側は鍵を使わない。
+        鍵の中で入れるのは入れる側だけなので、空にしたあとの resync は必ず入る(通常のイベントと混ざらず、重ならない)。"""
+        with self._put_lock:
+            try:
+                self.queue.put_nowait(event)
+                return
+            except queue.Full:
+                pass
+            while True:
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    break
+            self.queue.put_nowait({"type": "resync"})
 
     def overflow(self) -> None:
-        """あふれたとき: 溜まった古いイベントをすべて捨て、全体の再読み込み(resync)だけを残す。"""
-        while True:
-            try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                break
-        try:
+        """あふれたときの処理だけを行う(古いイベントをすべて捨て、resync だけを残す)。"""
+        with self._put_lock:
+            while True:
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    break
             self.queue.put_nowait({"type": "resync"})
-        except queue.Full:  # 空にした直後に他のスレッドが詰めた。その中身は古いので、もう一度空にする
-            self.overflow()
 
     def get(self, timeout: float | None = None) -> Event | None:
         try:
@@ -97,11 +115,7 @@ class EventBus:
             subs = list(self._subs)
             callbacks = list(self._callbacks)
         for sub in subs:
-            try:
-                sub.queue.put_nowait(event)
-            except queue.Full:
-                # 画面が長く止まっている: 古いイベントを捨て、全体の再読み込みだけを残す
-                sub.overflow()
+            sub.put(event)  # 画面が長く止まってあふれたときは、古いイベントを捨てて、全体の再読み込みだけを残す
         for cb in callbacks:
             try:
                 cb(event)

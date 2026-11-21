@@ -151,3 +151,51 @@ def test_list_settings_are_validated_and_migrated(lst):
     for old in ("show_closed", "version_show_closed"):
         with pytest.raises(RpcError):
             api.setSetting(old, True)
+
+
+@pytest.mark.parametrize("key", ["priority", "tracker", "status"])
+@pytest.mark.parametrize("desc", [False, True])
+def test_sort_keeps_unknown_order_last_in_both_directions(lst, key, desc):
+    """Redmine での順序を知らない項目(マスターを取得し直す前)は、昇順でも降順でも、最後に置く。"""
+    row = {"priority": 3, "tracker": 2, "status": 2}[key]  # 順序を消す項目の ID(下の unknown のチケットが持つ値)
+    with lst.ctx.db.tx() as c:
+        c.execute("UPDATE masters SET extra_json = '{}' WHERE kind = ? AND id = ?", (key, row))
+    res = lst.listIssues(statusMode="all", sort=key, desc=desc)
+    unknown = {"priority": {1, 4}, "tracker": {2, 4}, "status": {2, 5}}[key]
+    tail = ids(res)[-len(unknown):]
+    assert set(tail) == unknown, (key, desc, ids(res))
+
+
+def test_closed_issues_do_not_show_unread(lst):
+    """クローズ済みは未読数の対象外(ツリー・トレイと同じ)。一覧にも未読を出さず、「未読のみ」にも出さない。"""
+    lst.ctx.issues.upsert_journals(1, 4, [{"id": 900, "notes": "終了後のコメント", "user": {"id": 7, "name": "佐藤"},
+                                           "created_on": "2026-01-01T00:00:00Z"}])
+    assert lst.ctx.issues.unread_count(1, 4) == 1  # 既読の位置の上では未読だが
+    closed = [i for i in lst.listIssues(statusMode="all")["issues"] if i["issueId"] == 4][0]
+    assert closed["unread"] == 0  # 一覧には出さない(「すべて既読にする」の対象外なので、消せない未読を見せない)
+    assert 4 not in ids(lst.listIssues(statusMode="all", unreadOnly=True))
+
+
+def test_mark_all_read_in_one_statement(lst):
+    """「すべて既読にする」: 監視対象のチケットだけを、最新のコメントまで既読にする。範囲(プロジェクト)・クローズ済み・既読位置を守る。"""
+    store = lst.ctx.issues
+    note = {"notes": "コメント", "user": {"id": 7, "name": "佐藤"}, "created_on": "2026-01-01T00:00:00Z"}
+    store.upsert_journals(1, 1, [{"id": 101, **note}, {"id": 102, **note}])
+    store.upsert_journals(1, 2, [{"id": 201, **note}])
+    store.upsert_journals(1, 4, [{"id": 401, **note}])  # クローズ済み(監視対象外)
+    assert store.unread_count(1, 1) == 2 and store.unread_count(1, 2) == 1
+    store.mark_read(1, 3, 999)  # 先に進んでいる既読位置は、戻さない
+
+    lst.markAllRead(serverId=1)
+    assert [store.unread_count(1, i) for i in (1, 2)] == [0, 0]
+    assert store.last_read(1, 1) == 102 and store.last_read(1, 2) == 201
+    assert store.last_read(1, 3) == 999
+    assert store.last_read(1, 5) == 0  # コメントのないチケットも、既読の状態になる
+    assert store.unread_count(1, 4) == 1  # クローズ済みは対象外(一覧にも未読を出さない)
+
+    store.upsert_journals(1, 1, [{"id": 103, **note}])
+    # 範囲外のプロジェクトを指定すると、何も変えない
+    lst.markAllRead(serverId=1, projectId=999)
+    assert store.unread_count(1, 1) == 1
+    lst.markAllRead(serverId=1, projectId=1)
+    assert store.unread_count(1, 1) == 0

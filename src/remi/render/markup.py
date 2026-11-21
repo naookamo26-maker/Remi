@@ -15,7 +15,7 @@ import re
 import secrets
 from dataclasses import dataclass, field
 from functools import lru_cache
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import nh3
 import textile
@@ -49,12 +49,18 @@ class RenderContext:
         return f"/attachments/{self.server_id}/{aid}"
 
     def resolve(self, name: str) -> str | None:
-        """ファイル名から画像・添付のURLを引く(送信前の添付を優先)。"""
-        key = name.strip().lower()
-        if key in self.pending:
-            return self.pending[key]
-        aid = self.attachments.get(key)
-        return self.attachment_url(aid) if aid is not None else None
+        """ファイル名から画像・添付のURLを引く(送信前の添付を優先)。
+
+        Markdown の変換は、リンク先のスペースや日本語を %20 などに置き換える(`![](<my image.png>)` →
+        `my%20image.png`)。そのままでは添付のファイル名と一致しないので、元の文字に戻してからも引く。
+        """
+        for key in dict.fromkeys((name.strip().lower(), unquote(name).strip().lower())):
+            if key in self.pending:
+                return self.pending[key]
+            aid = self.attachments.get(key)
+            if aid is not None:
+                return self.attachment_url(aid)
+        return None
 
 
 # --- サニタイズの設定 -----------------------------------------------------------

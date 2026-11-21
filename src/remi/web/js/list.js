@@ -631,7 +631,9 @@ export class IssueList {
   menu(x, y, it) {
     contextMenu(x, y, [
       { label: t("menu.markRead"), disabled: !it.unread, onClick: () => call("markRead", { serverId: it.serverId, issueId: it.issueId }) },
-      { label: t("menu.markUnread"), onClick: () => call("markUnread", { serverId: it.serverId, issueId: it.issueId }) },
+      // 自分以外のコメントがない・未読として数えない(クローズ済みなど)・すでに未読のチケットは、未読に戻せない
+      { label: t("menu.markUnread"), disabled: !it.canMarkUnread,
+        onClick: () => call("markUnread", { serverId: it.serverId, issueId: it.issueId }) },
       { sep: true },
       ...this.app.openMenuItems(null, { open: (external) => this.app.openIssueInBrowser(it.serverId, it.issueId, null, { external }) }),
     ]);

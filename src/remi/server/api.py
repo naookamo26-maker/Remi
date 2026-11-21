@@ -22,7 +22,7 @@ from datetime import date
 from typing import Any, Protocol
 
 from remi import __version__
-from remi.api.client import RedmineClient, interactive, normalize_url
+from remi.api.client import RedmineClient, interactive, normalize_url, same_server
 from remi.api.errors import ErrorCode, RedmineError
 from remi.api.probe import find_redmine_root, probe_server
 from remi.context import AppContext
@@ -81,13 +81,16 @@ MEMBERS_TTL = 600
 PERMISSIONS_TTL = 600
 # サーバーから取得したデータ(認証ユーザーの権限で見えるもの)と、その利用者の状態を持つテーブル。
 # 接続先のURLや認証ユーザーが変わったら捨てる。project_settings は利用者の好みなので残す。
+# 通知したコメントの記録(notified)も、別のサーバーの同じ番号のチケットの新着を通知しなくなるので捨てる。
 SERVER_CACHE_TABLES = ("issues", "journals", "attachments", "read_state", "drafts", "projects", "masters",
-                       "versions", "version_issues", "version_events")
+                       "versions", "version_issues", "version_events", "notified")
 # サーバーごとに settings に持つ取得状況の記録(キーは「名前:サーバーID」)
 SERVER_SETTING_KEYS = ("versions_seen_projects", "last_metadata", "last_delete_check")
 # 初期化の前に同期スレッドを止めるときの待ち時間。取得の通信は止めればすぐ終わる。
 # 変更を送っている途中なら、その応答(読み取りのタイムアウトは30秒)を待つ
 SYNC_STOP_TIMEOUT = 40.0
+# 画面から添付できるファイルの大きさの上限(ローカルサーバーが受け取る上限。src/remi/server/http.py の UPLOAD_MAX と同じ)
+UPLOAD_MAX = 50 * 1024 * 1024
 
 
 def open_with_os(url: str) -> None:
@@ -243,6 +246,19 @@ class RemiApi:
         # server_id → (取得した時刻, カスタムフィールドの定義。管理者でなく取得できなければ None)
         self._custom_fields: dict[int, tuple[float, list[dict[str, Any]] | None]] = {}
         self._tracker_fields: dict[int, tuple[float, dict[int, set[str] | None]]] = {}
+        # 送信の結果((server_id, issue_id) → 結果。送信中は None)。画面がイベント(noteFinished)を受け取り損ねた
+        # (再接続・イベントのあふれ)ときに、getSendResult で問い合わせ直せるようにする
+        self._sends: dict[tuple[int, int], dict[str, Any] | None] = {}
+        self._sends_lock = threading.Lock()
+        ctx.bus.on(self._on_event)
+
+    def _on_event(self, event: dict[str, Any]) -> None:
+        if event.get("type") == "noteFinished":
+            key = (event.get("serverId"), event.get("issueId"))
+            with self._sends_lock:
+                if key in self._sends:
+                    self._sends[key] = {"error": event.get("error"), "detail": event.get("detail") or "",
+                                        "uploadTokens": list(event.get("uploadTokens") or [])}
 
     def methods(self) -> dict[str, Callable]:
         return {name: getattr(self, name) for name in dir(self)
@@ -271,6 +287,8 @@ class RemiApi:
             "tabsSupported": getattr(self.window, "tabs", None) is not None,
             # タブを使えなかった理由(Windows でタブにできなかったとき。設定の画面に出す)
             "tabsError": getattr(self.window, "tabs_error", None),
+            # 添付できるファイルの大きさの上限(バイト。超えるものは、送る前に断る)
+            "uploadMax": UPLOAD_MAX,
         }
 
     # --- 設定 -------------------------------------------------------------------
@@ -310,6 +328,15 @@ class RemiApi:
     def testConnection(self, url: str, apiKey: str = "", proxyMode: str = "system",  # noqa: N802,N803
                        proxyUrl: str | None = None, serverId: int | None = None) -> dict[str, Any]:  # noqa: N803
         """接続テスト。編集時にキーを入力し直さなかった場合は、保存済みのキーを使う。"""
+        if not apiKey and serverId:
+            # 保存済みのキーは、登録したRedmineと同じ接続先にだけ送る(URLの打ち間違いで、別のサーバーへ送らない)
+            existing = self.ctx.servers.get(serverId)
+            try:
+                same = existing is not None and same_server(existing.url, normalize_url(url))
+            except RedmineError as e:
+                raise RpcError(e.code.value) from e
+            if not same:
+                raise RpcError("key_required")
         key = apiKey or (self.ctx.servers.api_key(serverId) if serverId else None) or ""
         if not key:
             raise RpcError("unauthorized")
@@ -344,13 +371,19 @@ class RemiApi:
         except RedmineError as e:
             raise RpcError(e.code.value) from e
         fmt = data.get("textFormat", "common_mark")
-        poll = int(data.get("pollInterval", 180))
+        try:
+            poll = int(data.get("pollInterval", 180))
+        except (TypeError, ValueError) as e:
+            raise RpcError("invalid_input") from e
         proxy_mode = data.get("proxyMode", "system")
         if not name or fmt not in TEXT_FORMATS or poll not in POLL_INTERVALS or proxy_mode not in ("system", "manual"):
             raise RpcError("invalid_input")
         api_key = str(data.get("apiKey") or "").strip() or None
         if existing is None and not api_key:
             raise RpcError("unauthorized")
+        if existing is not None and not api_key and not same_server(existing.url, url):
+            # 接続先を別のサーバーに変えたら、キーも入れ直してもらう(前のサーバーのキーを、新しい接続先へ送らない)
+            raise RpcError("key_required")
         if data.get("userId") is None and (existing is None or api_key):
             # 新しいキーは、接続テストで誰のキーかを確かめてから保存する(ユーザーの変更を見逃さないため)
             raise RpcError("not_tested")
@@ -589,6 +622,8 @@ class RemiApi:
                 "dueDate": r.due_date, "overdue": state == "overdue", "dueState": state,
                 "assignee": r.assigned_to_name, "updatedOn": r.updated_on,
                 "unread": unread,
+                # 「未読に戻す」ができるか: 未読として数えるチケットで、自分以外のコメントがあり、いま未読でない
+                "canMarkUnread": bool(r.relation_flags and r.monitored and r.others_note and not unread),
                 "relations": _flags(r.relation_flags), "monitored": r.monitored,
                 "lastNoteUser": r.last_note_user, "lastNote": (r.last_note or "")[:120].replace("\n", " "),
                 "_pos": {"status": n["pos"]["status"].get(r.status_id, issue_list.POSITION_UNKNOWN),
@@ -753,9 +788,12 @@ class RemiApi:
         self.ctx.bus.publish("dataChanged", serverId=serverId, issueIds=[issueId], source="read")
 
     @rpc
-    def markUnread(self, serverId: int, issueId: int) -> None:  # noqa: N802,N803
-        self.ctx.issues.mark_unread(serverId, issueId)
+    def markUnread(self, serverId: int, issueId: int) -> bool:  # noqa: N802,N803
+        """自分以外の最後のコメントから未読にする。戻せなかった(自分以外のコメントがない)ら False。"""
+        if not self.ctx.issues.mark_unread(serverId, issueId):
+            return False
         self.ctx.bus.publish("dataChanged", serverId=serverId, issueIds=[issueId], source="read")
+        return True
 
     @rpc
     def markAllRead(self, serverId: int | None = None, projectId: int | None = None) -> None:  # noqa: N802,N803
@@ -803,12 +841,29 @@ class RemiApi:
             raise RpcError("unprocessable", "empty")
         if body.strip():
             self.ctx.issues.save_draft(serverId, issueId, body, private)
+        with self._sends_lock:
+            self._sends[(serverId, issueId)] = None  # 送信中(結果は noteFinished で届く)
         if self.sync is None or not self.sync.post_note(serverId, issueId, body if body.strip() else "",
                                                         private, changes, ups):
             if body.strip():
                 self.ctx.issues.save_draft(serverId, issueId, body, private, failed=True, error="connection_failed")
+            with self._sends_lock:
+                self._sends.pop((serverId, issueId), None)
             raise RpcError("connection_failed")
         return {"accepted": True}
+
+    @rpc
+    def getSendResult(self, serverId: int, issueId: int) -> dict[str, Any]:  # noqa: N802,N803
+        """送信の状態。pending: まだ送っている。result: 終わった送信の結果(noteFinished と同じ error・detail・uploadTokens)。
+        画面がイベントを受け取り損ねた(再接続など)ときに、送信中の表示を終わらせるために使う。"""
+        with self._sends_lock:
+            key = (serverId, issueId)
+            if key not in self._sends:
+                return {"pending": False, "result": None}
+            result = self._sends[key]
+            if result is not None:
+                del self._sends[key]  # 受け取ったら、もう要らない
+        return {"pending": result is None, "result": result}
 
     @rpc
     def editNote(self, serverId: int, issueId: int, journalId: int, notes: str,  # noqa: N802,N803

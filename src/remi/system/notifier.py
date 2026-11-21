@@ -172,6 +172,8 @@ class Notifier:
         row = self.ctx.issues.get(server_id, comment["issue_id"])
         if row is not None and not row.relation_flags:
             return False  # 自分と関係ない(バージョンで見ている)チケット
+        if row is not None and not row.monitored:
+            return False  # クローズ済み・関係が外れた(未読として数えない)チケット
         if row is not None and not self.ctx.relation_scope().matches(server_id, row.project_id, row.relation_flags):
             return False
         # 表示中(ウィンドウがアクティブで開いている)のチケットは通知しない

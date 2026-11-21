@@ -30,14 +30,13 @@ from urllib.parse import parse_qs, urlparse
 from remi import user_agent
 from remi.render.markup import highlight_css
 from remi.server import external_image
-from remi.server.api import RemiApi, RpcError
+from remi.server.api import UPLOAD_MAX, RemiApi, RpcError
 
 log = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 COOKIE = "remi_session"
 ATTACHMENT_WAIT = 20.0
-UPLOAD_MAX = 50 * 1024 * 1024  # 実際の上限はRedmineの設定で決まる(超えたらRedmineが拒否する)
 PENDING_KEEP = 50
 PENDING_MAX_TOTAL = 100 * 1024 * 1024  # 送信前の画像(プレビュー用)としてメモリに置く合計の上限
 EXTERNAL_IMAGE_MAX = 10 * 1024 * 1024
@@ -321,10 +320,18 @@ class LocalServer:
             # --- POST(RPC) ---
             def do_POST(self) -> None:  # noqa: N802
                 # 接続を使い回すので、拒否する場合も先に本文を読み切っておく
-                length = int(self.headers.get("Content-Length") or 0)
+                # 上限(UPLOAD_MAX)を超えるもの・長さがおかしいものは読まずに断る。
+                # 実際の上限はRedmineの設定で決まる(超えたらRedmineが拒否する)
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = -1
+                if length < 0:
+                    self.close_connection = True
+                    return self._json(HTTPStatus.BAD_REQUEST, {"error": {"code": "bad_request"}})
                 if length > UPLOAD_MAX:
                     self.close_connection = True
-                    return self._deny(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    return self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": {"code": "too_large"}})
                 raw = self.rfile.read(length) if length else b""
                 if not self._host_ok() or not self._authed():
                     return self._deny()

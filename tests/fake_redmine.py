@@ -382,7 +382,8 @@ class FakeRedmine:
             if path == "/issues.json":
                 items = [i for i in self.issues.values() if self._match(i, query)]
                 sort = query.get("sort", "")
-                items.sort(key=lambda i: i["updated_on"], reverse=sort.endswith(":desc"))
+                field = "id" if sort.split(":")[0] == "id" else "updated_on"
+                items.sort(key=lambda i: i[field], reverse=sort.endswith(":desc"))
                 return 200, self._page(items, query, "issues")
             m = re.match(r"^/journals/(\d+)\.json$", path)
             if m and method == "PUT":

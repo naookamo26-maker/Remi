@@ -292,7 +292,7 @@ class App {
    */
   openLink(href, { serverUrl = "", external = false } = {}) {
     if (!/^https?:\/\//i.test(href)) return this.openUri(href);
-    if (serverUrl && href.startsWith(serverUrl)) return this.openRedmine(href, { external });
+    if (isUnder(href, serverUrl)) return this.openRedmine(href, { external });
     return call("openExternal", { url: href });
   }
 
@@ -419,6 +419,8 @@ class App {
       case "resync":
         this.refreshSoon.flush();
         if (this.current) this.conv.load(this.current.serverId, this.current.issueId, { markRead: false });
+        // 受け取り損ねた送信の結果(noteFinished)を問い合わせ直す(送信中のまま戻らないことがないように)
+        this.conv.recoverSends();
         break;
     }
   }
@@ -428,6 +430,18 @@ class App {
     this.tree.refresh().catch((e) => console.warn("tree refresh failed", e));
     this.list.refresh().catch((e) => console.warn("list refresh failed", e));
   }, 300);
+}
+
+/**
+ * href が、Redmine(serverUrl)の中のページか。前方一致だけだと https://redmine.example.com.evil.net/ も
+ * 含んでしまうので、serverUrl の直後が区切り(/ ? #)か、末尾であることも確かめる。
+ * @param {string} href @param {string} serverUrl
+ */
+function isUnder(href, serverUrl) {
+  if (!serverUrl) return false;
+  const base = serverUrl.replace(/\/+$/, "");
+  if (href.slice(0, base.length).toLowerCase() !== base.toLowerCase()) return false;
+  return href.length === base.length || "/?#".includes(href[base.length]);
 }
 
 async function main() {

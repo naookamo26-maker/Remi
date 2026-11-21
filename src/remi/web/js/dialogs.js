@@ -15,6 +15,23 @@ function radio(name, value, label, checked) {
   return h("label", {}, h("input", { type: "radio", name, value, checked }), label);
 }
 
+/** 2つのURLが同じ接続先か(スキーム・ホスト・ポート。src/remi/api/client.py の same_server と同じ。http → https は同じとみなす) */
+function sameOrigin(a, b) {
+  const parse = (u) => {
+    try {
+      return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : `https://${u}`);
+    } catch {
+      return null;
+    }
+  };
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return false;
+  const port = (u) => u.port || (u.protocol === "https:" ? "443" : "80");
+  if (x.protocol === y.protocol && x.hostname === y.hostname && port(x) === port(y)) return true;
+  return x.hostname === y.hostname && x.protocol === "http:" && y.protocol === "https:" && port(y) === "443";
+}
+
 export function serverDialog(app, server = null) {
   const s = server || { name: "", url: "", textFormat: "common_mark", pollInterval: 180, notifyEnabled: true,
     proxyMode: "system", proxyUrl: "", enabled: true, watchVersions: false };
@@ -47,10 +64,14 @@ export function serverDialog(app, server = null) {
   let probe = null;
   let testedWith = server ? `${s.url}\n` : null; // 編集時は、URLとキーを変えなければ再テスト不要
   const inputs = () => `${url.value.trim().replace(/\/+$/, "")}\n${key.value.trim()}`;
+  // 編集で接続先(スキーム・ホスト・ポート)を別のサーバーに変えたら、キーも入れ直してもらう
+  // (保存済みのキーを、新しい接続先へ送らない。バックエンドも同じ判定で断る)
+  const needsKey = () => !!server && !key.value.trim() && !sameOrigin(server.url, url.value.trim());
   const update = () => {
-    testButton.disabled = !url.value.trim() || (!key.value.trim() && !server);
-    save.disabled = !name.value.trim() || testedWith !== inputs();
-    saveHint.textContent = !name.value.trim() ? t("server.hintName") : testedWith !== inputs() ? t("server.hintTest") : "";
+    testButton.disabled = !url.value.trim() || (!key.value.trim() && !server) || needsKey();
+    save.disabled = !name.value.trim() || testedWith !== inputs() || needsKey();
+    saveHint.textContent = !name.value.trim() ? t("server.hintName") : needsKey() ? t("server.hintKey")
+      : testedWith !== inputs() ? t("server.hintTest") : "";
   };
   const show = (kind, text, detail = null) => {
     result.hidden = false;

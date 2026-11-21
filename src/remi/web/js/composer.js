@@ -209,10 +209,17 @@ export class Composer {
   }
 
   addFiles(files, insertImages) {
+    const max = this.conv.app.boot?.uploadMax || 0;
     for (const file of files) {
       const isImage = file.type.startsWith("image/");
       let name = file.name;
       if (!name || name === "image.png" || name === "blob") name = clipboardName(file.type);
+      if (max && file.size > max) {
+        // 上限を超えるものは送らない(送ると、接続の失敗としか分からない)。理由をチップに出す
+        this.uploads.push({ key: Symbol(), filename: name, isImage, state: "error",
+          error: t("conv.uploadTooLarge", { max: Math.floor(max / 1024 / 1024) }) });
+        continue;
+      }
       /** @type {Upload} */
       const u = { key: Symbol(), filename: uniqueName(name, this.uploads), isImage, state: "uploading" };
       this.uploads.push(u);
@@ -229,6 +236,8 @@ export class Composer {
         method: "POST", body: file, credentials: "same-origin",
         headers: { "X-Remi-Upload": "1", "Content-Type": "application/octet-stream" },
       });
+      if (res.status === 413) throw Object.assign(new Error("too_large"), { code: "too_large",
+        detail: t("conv.uploadTooLarge", { max: Math.floor((this.conv.app.boot?.uploadMax || 0) / 1024 / 1024) }) });
       const body = await res.json();
       if (body.error) throw Object.assign(new Error(body.error.code), { code: body.error.code, detail: body.error.detail });
       Object.assign(u, body.result, { state: "done" });
@@ -272,7 +281,19 @@ export class Composer {
     if (on) {
       const pending = this.uploads.filter((u) => u.id).map((u) => ({ filename: u.filename, id: u.id }));
       this.preview.replaceChildren(h("span", { class: "muted loading" }, spinner(), t("conv.previewLoading")));
-      const out = await call("preview", { serverId: this.serverId, issueId: this.issueId, text: this.textarea.value, pending });
+      const token = (this.previewToken = Symbol());
+      let out;
+      try {
+        out = await call("preview", { serverId: this.serverId, issueId: this.issueId, text: this.textarea.value, pending });
+      } catch (e) {
+        // 読み込み中のまま止まらないよう、失敗した理由を出す
+        if (this.previewToken === token) {
+          this.preview.replaceChildren(h("span", { class: "muted" },
+            t("conv.previewFailed", { reason: t(`errors.${e.code || "connection_failed"}`) })));
+        }
+        return;
+      }
+      if (this.previewToken !== token || this.preview.hidden) return; // 編集に戻った・押し直した
       html(this.preview, out || "");
       if (!out) this.preview.append(h("span", { class: "muted" }, t("conv.nothingToPreview")));
     } else {

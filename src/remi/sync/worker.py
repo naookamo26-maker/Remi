@@ -369,8 +369,10 @@ class ServerWorker(threading.Thread):
             did_network = True
         if now >= self.sched.changes:
             result = sync.sync_changes()
+            # コメントを先読みするのは、監視対象(自分と関係があり、未完了)のチケットだけ。クローズ済みは、開いたときに取得する
+            monitored = sync.issues.monitored_ids(self.server_id)
             for iid in sorted(result.changed_issue_ids):
-                if iid != self.open_issue:
+                if iid != self.open_issue and iid in monitored:
                     self._enqueue(iid)
             for iid in sync.pending_journal_issue_ids(limit=200):
                 if iid not in self.sched.queue:
@@ -622,8 +624,11 @@ class SyncManager:
         return stopped
 
     def _worker(self, server_id: int) -> ServerWorker | None:
+        """動いている同期スレッド。止まった(APIキーを読めずに始められなかったなど)ものは None
+        (依頼を受け付けたのに、だれも処理せず、結果が届かないことがないように)。"""
         with self._lock:
-            return self._workers.get(server_id)
+            w = self._workers.get(server_id)
+        return w if w is not None and w.is_alive() else None
 
     def sync_now(self, manual: bool = True) -> bool:
         """今すぐ同期する。manual(利用者の操作)で、前の「今すぐ同期」がまだ終わっていなければ(どれかのサーバーが

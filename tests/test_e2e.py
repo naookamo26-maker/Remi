@@ -1520,3 +1520,79 @@ def test_server_dialog_failure_shows_two_short_lines(page, remi, fake):
     playwright_api.expect(dialog.get_by_label("URL", exact=True)).to_have_value(f"{fake.base_url}/projects/1")  # 直さない
     playwright_api.expect(dialog.get_by_role("button", name="登録")).to_be_disabled()
     assert not page.errors, page.errors
+
+
+# --- 全体の点検で見つかった不具合(0.23.0) ---------------------------------------------------
+def test_header_follows_changes_made_by_others(page, remi, fake):
+    """開いている間に、ほかの人がステータスを変えたら、ヘッダの選択欄も新しい値になる。"""
+    _open_app(page, remi, fake)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    status = page.get_by_label("ステータス", exact=True)
+    playwright_api.expect(status).to_be_enabled()
+    time.sleep(1.1)  # updated_on は秒単位
+    fake.set_status(10, 2)  # ほかの人が「進行中」にした
+    page.keyboard.press("F5")
+    playwright_api.expect(page.locator(".timeline")).to_contain_text("進行中", timeout=15000)
+    page.wait_for_function("""() => {
+      const s = [...document.querySelectorAll('.conv-header select')].find((e) => e.getAttribute('aria-label') === 'ステータス');
+      return s && !s.disabled && s.options[s.selectedIndex].text === '進行中';
+    }""", timeout=15000)
+    assert not page.errors, page.errors
+
+
+def test_server_status_dot_is_shown(page, remi, fake):
+    _open_app(page, remi, fake)
+    dot = page.locator(".tree .node.server .dot")
+    playwright_api.expect(dot).to_have_class("dot ok")
+    playwright_api.expect(dot).to_have_attribute("title", "接続中")
+
+
+def test_mark_unread_is_disabled_when_it_cannot_be_done(page, remi, fake):
+    seed(fake)
+    fake.add_issue(12, 2, "自分のメモだけ", watchers={ME})
+    fake.add_journal(12, ME, "自分のメモ")
+    add_server(remi, fake)
+    end = time.monotonic() + 20
+    while time.monotonic() < end and not remi.ctx.issues.journals_synced(1, 12):
+        time.sleep(0.1)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="自分のメモだけ").click(button="right")
+    playwright_api.expect(page.get_by_role("menuitem", name="未読に戻す")).to_be_disabled()
+    page.keyboard.press("Escape")
+    page.locator(".issue", has_text="CSVが文字化けする").click(button="right")
+    page.get_by_role("menuitem", name="未読に戻す").click()
+    playwright_api.expect(page.locator(".issue.unread", has_text="CSVが文字化けする")).to_be_visible()
+
+
+def test_tree_menu_opens_redmine_like_other_menus(page, remi, fake):
+    _open_app(page, remi, fake)
+    page.locator(".tree .node", has_text="受注管理").first.click(button="right")
+    assert page.get_by_role("menuitem", name="Remiで開く").count() == 1
+    assert page.get_by_role("menuitem", name="外部ブラウザで開く").count() == 1
+
+
+def test_changing_server_address_requires_the_key(page, remi, fake):
+    _open_app(page, remi, fake)
+    page.evaluate("async () => { const [s] = await (await fetch('/api/listServers', {method: 'POST', "
+                  "headers: {'Content-Type': 'application/json'}, body: '{}'})).json().then((b) => b.result); "
+                  "window.remi.openServerDialog(s); }")
+    dialog = page.get_by_role("dialog", name="サーバーの編集")
+    dialog.get_by_label("URL", exact=True).fill("https://other.example.com")
+    playwright_api.expect(dialog.get_by_role("button", name="接続テスト")).to_be_disabled()
+    playwright_api.expect(dialog).to_contain_text("APIアクセスキーを入力してください")
+    dialog.get_by_label("APIアクセスキー").fill("new-key")
+    playwright_api.expect(dialog.get_by_role("button", name="接続テスト")).to_be_enabled()
+    dialog.get_by_label("APIアクセスキー").fill("")
+    dialog.get_by_label("URL", exact=True).fill(fake.base_url)  # 同じ接続先なら、今のキーのまま
+    playwright_api.expect(dialog.get_by_role("button", name="接続テスト")).to_be_enabled()
+
+
+def test_markdown_image_with_japanese_name_is_shown(page, remi, fake):
+    seed(fake)
+    fake.add_attachment(10, 78, "スクリーンショット 1.png", _png())
+    fake.add_journal(10, 7, "画面です\n\n![](<スクリーンショット 1.png>)")
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(page.locator('.timeline img[src$="/78"]')).to_have_count(1, timeout=15000)
+    assert page.locator(".timeline .missing-image").count() == 0

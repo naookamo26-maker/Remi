@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
 from remi.system.single_instance import SingleInstance, default_address
@@ -102,3 +103,29 @@ def test_rejects_unknown_requests():
     assert _valid("show") and _valid(("open", 1, 2))
     assert not _valid(("open", 0, 2)) and not _valid(("open", "1", 2)) and not _valid(("open", True, 2))
     assert not _valid("open") and not _valid(("run", 1, 2)) and not _valid(None)
+
+
+def test_quit_request_reaches_the_running_instance(tmp_path):
+    """--quit で、起動中のRemiに終了の依頼を送れる。起動していなければ、何も起きない(False)。"""
+    from remi.system.single_instance import SingleInstance
+
+    address = str(tmp_path / "remi.sock") if sys.platform != "win32" else rf"\\.\pipe\Remi-test-{uuid.uuid4().hex}"
+    assert SingleInstance(address).notify_existing("quit") is False
+    got = []
+    first = SingleInstance(address)
+    assert first.listen(lambda msg="show": got.append(msg))
+    try:
+        assert SingleInstance(address).notify_existing("quit") is True
+        end = time.monotonic() + 5
+        while time.monotonic() < end and not got:
+            time.sleep(0.05)
+        assert got == ["quit"]
+    finally:
+        first.close()
+
+
+def test_quit_option_is_parsed():
+    from remi.app import parse_args
+
+    assert parse_args(["remi", "--quit"]).quit is True
+    assert parse_args(["remi"]).quit is False

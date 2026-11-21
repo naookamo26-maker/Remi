@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -81,6 +82,8 @@ def main() -> None:
     ]
     subprocess.run(cmd, check=True, cwd=ROOT)
     out = DIST / APP_NAME
+    # 更新用のバッチ(SVN・Gitで管理している配置先で、終了・更新・再起動に使う)を、exeと同じ場所に置く
+    shutil.copy(ROOT / "packaging" / "Remi-update.bat", out / "Remi-update.bat")
     archive = DIST / f"{APP_NAME}-{__version__}-win64.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
         for f in out.rglob("*"):

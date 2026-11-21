@@ -351,6 +351,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="remi")
     p.add_argument("--browser", action="store_true", help="open the UI in the default browser (development)")
     p.add_argument("--background", action="store_true", help="start hidden in the tray (used by autostart)")
+    # 起動中のRemiを終了させる(ファイルの更新の前に、Remi-update.bat が使う)。起動していなければ、何もせず終わる
+    p.add_argument("--quit", action="store_true", help="ask the running Remi to quit, then exit")
     p.add_argument("--port", type=int, default=0, help=argparse.SUPPRESS)
     # 通知を押したとき(remi: プロトコル)に、Windowsが渡すURL
     p.add_argument("--open", default=None, metavar="URL", help=argparse.SUPPRESS)
@@ -361,6 +363,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def run(argv: list[str]) -> int:
     args = parse_args(argv)
     setup_logging()
+    if args.quit:
+        if SingleInstance().notify_existing("quit"):
+            log.info("asked the running instance to quit")
+        return 0
     _set_app_user_model_id()
 
     # DBを開くなどの準備より先に待ち受ける(同時に起動したとき、両方が起動したままにならないよう、間を短くする)。
@@ -372,6 +378,10 @@ def run(argv: list[str]) -> int:
     pending_open: list[tuple[int, int]] = [open_target] if open_target else []
 
     def on_show(message: object = "show") -> None:
+        if message == "quit":
+            if len(show_target) > 2:
+                show_target[2]()  # 終了する(トレイへの格納ではなく、アプリを終わらせる)
+            return
         if isinstance(message, tuple) and message[0] == "open":
             if len(show_target) > 1:
                 show_target[1](message[1], message[2])
@@ -411,7 +421,7 @@ def run(argv: list[str]) -> int:
 
     # 画面が立ち上がる前に届いた「チケットを開く」は、画面が起動時に受け取る(takePendingOpen)
     api.pending_open = pending_open
-    show_target.extend([window.show, open_issue])
+    show_target.extend([window.show, open_issue, window.quit])
     # 通知センターでアプリ名・アイコンを出し、履歴から押しても届くよう、起動のたびに登録し直す
     windows.register_notifications(APP_USER_MODEL_ID, APP_NAME, WebviewWindow._icon_path(), PROTOCOL)
     notifier = Notifier(ctx, api, open_issue)

@@ -20,6 +20,7 @@ from remi.store.db import SchemaTooNewError, open_database
 from remi.sync.worker import SyncManager
 from remi.system import windows
 from remi.system.notifier import PROTOCOL, Notifier, parse_open_url
+from remi.system.scheduled_tasks import TaskScheduler, load_tasks
 from remi.system.single_instance import SingleInstance
 from remi.system.tabs import TabController
 from remi.system.tabs_win import WinTabHost, WindowChrome
@@ -437,6 +438,9 @@ def run(argv: list[str]) -> int:
         if ctx.settings.get("autostart"):
             windows.set_autostart(True)  # exeの場所が変わっても登録を最新にする
     sync.restart()
+    # 定期的なタスク(開発者が設定したものだけ。設定がなければ何もしない)
+    scheduler = TaskScheduler(ctx.settings, load_tasks())
+    scheduler.start()
     try:
         window.run(server.start_url)
     except Exception:
@@ -444,6 +448,7 @@ def run(argv: list[str]) -> int:
         windows.message_box(APP_NAME, t("app.webview2Missing", api.lang))
         return 1
     finally:
+        scheduler.stop()
         if tray is not None and tray.icon is not None:
             tray.icon.stop()
         sync.shutdown(timeout=2.0)

@@ -8,3 +8,5 @@ dist/
 .pytest_cache/
 # 翻訳のコンパイル結果(tools/i18n.py build で生成する)
 *.qm
+# 定期的なタスクの設定(開発者が、必要なときに置く。見本は src/remi/scheduled_tasks.sample.json)
+src/remi/scheduled_tasks.json

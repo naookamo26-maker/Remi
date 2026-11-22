@@ -3,6 +3,7 @@ import { call } from "./api.js";
 import { clear, h, toast } from "./dom.js";
 import { formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { startReorder } from "./reorder.js";
 import { contextMenu } from "./ui.js";
 
 /** 表示するチケットの関係(プロジェクトごとの設定)。src/remi/store/issues.py の RELATIONS と同じ */
@@ -21,6 +22,8 @@ export class Tree {
     this.data = null;
     /** チケットの取得に失敗したバージョン(「取得中」の表示を止める) */
     this.failedVersions = new Set();
+    /** サーバーの並べ替え(ドラッグ中は、すべてのサーバーを折りたたんで描く) */
+    this.reorder = null;
     // 再試行までの目安(「約N分後」)を、時間がたったら描き直す
     setInterval(() => { if (this.data?.servers.some((s) => s.error && s.retryAt)) this.render(); }, 30000);
     this.el = h("ul", { class: "tree", role: "tree", "aria-label": t("tree.label"), tabindex: "0",
@@ -61,7 +64,9 @@ export class Tree {
       const hasKids = opts.children && opts.children.length > 0;
       const token = opts.token;
       // 既定で畳んでおく項目(終了したバージョン)は、開いたときだけ token を覚える
-      const isCollapsed = token && (opts.collapsedByDefault ? !collapsed.has(token) : collapsed.has(token));
+      // サーバーを並べ替えている間は、すべてのサーバーを折りたたむ(保存している開閉の状態は変えないので、終われば元に戻る)
+      const isCollapsed = token && ((this.reorder?.active() && token.startsWith("s:"))
+        || (opts.collapsedByDefault ? !collapsed.has(token) : collapsed.has(token)));
       // 変化の印(青い丸)。dotCollapsed / dotExpanded は、畳んでいるとき・開いているときに出すか
       const dot = opts.dot ? opts.dot
         : (hasKids && isCollapsed ? opts.dotCollapsed : opts.dotExpanded) || null;
@@ -182,6 +187,13 @@ export class Tree {
         dot: dotLabel ? { kind: s.status, label: dotLabel } : null, title: s.url,
       });
       this.el.append(server);
+      if (data.servers.length > 1) {
+        // サーバーの行をドラッグして、並べ替える(ボタンを押したときは除く)
+        server.dataset.serverId = String(s.serverId);
+        const row = server.querySelector(":scope > .node");
+        row.classList.add("draggable");
+        row.addEventListener("pointerdown", (e) => this.onServerPointerDown(e, s));
+      }
       if (s.error) {
         // 原因と、次に再試行する目安。キーの誤り・権限がないときだけ、サーバー設定を開くボタンを出す
         const wait = s.retryAt ? Math.round((s.retryAt - Date.now()) / 60000) : null;
@@ -196,6 +208,7 @@ export class Tree {
     if (!data.servers.length) {
       this.el.append(h("li", { class: "empty" }, t("tree.noServers")));
     }
+    this.reorder?.repaint();
     // 同期ボタン: 「今すぐ同期」の最中は、回転する印にする
     const syncing = data.servers.some((s) => s.syncing);
     this.syncButton.replaceChildren(syncing ? h("span", { class: "spin", "aria-hidden": "true" }) : icon("sync"));
@@ -211,6 +224,40 @@ export class Tree {
     } else {
       this.status.textContent = times.length ? t("tree.lastSynced", { time: formatTime(times.at(-1)) }) : "";
       this.status.classList.remove("loading");
+    }
+  }
+
+  // --- サーバーの並べ替え(ドラッグ&ドロップ。設計書 §3.2) -------------------------------------
+  onServerPointerDown(e, server) {
+    if (e.target.closest(".node-tool") || this.reorder?.active()) return;
+    this.reorder = startReorder(e, {
+      ids: this.data.servers.map((s) => s.serverId),
+      sourceId: server.serverId,
+      rows: () => [...this.el.querySelectorAll(":scope > li[data-server-id]")].map((li) => [Number(li.dataset.serverId), li]),
+      area: () => this.root,
+      label: [icon("server"), h("span", {}, server.name)],
+      onBegin: () => this.render(),
+      onEnd: (order) => {
+        this.reorder = null;
+        if (order) this.saveOrder(order);
+        else this.render(); // 取り消した: 元の開閉の状態で描き直す
+      },
+    });
+  }
+
+  /** ツリーの並び(有効なサーバーだけ)を保存する。無効なサーバーは、今の位置のまま残す */
+  async saveOrder(order) {
+    const byId = new Map(this.data.servers.map((s) => [s.serverId, s]));
+    this.data = { ...this.data, servers: order.map((id) => byId.get(id)) };
+    this.render(); // 保存を待たずに表示へ反映する(保存したら serversChanged で読み直す)
+    try {
+      const all = (await call("listServers")).map((s) => s.serverId);
+      const shown = new Set(order);
+      let k = 0;
+      await call("reorderServers", { serverIds: all.map((id) => (shown.has(id) ? order[k++] : id)) });
+    } catch (err) {
+      toast(t(`errors.${err.code || "connection_failed"}`));
+      this.refresh().catch(() => {});
     }
   }
 

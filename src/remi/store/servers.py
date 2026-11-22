@@ -136,6 +136,17 @@ class ServerStore:
         with self.db.tx() as c:
             c.execute(f"UPDATE servers SET {sets} WHERE server_id = ?", [*values, server_id])
 
+    def reorder(self, server_ids: list[int]) -> None:
+        """サーバーの並び順を、server_ids の順にする(0から番号を振り直す)。"""
+        with self.db.tx() as c:
+            c.executemany("UPDATE servers SET sort_order = ? WHERE server_id = ?",
+                          [(i, sid) for i, sid in enumerate(server_ids)])
+
+    def next_sort_order(self) -> int:
+        """新しく登録するサーバーの並び順(いちばん最後)。削除で番号が空いても、既存のものと重ならないようにする。"""
+        r = self.db.query_one("SELECT MAX(sort_order) FROM servers")
+        return 0 if r is None or r[0] is None else int(r[0]) + 1
+
     def delete(self, server_id: int) -> None:
         with self.db.tx() as c:
             c.execute("DELETE FROM servers WHERE server_id = ?", (server_id,))

@@ -1,7 +1,9 @@
 // サーバー登録・設定のダイアログ(設計書 §3.1、モック「サーバー登録ダイアログ」)
 import { call } from "./api.js";
-import { clear, h, spinner } from "./dom.js";
+import { clear, h, spinner, toast } from "./dom.js";
 import { t } from "./i18n.js";
+import { icon } from "./icons.js";
+import { moved, startReorder } from "./reorder.js";
 import { confirmDialog, modal } from "./ui.js";
 
 let uid = 0;
@@ -190,23 +192,63 @@ export function settingsDialog(app) {
         app.boot.tabsError ? t("settings.tabsError") : null));
   };
 
+  // キーボードで並べ替えたあと、描き直した一覧で、同じサーバーのつまみにフォーカスを戻す
+  let focusGrip = null;
   const servers = () => {
     const list = h("ul", { class: "server-list" });
+    const hint = h("div", { class: "help", hidden: true }, t("settings.reorderHint"));
     const wrap = h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
-      list, h("div", {}, h("button", { type: "button", class: "btn", onClick: () => app.openServerDialog() }, t("settings.addServer"))));
+      list, hint, h("div", {}, h("button", { type: "button", class: "btn", onClick: () => app.openServerDialog() }, t("settings.addServer"))));
     call("listServers").then((items) => {
       if (!items.length) list.append(h("li", { class: "muted" }, t("tree.noServers")));
+      const ids = items.map((sv) => sv.serverId);
+      const reorderable = items.length > 1;
+      hint.hidden = !reorderable;
+      // 並びを保存する。一覧とツリーは serversChanged で描き直される
+      const save = (order) => call("reorderServers", { serverIds: order }).catch((e) => {
+        toast(t(`errors.${e.code || "connection_failed"}`));
+        show("servers");
+      });
       for (const sv of items) {
-        list.append(h("li", {},
-          h("div", { class: "info" }, h("div", {}, sv.enabled ? sv.name : t("settings.disabledName", { name: sv.name })),
-            h("div", { class: "url" }, sv.url)),
+        const label = sv.enabled ? sv.name : t("settings.disabledName", { name: sv.name });
+        const grip = reorderable ? h("span", { class: "grip", role: "button", tabindex: "0",
+          title: t("settings.reorderHandle"), "aria-label": t("settings.reorderLabel", { name: sv.name }),
+          onPointerdown: (e) => startReorder(e, {
+            ids, sourceId: sv.serverId,
+            rows: () => [...list.querySelectorAll(":scope > li[data-server-id]")].map((li) => [Number(li.dataset.serverId), li]),
+            area: () => list,
+            label: h("span", {}, label),
+            onEnd: (order) => {
+              if (!order) return;
+              // 保存を待たずに、一覧の並びを入れ替えておく
+              const byId = new Map([...list.querySelectorAll(":scope > li[data-server-id]")].map((li) => [Number(li.dataset.serverId), li]));
+              list.append(...order.map((id) => byId.get(id)));
+              save(order);
+            },
+          }),
+          onKeydown: (e) => {
+            // Alt+↑/↓: 1つ上・下へ動かす
+            if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+            e.preventDefault();
+            const order = moved(ids, sv.serverId, e.key === "ArrowUp" ? -1 : 1);
+            if (!order) return;
+            focusGrip = sv.serverId;
+            save(order);
+          } }, icon("grip")) : null;
+        const li = h("li", { dataset: { serverId: sv.serverId } }, grip,
+          h("div", { class: "info" }, h("div", {}, label), h("div", { class: "url" }, sv.url)),
           h("button", { type: "button", class: "btn", onClick: () => app.openServerDialog(sv) }, t("common.edit")),
           h("button", { type: "button", class: "btn danger", onClick: async () => {
             if (await confirmDialog(t("settings.deleteTitle"), t("settings.deleteBody", { name: sv.name }), t("common.delete"), { danger: true })) {
               await call("deleteServer", { serverId: sv.serverId });
               app.onServersChanged(); // 一覧はこの中で描き直される
             }
-          } }, t("common.delete"))));
+          } }, t("common.delete")));
+        list.append(li);
+      }
+      if (focusGrip !== null) {
+        list.querySelector(`li[data-server-id="${focusGrip}"] .grip`)?.focus();
+        focusGrip = null;
       }
     });
     return wrap;

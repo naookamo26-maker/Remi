@@ -174,17 +174,67 @@ def run_command(task: ScheduledTask, base: Path) -> int | None:
         return None
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
-        done = subprocess.run(cmd, cwd=base, timeout=task.timeout_seconds, creationflags=flags,  # noqa: S603
-                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              check=False)
-    except subprocess.TimeoutExpired:
-        log.warning("scheduled task %s: did not finish in %s seconds (stopped)", task.name, task.timeout_seconds)
-        return None
+        proc = subprocess.Popen(cmd, cwd=base, creationflags=flags,  # noqa: S603
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         log.warning("scheduled task %s: cannot run %s: %s", task.name, cmd[0], e)
         return None
-    log.info("scheduled task %s: %s exited with %s", task.name, cmd[0], done.returncode)
-    return done.returncode
+    with _running_lock:
+        _running.add(proc)
+    try:
+        deadline = time.monotonic() + task.timeout_seconds
+        while True:
+            try:
+                code = proc.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if _shutdown.is_set():
+                log.info("scheduled task %s: stopped because Remi is quitting", task.name)
+                _kill(proc)
+                return None
+            if time.monotonic() >= deadline:
+                log.warning("scheduled task %s: did not finish in %s seconds (stopped)", task.name, task.timeout_seconds)
+                _kill(proc)
+                return None
+    finally:
+        with _running_lock:
+            _running.discard(proc)
+    log.info("scheduled task %s: %s exited with %s", task.name, cmd[0], code)
+    return code
+
+
+# 実行中のコマンド。Remi を終了するときに止める(外部のプロセスを残さない)
+_running: set[subprocess.Popen] = set()
+_running_lock = threading.Lock()
+_shutdown = threading.Event()
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    """コマンドを止める。Windows では、起動した先のプロセスも含めて止める。"""
+    if proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], creationflags=subprocess.CREATE_NO_WINDOW,  # noqa: S603, S607
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+        else:
+            proc.kill()
+    except (OSError, subprocess.SubprocessError):
+        log.warning("could not stop the scheduled task process %s", proc.pid, exc_info=True)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        log.warning("scheduled task process %s did not exit", proc.pid)
+
+
+def stop_running() -> None:
+    """実行中のコマンドをすべて止める。以後(start し直すまで)新しいコマンドも実行中なら止める。"""
+    _shutdown.set()
+    with _running_lock:
+        procs = list(_running)
+    for p in procs:
+        _kill(p)
 
 
 class TaskScheduler:
@@ -210,11 +260,19 @@ class TaskScheduler:
         """起動したときの実行(run_at_startup)を済ませてから、間隔ごとの確認を始める(別のスレッドで)。"""
         if not self.tasks:
             return
+        _shutdown.clear()
         self._thread = threading.Thread(target=self._loop, name="scheduled-tasks", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 5.0) -> bool:
+        """止める。実行中のコマンドも終了させ、スレッドが終わるのを待つ。時間内に終われば True。"""
         self._stop.set()
+        stop_running()
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout)
+            return not t.is_alive()
+        return True
 
     def _loop(self) -> None:
         self.run_due(startup=True)

@@ -119,10 +119,11 @@ class UpdateWatcher:
         if found is None:
             return
         with self._lock:
-            newly = found and not self.available
+            changed = found != self.available
             self.available = found
-        if newly:
-            log.info("an update is available in %s", self.checker.folder)
+        if changed:
+            if found:
+                log.info("an update is available in %s", self.checker.folder)
             self.bus.publish("updateAvailable", **self.state())
 
     def start(self) -> None:

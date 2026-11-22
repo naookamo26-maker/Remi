@@ -82,6 +82,20 @@ def test_watcher_announces_once_and_later_hides_until_restart(tmp_path):
     assert w.available
 
 
+def test_watcher_announces_when_the_update_is_gone(tmp_path):
+    """更新がなくなったときも知らせる(画面に出ている帯を消すため)。"""
+    bus = EventBus()
+    events = []
+    bus.on(events.append)
+    checker = FixedChecker(True)
+    w = UpdateWatcher(bus, checker, tmp_path / uc.UPDATE_BATCH)
+    w.check_now()
+    checker.result = False
+    w.check_now()
+    w.check_now()  # 変わらないときは知らせない
+    assert [(e["type"], e["available"]) for e in events] == [("updateAvailable", True), ("updateAvailable", False)]
+
+
 def test_launch_update_needs_the_batch(tmp_path):
     w = UpdateWatcher(EventBus(), FixedChecker(True), tmp_path / uc.UPDATE_BATCH)
     assert not w.state()["canUpdate"]

@@ -991,6 +991,20 @@ def test_list_order_stays_while_reading_with_arrow_keys(page, remi, fake):
     assert page.locator(".issue-list li.issue.unread").count() == 0
 
 
+def test_arrow_keys_work_right_after_selecting_with_the_mouse(page, remi, fake):
+    """別の場所にフォーカスがあっても、マウスでチケットを選んだら、そのまま上下キーで移動できる(明示的な focus() なし)。"""
+    seed(fake)
+    fake.add_journal(11, 7, "二つ目")
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".issue-list li.issue")
+    page.locator(".issue-list li.issue").nth(1).click()
+    page.wait_for_function("() => window.remi.current")
+    first = page.evaluate("() => window.remi.current.issueId")
+    page.keyboard.press("ArrowUp")
+    page.wait_for_function("(prev) => window.remi.current.issueId !== prev", arg=first)
+
+
 def test_new_messages_button_when_scrolled_up(page, remi, fake):
     seed(fake)
     for n in range(30):

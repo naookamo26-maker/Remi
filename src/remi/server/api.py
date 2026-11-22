@@ -251,6 +251,8 @@ class RemiApi:
         self._sends: dict[tuple[int, int], dict[str, Any] | None] = {}
         self._sends_lock = threading.Lock()
         ctx.bus.on(self._on_event)
+        # 更新の確認(Remi.exe のフォルダの SVN・Git。設計書 §2.5)。app.py が設定する。なければ確かめない
+        self.updates = None
 
     def _on_event(self, event: dict[str, Any]) -> None:
         if event.get("type") == "noteFinished":
@@ -289,6 +291,8 @@ class RemiApi:
             "tabsError": getattr(self.window, "tabs_error", None),
             # 添付できるファイルの大きさの上限(バイト。超えるものは、送る前に断る)
             "uploadMax": UPLOAD_MAX,
+            # 更新があるか(画面の上部に帯を出す)
+            "update": self.getUpdateState(),
         }
 
     # --- 設定 -------------------------------------------------------------------
@@ -1383,6 +1387,34 @@ class RemiApi:
         if a is None or server is None:
             raise RpcError("not_found")
         self.openRedmine(f"{server.url}/attachments/{attachmentId}")
+
+    # --- 更新(設計書 §2.5) ----------------------------------------------------------------
+    @rpc
+    def getUpdateState(self) -> dict[str, bool]:  # noqa: N802
+        """available: 取り込んでいない更新がある(「あとで」を押したら、次の起動まで False)。
+        canUpdate: 更新して再起動できる(Remi.exe の横に Remi-update.bat がある)。"""
+        if self.updates is None:
+            return {"available": False, "canUpdate": False}
+        return self.updates.state()
+
+    @rpc
+    def dismissUpdate(self) -> None:  # noqa: N802
+        """「あとで」: 次の起動までは、更新を知らせない。"""
+        if self.updates is not None:
+            self.updates.dismiss()
+
+    @rpc
+    def startUpdate(self) -> None:  # noqa: N802
+        """「更新して再起動」: Remi-update.bat を起動する。バッチが Remi を終了し、取り込み、起動し直す。"""
+        if self.updates is None:
+            raise RpcError("update_unavailable")
+        try:
+            self.updates.launch_update()
+        except FileNotFoundError as e:
+            raise RpcError("update_unavailable") from e
+        except OSError as e:
+            log.warning("could not start the update batch: %s", e)
+            raise RpcError("update_failed") from e
 
     @rpc
     def hideWindow(self) -> None:  # noqa: N802

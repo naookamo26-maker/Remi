@@ -1729,3 +1729,75 @@ def test_no_reorder_handle_with_a_single_server(page, remi, fake):
     page.get_by_role("dialog").get_by_role("tab", name="サーバー").click()
     page.wait_for_selector(".server-list li .info")
     assert page.locator(".server-list .grip").count() == 0
+
+
+# --- 更新のお知らせ・一覧の上部 ------------------------------------------------------------------
+class _Checker:
+    folder = None
+
+    def __init__(self, result):
+        self.result = result
+
+    def check(self):
+        return self.result
+
+
+def test_update_bar(page, remi, fake, tmp_path, monkeypatch):
+    """更新があれば、上部に帯を出す。「あとで」で消し、「更新して再起動」は確認してから Remi-update.bat を起動する。"""
+    from remi.system import update_check
+    from remi.system.update_check import UpdateWatcher
+
+    batch = tmp_path / "Remi-update.bat"
+    batch.write_text("@echo off\n")
+    opened = []
+    monkeypatch.setattr(update_check, "open_batch", opened.append)
+    checker = _Checker(False)
+    remi.api.updates = UpdateWatcher(remi.ctx.bus, checker, batch)
+    _open_app(page, remi, fake)
+    bar = page.locator(".update-bar")
+    playwright_api.expect(bar).to_be_hidden()
+    # 6時間ごとの確認で見つかった: 開いている画面にも出る
+    checker.result = True
+    remi.api.updates.check_now()
+    playwright_api.expect(bar).to_be_visible()
+    playwright_api.expect(bar).to_contain_text("Remi の更新があります")
+    bar.get_by_role("button", name="更新して再起動").click()
+    dialog = page.get_by_role("dialog", name="更新して再起動")
+    dialog.get_by_role("button", name="キャンセル").click()
+    assert opened == []
+    bar.get_by_role("button", name="更新して再起動").click()
+    dialog.get_by_role("button", name="更新して再起動").click()
+    page.wait_for_selector(".toast:has-text('更新を始めました')")
+    assert opened == [batch]
+    bar.get_by_role("button", name="あとで").click()
+    playwright_api.expect(bar).to_be_hidden()
+    page.reload()  # 次の起動までは出さない
+    page.wait_for_selector(".issue-list li.issue")
+    playwright_api.expect(bar).to_be_hidden()
+    assert not page.errors, page.errors
+
+
+def test_update_bar_without_the_batch(page, remi, fake, tmp_path):
+    from remi.system.update_check import UpdateWatcher
+
+    remi.api.updates = UpdateWatcher(remi.ctx.bus, _Checker(True), tmp_path / "Remi-update.bat")
+    remi.api.updates.check_now()
+    _open_app(page, remi, fake)
+    bar = page.locator(".update-bar")
+    playwright_api.expect(bar).to_contain_text("Remi-update.bat が見つからない")
+    playwright_api.expect(bar.get_by_role("button", name="更新して再起動")).to_be_disabled()
+
+
+def test_list_header_shows_the_location_on_its_own_line(page, remi, fake):
+    """一覧の上部: 1行目に場所、2行目に名前・ボタン・件数。場所がなければ1行目は出さない。"""
+    _open_app(page, remi, fake)
+    row = page.locator(".list-header .crumb-row")
+    page.locator(".tree .node", has_text="受注管理").first.click()
+    playwright_api.expect(row).to_have_text("基幹システム")
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("受注管理")
+    playwright_api.expect(page.locator(".list-title .count")).to_have_text("2件")
+    page.locator(".tree .node", has_text="基幹システム").first.click()
+    playwright_api.expect(row).to_have_text("社内Redmine")  # 最上位のプロジェクト: 場所はサーバー
+    page.locator(".tree .node", has_text="すべて").first.click()
+    playwright_api.expect(row).to_be_hidden()  # サーバー全体: 場所はない(1行で出す)
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")

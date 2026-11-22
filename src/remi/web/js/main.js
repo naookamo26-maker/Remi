@@ -1,10 +1,11 @@
 // 画面の入り口: 状態の管理と、各ペインのつなぎ込み
 import { call, subscribe } from "./api.js";
 import { Conversation } from "./conversation.js";
-import { debounce, h, toast } from "./dom.js";
+import { clear, debounce, h, toast } from "./dom.js";
 import { serverDialog, settingsDialog } from "./dialogs.js";
 import { confirmDialog } from "./ui.js";
 import { setCatalog, t } from "./i18n.js";
+import { icon } from "./icons.js";
 import { IssueList } from "./list.js";
 import { Tabs } from "./tabs.js";
 import { selectionKey, Tree } from "./tree.js";
@@ -26,13 +27,16 @@ class App {
     this.conv = new Conversation(this);
     this.tabs = new Tabs(this);
     this.settingsDialog = null;
+    /** 更新のお知らせの帯(Remi.exe のフォルダに、取り込んでいない更新があるとき。設計書 §2.5) */
+    this.updateBar = h("div", { class: "update-bar", role: "status", hidden: true });
   }
 
   mount(root) {
     const splitter = (index) => h("div", { class: "splitter", role: "separator", "aria-orientation": "vertical",
       onPointerdown: (e) => this.dragSplitter(e, index) });
     this.layout = h("div", { class: "layout" }, this.tree.root, splitter(0), this.list.root, splitter(1), this.conv.root);
-    root.replaceChildren(this.tabs.el, this.layout);
+    root.replaceChildren(this.tabs.el, this.updateBar, this.layout);
+    this.renderUpdate(this.boot.update);
     this.tabs.load();
     root.removeAttribute("aria-busy");
     root.classList.remove("app-loading");
@@ -65,6 +69,33 @@ class App {
     // 通知を押して起動されたときは、そのチケットを開く
     const target = await call("takePendingOpen").catch(() => null);
     if (target) this.openIssue(target.serverId, target.issueId);
+  }
+
+  // --- 更新のお知らせ(設計書 §2.5) -------------------------------------------------------
+  renderUpdate(state) {
+    const bar = this.updateBar;
+    bar.hidden = !state?.available;
+    if (bar.hidden) return clear(bar);
+    bar.replaceChildren(icon("reload"),
+      h("span", { class: "text" }, t("update.available"), state.canUpdate ? "" : ` ${t("update.noBatch")}`),
+      h("button", { type: "button", class: "btn primary", disabled: !state.canUpdate, onClick: () => this.startUpdate() },
+        t("update.restart")),
+      h("button", { type: "button", class: "btn", onClick: () => {
+        // 「あとで」: 次の起動までは知らせない
+        call("dismissUpdate").catch(() => {});
+        this.renderUpdate({ ...state, available: false });
+      } }, t("update.later")));
+  }
+
+  async startUpdate() {
+    if (!(await confirmDialog(t("update.confirmTitle"), t("update.confirmBody"), t("update.restart")))) return;
+    this.conv.composer?.saveDraft.flushPending(); // 入力中のコメントは、下書きとして残す
+    try {
+      await call("startUpdate");
+      toast(t("update.starting"));
+    } catch (e) {
+      toast(t(`errors.${e.code || "update_failed"}`));
+    }
   }
 
   // --- 表示の設定 -------------------------------------------------------------------
@@ -415,6 +446,9 @@ class App {
         break;
       case "openSettings":
         this.openSettings();
+        break;
+      case "updateAvailable":
+        this.renderUpdate(e);
         break;
       case "resync":
         this.refreshSoon.flush();

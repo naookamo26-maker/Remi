@@ -46,11 +46,12 @@ export class IssueList {
     /** ボタンを押した瞬間に、その小さなウィンドウが開いていたか(外側のクリックで閉じたあと、開き直さないため) */
     this.wasOpen = false;
     this.title = h("h2", {});
-    // パンくずと件数。狭いときは、パンくずを隠し、件数を数字だけにする(CSS。件数の data-short)
+    // 1行目: 場所(パンくず)。長くても名前の幅を削らないよう、名前とボタンの行とは分ける。場所がなければ出さない
     this.crumbPath = h("span", { class: "crumb-path" });
-    this.crumbSep = h("span", { class: "crumb-sep" });
+    this.crumbRow = h("div", { class: "crumb-row", hidden: true }, this.crumbPath);
+    // 件数(名前の行の、ボタンの右)。狭いときは、数字だけにする(CSS。件数の data-short)
     this.count = h("span", { class: "count" });
-    this.crumb = h("span", { class: "crumb" }, this.crumbPath, this.crumbSep, this.count);
+    this.crumb = h("span", { class: "crumb" }, this.count);
 
     // 検索・並べ替え・絞り込み・表示密度のボタン。検索・並べ替え・絞り込みは、条件があるときだけ色が付く
     const button = (cls, iconName, onClick, popup = null) => h("button", { type: "button", class: `lbtn ${cls}`, "aria-pressed": "false",
@@ -104,6 +105,7 @@ export class IssueList {
       onKeydown: (e) => this.onKey(e) });
     this.root = h("section", { class: "pane pane-list", "aria-label": t("list.label") },
       h("div", { class: "list-header" },
+        this.crumbRow,
         h("div", { class: "list-title" }, this.title,
           h("span", { class: "title-right" }, this.searchButton, this.sortButton, this.filterButton, this.densityButton, this.crumb)),
         this.relationGroup,
@@ -228,10 +230,11 @@ export class IssueList {
     this.title.textContent = title;
     const countText_ = t("list.count", { count: this.issues.length });
     this.crumbPath.textContent = crumb;
-    this.crumbSep.textContent = crumb ? " · " : "";
+    this.crumbRow.hidden = !crumb;
+    this.crumbRow.title = crumb;
     this.count.textContent = countText_;
     this.count.dataset.short = String(this.issues.length);
-    this.crumb.title = [crumb, countText_].filter(Boolean).join(" · ");
+    this.crumb.title = countText_;
     const rel = this.relationFilter();
     const shown = this.shownFilters();
     for (const b of this.relationButtons) {

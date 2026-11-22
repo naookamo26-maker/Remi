@@ -21,6 +21,7 @@ from remi.sync.worker import SyncManager
 from remi.system import windows
 from remi.system.notifier import PROTOCOL, Notifier, parse_open_url
 from remi.system.scheduled_tasks import TaskScheduler, load_tasks
+from remi.system.update_check import create_watcher
 from remi.system.single_instance import SingleInstance
 from remi.system.tabs import TabController
 from remi.system.tabs_win import WinTabHost, WindowChrome
@@ -441,6 +442,9 @@ def run(argv: list[str]) -> int:
     # 定期的なタスク(開発者が設定したものだけ。設定がなければ何もしない)
     scheduler = TaskScheduler(ctx.settings, load_tasks())
     scheduler.start()
+    # 更新の確認(配布物で、Remi.exe のフォルダが SVN・Git で管理されているとき)
+    api.updates = create_watcher(ctx.bus)
+    api.updates.start()
     try:
         window.run(server.start_url)
     except Exception:
@@ -449,6 +453,7 @@ def run(argv: list[str]) -> int:
         return 1
     finally:
         scheduler.stop()
+        api.updates.stop()
         if tray is not None and tray.icon is not None:
             tray.icon.stop()
         sync.shutdown(timeout=2.0)

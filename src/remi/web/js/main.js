@@ -89,7 +89,7 @@ class App {
 
   async startUpdate() {
     if (!(await confirmDialog(t("update.confirmTitle"), t("update.confirmBody"), t("update.restart")))) return;
-    this.conv.composer?.saveDraft.flushPending(); // 入力中のコメントは、下書きとして残す
+    await this.conv.composer?.saveDraft.flushPending(); // 入力中のコメントは、保存が終わってから更新する
     try {
       await call("startUpdate");
       toast(t("update.starting"));
@@ -143,16 +143,18 @@ class App {
     const seq = (this.saveSeq = (this.saveSeq || 0) + 1);
     this.latestSave[key] = seq;
     const saved = await call("setSetting", { key, value });
+    // 応答は全設定の、その時点の写し。別の項目の保存と重なると古い値を含むので、この項目の値だけを取り込む
     // 応答を待つ間に同じ項目を保存し直していたら(ツリーの折りたたみを続けて切り替えたときなど)、
     // 古い応答で画面の状態を巻き戻さない
-    if (this.latestSave[key] === seq) delete this.latestSave[key];
-    else saved[key] = this.settings[key];
-    this.settings = saved;
+    if (this.latestSave[key] === seq) {
+      delete this.latestSave[key];
+      this.settings = { ...this.settings, [key]: saved[key] };
+    }
     if (key === "theme") this.applyTheme();
     if (key === "mine_side") this.applyMineSide();
     if (key === "language") {
       // 画面は再読み込みだけで切り替わる(設計書 §10.1)。入力中の文章は、先に下書きとして保存する
-      this.conv.composer?.saveDraft.flushPending();
+      await this.conv.composer?.saveDraft.flushPending();
       setTimeout(() => location.reload(), 400);
     }
     return this.settings;

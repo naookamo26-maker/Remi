@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,21 @@ def test_run_command_missing_program_and_timeout(tmp_path):
     assert st.run_command(ScheduledTask("t", ("missing.exe",), 60), tmp_path) is None
     slow = ScheduledTask("t", (sys.executable, "-c", "import time; time.sleep(10)"), 60, timeout_seconds=1)
     assert st.run_command(slow, tmp_path) is None
+
+
+def test_stop_ends_a_running_command(db, tmp_path):
+    """Remi を終了するとき、実行中のコマンドも止める(終了後に外部のプロセスを残さない)。"""
+    slow = ScheduledTask("slow", (sys.executable, "-c", "import time; time.sleep(60)"), 60, True, timeout_seconds=600)
+    s = TaskScheduler(Settings(db), [slow], base=tmp_path)
+    s.start()
+    deadline = time.monotonic() + 10
+    while not st._running and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert st._running  # コマンドが動き始めた
+    started = time.monotonic()
+    assert s.stop(timeout=10) is True  # スレッドも終わる
+    assert time.monotonic() - started < 8
+    assert not st._running
 
 
 # --- ビルドへの埋め込み ---------------------------------------------------------------------

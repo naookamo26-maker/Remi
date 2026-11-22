@@ -452,12 +452,16 @@ def run(argv: list[str]) -> int:
         windows.message_box(APP_NAME, t("app.webview2Missing", api.lang))
         return 1
     finally:
-        scheduler.stop()
+        scheduler.stop()  # 実行中のコマンドも終了させる
         api.updates.stop()
         if tray is not None and tray.icon is not None:
             tray.icon.stop()
-        sync.shutdown(timeout=2.0)
+        sync_stopped = sync.shutdown(timeout=2.0)
         server.stop()
         single.close()
-        db.close_all()
+        if sync_stopped:
+            db.close_all()
+        else:
+            # 止まりきらない同期スレッドがDBを使っているかもしれないので、接続は閉じない(まもなくプロセスが終わる)
+            log.warning("sync threads are still running: the database connections are left open")
     return 0

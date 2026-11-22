@@ -41,10 +41,12 @@ export class Composer {
     this.draftState = h("span", { class: "draft-state", "aria-live": "polite", hidden: true });
     this.draftRev = 0; // 入力などで下書きが変わるたびに進める。古い保存の結果で、新しい状態を上書きしないために使う
     this.draftTimer = null;
+    this.draftSaving = new Set(); // 通信中の保存
     const persist = debounce(() => this.persistDraft(), 600);
     this.saveDraft = Object.assign(() => { this.draftRev++; this.setDraftState("pending"); persist(); }, {
       flush: () => persist.flush(),
-      flushPending: () => persist.flushPending(),
+      // 保存待ちがあればすぐ保存し、通信中の保存も含めて、終わるまで待つ(更新・再読み込みの前に使う)
+      flushPending: async () => { persist.flushPending(); await Promise.all([...this.draftSaving]); },
       cancel: () => { this.draftRev++; persist.cancel(); this.setDraftState("idle"); },
     });
     if (d.draft.failed) this.showFailed();
@@ -77,7 +79,14 @@ export class Composer {
 
   // --- 下書きの保存と、その状態の表示(設計書 §6.1) ----------------------------------
   /** 下書きを保存する。結果は、そのあとに入力がなかったときだけ表示に反映する */
-  async persistDraft() {
+  persistDraft() {
+    const p = this.saveDraftNow();
+    this.draftSaving.add(p);
+    p.finally(() => this.draftSaving.delete(p));
+    return p;
+  }
+
+  async saveDraftNow() {
     const rev = this.draftRev;
     const body = this.textarea.value;
     this.setDraftState("saving");

@@ -48,7 +48,11 @@ export class Tree {
   }
 
   async refresh() {
-    this.data = await call("getTree");
+    // 更新が重なったとき、古い取得結果で新しい表示を上書きしない(一覧の refresh と同じ)
+    const token = (this.refreshToken = (this.refreshToken || 0) + 1);
+    const data = await call("getTree");
+    if (token !== this.refreshToken) return;
+    this.data = data;
     this.app.checkSelection();
     this.render();
   }

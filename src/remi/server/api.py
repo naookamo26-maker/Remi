@@ -388,7 +388,7 @@ class RemiApi:
             # 新しいキーは、接続テストで誰のキーかを確かめてから保存する(ユーザーの変更を見逃さないため)
             raise RpcError("not_tested")
 
-        s = existing or Server(name=name, url=url, sort_order=len(self.ctx.servers.list()))
+        s = existing or Server(name=name, url=url, sort_order=self.ctx.servers.next_sort_order())
         user_id = int(data["userId"]) if data.get("userId") is not None else None
         url_changed = existing is not None and existing.url != url
         # 同じURLでも、別のユーザーのAPIキーに替えたら前のユーザーのデータ(プライベートノートなど)を見せない。
@@ -455,6 +455,21 @@ class RemiApi:
             raise RpcError("not_found")
         self.ctx.servers.delete(serverId)
         self._servers_changed()
+
+    @rpc
+    def reorderServers(self, serverIds: list[int]) -> list[dict[str, Any]]:  # noqa: N802,N803
+        """サーバーの並び順を変える(ツリー・設定のサーバー一覧のドラッグ&ドロップ)。serverIds は、すべてのサーバー
+        (無効のものを含む)を新しい順に並べたもの。同期は止めない(並びだけの変更なので)。"""
+        if not isinstance(serverIds, list) or not all(isinstance(x, int) and not isinstance(x, bool) for x in serverIds):
+            raise RpcError("invalid_input", "serverIds")
+        current = [s.server_id for s in self.ctx.servers.list()]
+        if len(serverIds) != len(set(serverIds)) or set(serverIds) != set(current):
+            # 並べ替えている間に、サーバーが追加・削除された: 画面に読み直させる
+            raise RpcError("invalid_input", "serverIds")
+        if serverIds != current:
+            self.ctx.servers.reorder(serverIds)
+            self.ctx.bus.publish("serversChanged")
+        return self.listServers()
 
     def _servers_changed(self) -> None:
         if self.sync is not None:

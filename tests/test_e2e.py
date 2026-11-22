@@ -1620,3 +1620,112 @@ def test_condition_chips_are_distinguishable_in_dark_theme(page, remi, fake):
     dot = page.locator(".tree .node.server .dot").evaluate("e => getComputedStyle(e).backgroundColor")
     assert dot == "rgb(45, 164, 78)"
     assert not page.errors, page.errors
+
+
+# --- サーバーの並べ替え ---------------------------------------------------------------------
+def _three_servers(page, remi, fake):
+    from remi.store.servers import Server
+
+    seed(fake)
+    ids = [remi.ctx.servers.save(Server(name=n, url=fake.base_url, sort_order=i), api_key=API_KEY).server_id
+           for i, n in enumerate(("Aサーバー", "Bサーバー", "Cサーバー"))]
+    remi.sync.restart()
+    end = time.monotonic() + 30
+    while time.monotonic() < end and not all(remi.ctx.issues.journals_synced(s, 10) for s in ids):
+        time.sleep(0.1)
+    page.goto(remi.server.start_url)
+    page.wait_for_selector(".tree .node.server")
+    page.wait_for_function("() => document.querySelectorAll('.tree > li[data-server-id] > ul[role=group]').length === 3")
+    return ids
+
+
+def _tree_order(page):
+    return page.locator(".tree > li[data-server-id] > .node.server .name").all_inner_texts()
+
+
+def test_reorder_servers_by_dragging_in_the_tree(page, remi, fake):
+    """サーバーの行をドラッグして並べ替える。ドラッグ中はすべて折りたたみ、終わったら元の開閉に戻る。"""
+    a, b, c = _three_servers(page, remi, fake)
+    # Bサーバーは、あらかじめ折りたたんでおく(終わったあとも折りたたんだまま)
+    page.locator(".tree > li[data-server-id] > .node.server", has_text="Bサーバー").locator(".twisty").click()
+    page.wait_for_function("() => document.querySelectorAll('.tree > li[data-server-id] > ul[role=group]').length === 2")
+    src = page.locator(".tree > li[data-server-id] > .node.server", has_text="Cサーバー").bounding_box()
+    page.mouse.move(src["x"] + 60, src["y"] + src["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(src["x"] + 60, src["y"] - 20, steps=3)  # 動かし始めると、すべて折りたたむ
+    page.wait_for_function("() => !document.querySelector('.tree > li[data-server-id] > ul[role=group]')")
+    top = page.locator(".tree > li[data-server-id] > .node.server", has_text="Aサーバー").bounding_box()
+    page.mouse.move(top["x"] + 60, top["y"] + 3, steps=5)  # Aサーバーの上半分: その前に入れる
+    playwright_api.expect(page.locator(".tree .drop-line")).to_have_count(1)
+    playwright_api.expect(page.locator(".drag-ghost")).to_contain_text("Cサーバー")
+    page.mouse.up()
+    page.wait_for_function("() => document.querySelectorAll('.tree > li[data-server-id] > ul[role=group]').length === 2")
+    assert _tree_order(page) == ["Cサーバー", "Aサーバー", "Bサーバー"]
+    playwright_api.expect(page.locator(".tree .drop-line")).to_have_count(0)
+    end = time.monotonic() + 10
+    while time.monotonic() < end and [s.server_id for s in remi.ctx.servers.list()] != [c, a, b]:
+        time.sleep(0.1)
+    assert [s.server_id for s in remi.ctx.servers.list()] == [c, a, b]
+    # 開いていたものは開いたまま、折りたたんでいたBサーバーは折りたたんだまま
+    assert page.locator(".tree > li[data-server-id]", has_text="Bサーバー").locator(":scope > ul[role=group]").count() == 0
+    assert page.locator(".tree > li[data-server-id]", has_text="Aサーバー").locator(":scope > ul[role=group]").count() == 1
+    assert not page.errors, page.errors
+
+
+def test_reordering_in_the_tree_can_be_cancelled_with_escape(page, remi, fake):
+    a, b, c = _three_servers(page, remi, fake)
+    src = page.locator(".tree > li[data-server-id] > .node.server", has_text="Aサーバー").bounding_box()
+    page.mouse.move(src["x"] + 60, src["y"] + src["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(src["x"] + 60, src["y"] + 200, steps=5)
+    playwright_api.expect(page.locator(".tree .drop-line")).to_have_count(1)
+    page.keyboard.press("Escape")
+    page.mouse.up()
+    page.wait_for_function("() => document.querySelectorAll('.tree > li[data-server-id] > ul[role=group]').length === 3")
+    assert _tree_order(page) == ["Aサーバー", "Bサーバー", "Cサーバー"]
+    assert [s.server_id for s in remi.ctx.servers.list()] == [a, b, c]
+    # クリックはふつうに選択になる(ドラッグとみなさない)
+    page.locator(".tree > li[data-server-id] > .node.server", has_text="Bサーバー").locator(".name").click()
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("Bサーバー")
+
+
+def test_reorder_servers_in_the_settings_list(page, remi, fake):
+    a, b, c = _three_servers(page, remi, fake)
+    page.get_by_role("button", name="設定").first.click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_role("tab", name="サーバー").click()
+    rows = dialog.locator(".server-list li .info > div:first-child")
+    playwright_api.expect(rows).to_have_text(["Aサーバー", "Bサーバー", "Cサーバー"])
+    # キーボード: つまみを選んで Alt+↓
+    grip = dialog.get_by_role("button", name="Aサーバー の並べ替え(Alt+↑/↓)")
+    grip.focus()
+    page.keyboard.press("Alt+ArrowDown")
+    playwright_api.expect(rows).to_have_text(["Bサーバー", "Aサーバー", "Cサーバー"])
+    playwright_api.expect(dialog.get_by_role("button", name="Aサーバー の並べ替え(Alt+↑/↓)")).to_be_focused()
+    # ドラッグ: Cサーバーを先頭へ
+    src = dialog.get_by_role("button", name="Cサーバー の並べ替え(Alt+↑/↓)").bounding_box()
+    first = dialog.locator(".server-list li").first.bounding_box()
+    page.mouse.move(src["x"] + src["width"] / 2, src["y"] + src["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(src["x"] + 10, first["y"] + 4, steps=6)
+    playwright_api.expect(dialog.locator(".drop-line")).to_have_count(1)
+    page.mouse.up()
+    playwright_api.expect(rows).to_have_text(["Cサーバー", "Bサーバー", "Aサーバー"])
+    playwright_api.expect(dialog).to_be_visible()  # ドラッグでダイアログは閉じない
+    end = time.monotonic() + 10
+    while time.monotonic() < end and [s.server_id for s in remi.ctx.servers.list()] != [c, b, a]:
+        time.sleep(0.1)
+    assert [s.server_id for s in remi.ctx.servers.list()] == [c, b, a]
+    # ツリーにも反映する
+    page.wait_for_function("() => [...document.querySelectorAll('.tree > li[data-server-id] > .node.server .name')]"
+                           ".map((e) => e.textContent).join() === 'Cサーバー,Bサーバー,Aサーバー'")
+    assert not page.errors, page.errors
+
+
+def test_no_reorder_handle_with_a_single_server(page, remi, fake):
+    _open_app(page, remi, fake)
+    assert page.locator(".tree .node.server.draggable").count() == 0
+    page.get_by_role("button", name="設定").first.click()
+    page.get_by_role("dialog").get_by_role("tab", name="サーバー").click()
+    page.wait_for_selector(".server-list li .info")
+    assert page.locator(".server-list .grip").count() == 0

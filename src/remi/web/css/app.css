@@ -407,6 +407,22 @@ fieldset label { display: flex; gap: 8px; align-items: center; cursor: pointer; 
 .server-list li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .server-list li:last-child { border-bottom: 0; }
 .server-list .info { flex: 1; min-width: 0; }
+/* サーバーの並べ替え(ツリーの行・設定の一覧のつまみをドラッグ) */
+.server-list .grip { flex: none; width: 20px; height: 28px; display: grid; place-items: center; margin-left: -4px; border-radius: 4px;
+  color: var(--text-muted); cursor: grab; touch-action: none; }
+.server-list .grip:hover, .server-list .grip:focus-visible { background: var(--surface); color: var(--text); }
+.server-list .grip svg.icon { width: 16px; height: 16px; stroke-width: 3.2; }
+.tree .node.server.draggable { cursor: grab; touch-action: none; }
+body.reordering, body.reordering * { cursor: grabbing !important; user-select: none; }
+body.reordering .tree .node-error { display: none; }
+.drop-line { height: 2px; margin: 0 8px; padding: 0 !important; border: 0 !important; background: var(--accent); border-radius: 1px;
+  position: relative; list-style: none; }
+.drop-line::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.drag-source > .node, .server-list li.drag-source { opacity: .35; }
+.drag-ghost { position: fixed; z-index: 90; pointer-events: none; display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 6px; border: 1px solid var(--accent); background: var(--window); color: var(--text); font-weight: 600;
+  box-shadow: 0 6px 18px rgb(0 0 0 / .25); }
+.drag-ghost svg.icon { width: 14px; height: 14px; }
 .server-list .url { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu { position: fixed; z-index: 60; min-width: 220px; max-width: 320px; padding: 6px; border-radius: 8px; background: var(--window);
   border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .2); display: flex; flex-direction: column; }

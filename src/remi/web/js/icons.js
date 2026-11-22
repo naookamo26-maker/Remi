@@ -20,6 +20,7 @@ const PATHS = {
   density: '<path d="M4 5h16M4 9.7h16M4 14.3h16M4 19h16"/>',
   sort: '<path d="M8 4v16M4 16l4 4 4-4M16 20V4M12 8l4-4 4 4"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  grip: '<path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/>', // 並べ替えのつまみ(点を6つ)
 };
 
 export function icon(name, label = null) {

@@ -50,3 +50,21 @@ def test_contrast_aa(theme, fg, bg):
     t = LIGHT if theme == "light" else DARK
     ratio = contrast(t[fg], t[bg])
     assert ratio >= 4.5, f"{theme}: {fg} on {bg} = {ratio:.2f}"
+
+
+@pytest.mark.parametrize("token", ["dot-ok", "dot-error"])
+def test_status_dots_look_the_same_in_both_themes(token):
+    """状態の丸は、ライトとダークで同じ色にし(印象をそろえる)、ツリー・本文のどちらの背景でも3:1以上にする。"""
+    assert LIGHT[token] == DARK[token]
+    for t in (LIGHT, DARK):
+        for bg in ("surface", "window"):
+            assert contrast(t[token], t[bg]) >= 3.0, f"{token} on {bg} = {contrast(t[token], t[bg]):.2f}"
+
+
+def test_chip_tint_is_stronger_on_dark_background():
+    """条件のチップなどの色の割合: 暗い背景では、16%だと色の違いが分からないので濃くする。"""
+    def mix(selector):
+        block = re.search(re.escape(selector) + r"\s*\{(.*?)\}", CSS, re.S).group(1)
+        return int(re.search(r"--chip-mix:\s*(\d+)%", block).group(1))
+
+    assert mix(":root") == 16 and mix(":root.theme-dark") >= 30

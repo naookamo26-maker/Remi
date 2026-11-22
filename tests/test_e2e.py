@@ -1597,3 +1597,26 @@ def test_markdown_image_with_japanese_name_is_shown(page, remi, fake):
     page.locator(".issue", has_text="CSVが文字化けする").click()
     playwright_api.expect(page.locator('.timeline img[src$="/78"]')).to_have_count(1, timeout=15000)
     assert page.locator(".timeline .missing-image").count() == 0
+
+
+def test_condition_chips_are_distinguishable_in_dark_theme(page, remi, fake):
+    """ダークでは、条件のチップに色の枠線を付け、背景の色も濃くする(16%では、どれも同じ暗い灰色に見える)。"""
+    remi.ctx.settings.set("theme", "dark")
+    remi.ctx.settings.set("list_search", "CSV")
+    remi.ctx.settings.set("list_sort", {"key": "priority", "desc": True})
+    _open_app(page, remi, fake)
+    page.wait_for_selector(".cchip-sort")
+    styles = page.evaluate("""() => ['.cchip-search', '.cchip-sort'].map((s) => {
+      const st = getComputedStyle(document.querySelector(s));
+      return [st.backgroundColor, st.boxShadow];
+    })""")
+    (search_bg, search_edge), (sort_bg, sort_edge) = styles
+    assert search_bg != sort_bg
+    assert "inset" in search_edge and "inset" in sort_edge
+    # 選択中の行の左の線・状態の丸の色(両テーマで同じ)
+    page.locator(".issue-list li.issue").first.click()
+    shadow = page.locator(".issue.selected").evaluate("e => getComputedStyle(e).boxShadow")
+    assert "inset" in shadow
+    dot = page.locator(".tree .node.server .dot").evaluate("e => getComputedStyle(e).backgroundColor")
+    assert dot == "rgb(45, 164, 78)"
+    assert not page.errors, page.errors

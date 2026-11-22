@@ -9,6 +9,10 @@
   --code-bg: #F6F8FA; --code-border: #E1E4E8; --mention-bg: #C3DBF5; --mention-fg: #0B4F8A;
   --danger: #A40E26; --success: #116329; --warning-bg: #FFF8C5; --warning-fg: #6F4E00;
   --c-filter: #1B7F4B; --c-sort: #7A4BC2; /* 絞り込み(緑)・並べ替え(紫)の色。検索は --accent */
+  /* 状態の丸(接続中・接続できない)。文字用の --success / --danger は、読めるようライトは暗く、ダークは明るくしているので、
+     丸に使うと印象が変わる。丸は、どちらの背景でも3:1以上ある同じ色にする */
+  --dot-ok: #2DA44E; --dot-error: #E5484D;
+  --chip-mix: 16%; /* 条件のチップ・押された状態のボタン・並べ替えのタグの背景に混ぜる色の割合 */
   --font: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", "Noto Sans JP", system-ui, sans-serif;
   --mono: "Cascadia Mono", Consolas, "BIZ UDGothic", "Noto Sans Mono CJK JP", monospace;
 }
@@ -22,6 +26,8 @@
   --code-bg: #16171A; --code-border: #3A3D42; --mention-bg: #23466E; --mention-fg: #CFE6FF;
   --danger: #FF8A80; --success: #6FDD8B; --warning-bg: #3D3000; --warning-fg: #F2CC60;
   --c-filter: #5FD3A0; --c-sort: #B79BEA;
+  --dot-ok: #2DA44E; --dot-error: #E5484D;
+  --chip-mix: 30%; /* 暗い背景では、16%だと青・緑・紫がどれも同じ暗い灰色に見えるので、濃くする */
 }
 html, body { margin: 0; height: 100%; background: var(--window); color: var(--text); font: 13px/1.5 var(--font); }
 .app-loading { display: grid; place-items: center; height: 100%; color: var(--text-muted); }
@@ -50,10 +56,11 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
   font-size: 11px; font-weight: 600; text-align: center; line-height: 16px; }
 .count { color: var(--text-muted); font-size: 12px; }
 .pill { padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
-.pill.closed { opacity: .8; }
+/* クローズ済み: 薄くせず(文字が読みにくくなる)、塗りなし・点線の枠で、未完了のステータスと区別する */
+.pill.closed { background: transparent; border-style: dashed; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.dot.ok { background: var(--success); }
-.dot.error { background: var(--danger); }
+.dot.ok { background: var(--dot-ok); }
+.dot.error { background: var(--dot-error); }
 .dot.changed { background: var(--accent); }
 
 /* ---- レイアウト ---- */
@@ -197,9 +204,9 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .lbtn-filter { color: var(--c-filter); }
 .lbtn-sort { color: var(--c-sort); }
 .lbtn-density[aria-pressed=true] { background: var(--selection); color: var(--accent); border-color: var(--accent); }
-.lbtn-search[aria-pressed=true] { background: color-mix(in srgb, var(--accent) 16%, var(--window)); color: var(--accent); border-color: var(--accent); }
-.lbtn-filter[aria-pressed=true] { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); color: var(--c-filter); border-color: var(--c-filter); }
-.lbtn-sort[aria-pressed=true] { background: color-mix(in srgb, var(--c-sort) 16%, var(--window)); color: var(--c-sort); border-color: var(--c-sort); }
+.lbtn-search[aria-pressed=true] { background: color-mix(in srgb, var(--accent) var(--chip-mix), var(--window)); color: var(--accent); border-color: var(--accent); }
+.lbtn-filter[aria-pressed=true] { background: color-mix(in srgb, var(--c-filter) var(--chip-mix), var(--window)); color: var(--c-filter); border-color: var(--c-filter); }
+.lbtn-sort[aria-pressed=true] { background: color-mix(in srgb, var(--c-sort) var(--chip-mix), var(--window)); color: var(--c-sort); border-color: var(--c-sort); }
 /* いま有効な条件のチップ。✕で外す。色は、ボタンと同じ(検索=青、絞り込み=緑、並べ替え=紫) */
 .cchips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .cchip { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px 0 8px; border-radius: 4px; font-size: 12px; min-width: 0; max-width: 100%; }
@@ -208,13 +215,16 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
   background: transparent; color: var(--text-muted); cursor: pointer; flex: none; }
 .cchip button:hover { background: var(--border); color: var(--text); }
 .cchip button svg.icon { width: 10px; height: 10px; }
-.cchip-search { background: color-mix(in srgb, var(--accent) 16%, var(--window)); }
-.cchip-filter { background: color-mix(in srgb, var(--c-filter) 16%, var(--window)); }
-.cchip-sort { background: color-mix(in srgb, var(--c-sort) 16%, var(--window)); }
+.cchip-search { background: color-mix(in srgb, var(--accent) var(--chip-mix), var(--window)); }
+:root.theme-dark .cchip-search { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, var(--window)); }
+.cchip-filter { background: color-mix(in srgb, var(--c-filter) var(--chip-mix), var(--window)); }
+:root.theme-dark .cchip-filter { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-filter) 60%, var(--window)); }
+.cchip-sort { background: color-mix(in srgb, var(--c-sort) var(--chip-mix), var(--window)); }
+:root.theme-dark .cchip-sort { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-sort) 60%, var(--window)); }
 button.link, .menu button.link { display: inline; min-height: 0; border: 0; background: none; padding: 0 4px; color: var(--link); font-size: 12px; cursor: pointer; }
 button.link:hover, .menu button.link:hover { background: none; text-decoration: underline; }
 /* 並べ替えの値のタグ(優先度・トラッカー・期日)と、並べ替え中のステータスのラベル */
-.tag.skey, .pill.sorted { background: color-mix(in srgb, var(--c-sort) 16%, var(--window)); border-color: transparent; color: var(--text); }
+.tag.skey, .pill.sorted { background: color-mix(in srgb, var(--c-sort) var(--chip-mix), var(--window)); border-color: transparent; color: var(--text); }
 .tag.skey.warn { background: color-mix(in srgb, var(--danger) 14%, var(--window)); color: var(--danger); font-weight: 600; }
 /* 小さなウィンドウ(検索・絞り込み) */
 .popover { padding: 8px; }
@@ -252,7 +262,8 @@ button.link:hover, .menu button.link:hover { background: none; text-decoration: 
 .issue-list { flex: 1 1 auto; overflow: auto; margin: 0; padding: 0; list-style: none; }
 .issue { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .issue:hover { background: var(--surface-alt); }
-.issue.selected { background: var(--selection); }
+/* 選択中の行: 背景だけではライトで分かりにくいので、左に青い線も付ける */
+.issue.selected { background: var(--selection); box-shadow: inset 3px 0 0 var(--accent); }
 .issue .line1 { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); min-width: 0; }
 .issue .line1 .spacer { flex: 1; min-width: 0; }
 /* 幅が足りないときは、折り返さず、関係のラベル、並べ替えのタグの順に縮める(ステータス・番号・時刻は縮めない) */
@@ -336,6 +347,8 @@ button.link:hover, .menu button.link:hover { background: none; text-decoration: 
 .content a.attachment.image { display: inline-block; }
 .content .mention { padding: 0 3px; border-radius: 3px; background: var(--mention-bg); color: var(--mention-fg); font-weight: 500; }
 .content .mention.me { outline: 1px solid var(--accent); }
+/* 自分の吹き出しの中: メンションの背景が吹き出しの色に溶けるので、細い枠線で区切る */
+.msg.mine .content .mention { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mention-fg) 45%, transparent); }
 .content .macro, .content .missing-image { color: var(--text-muted); }
 .content details { margin: 0 0 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; }
 .content summary { cursor: pointer; font-weight: 600; }

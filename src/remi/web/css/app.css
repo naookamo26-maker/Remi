@@ -66,6 +66,14 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentCol
 /* ---- レイアウト ---- */
 #app { height: 100%; display: flex; flex-direction: column; }
 .layout { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* 更新のお知らせの帯(タブの列の下、3つのペインの上) */
+.update-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; flex: none; font-size: 12px; color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--window));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--window)); }
+.update-bar[hidden] { display: none; }
+.update-bar svg.icon { color: var(--accent); }
+.update-bar .text { flex: 1; min-width: 0; }
+.update-bar .btn { min-height: 26px; padding: 0 10px; font-size: 12px; }
 /* ---- ウィンドウ全体のタブ(固定の「Remi」と、Redmineのタブ) ---- */
 .tabs-chrome { flex: none; background: var(--surface); border-bottom: 1px solid var(--border); }
 .tabs-chrome[hidden] { display: none; }
@@ -179,14 +187,15 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .list-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .list-title .title-right { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
 .list-title h2 { margin: 0; font-size: 14px; min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.list-title .crumb { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.list-title .crumb .count { flex: none; }
-/* 狭いとき(一覧のペインが 300px 未満。list.js の .narrow): ボタンの隙間を詰め、パンくずを隠し、件数は数字だけにする */
+.list-title .crumb { flex: none; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+/* 1行目の場所(パンくず)。名前の行より小さく、間を詰める。長ければ末尾を省く */
+.list-header .crumb-row { margin-bottom: -4px; font-size: 11px; line-height: 1.25; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 狭いとき(一覧のペインが 300px 未満。list.js の .narrow): ボタンの隙間を詰め、件数は数字だけにする */
 .pane-list.narrow .list-title { gap: 4px; }
 .pane-list.narrow .list-title .title-right { gap: 1px; }
 .pane-list.narrow .lbtn { width: 24px; }
 .pane-list.narrow .crumb { flex: none; margin-left: 3px; font-size: 11px; }
-.pane-list.narrow .crumb-path, .pane-list.narrow .crumb-sep { display: none; }
 .pane-list.narrow .count { font-size: 0; }
 .pane-list.narrow .count::after { content: attr(data-short); font-size: 11px; }
 .search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 30px; border: 1px solid var(--border);

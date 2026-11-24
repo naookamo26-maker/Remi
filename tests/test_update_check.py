@@ -1,5 +1,6 @@
 """更新の確認(設計書 §2.5)。"""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -166,3 +167,73 @@ def test_with_real_git(tmp_path):
     git("commit", "-q", "-am", "remi", cwd=origin)
     assert checker.check() is True
     assert (folder / "Remi.exe").read_text() == "v1"  # ファイルは書き換えない
+
+
+def test_manual_check_shows_the_update_again_after_later(tmp_path):
+    """「今すぐ同期」で確かめたときは、「あとで」で隠していても、更新があれば帯を出し直す。定期の確認は隠したまま。"""
+    bus = EventBus()
+    events = []
+    bus.on(events.append)
+    checker = FixedChecker(True)
+    w = UpdateWatcher(bus, checker, tmp_path / uc.UPDATE_BATCH)
+    w.check_now()
+    w.dismiss()
+    w.check_now()  # 定期の確認: 隠したまま
+    assert not w.state()["available"] and len(events) == 1
+    w.check_now(manual=True)
+    assert w.state()["available"] and [e["available"] for e in events] == [True, True]
+    checker.result = False
+    w.dismiss()
+    w.check_now(manual=True)  # 更新がなければ、出し直さない
+    assert [e["available"] for e in events] == [True, True, False]
+
+
+def test_checks_do_not_overlap(tmp_path):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    count = []
+
+    class Slow:
+        folder = Path(".")
+
+        def check(self):
+            count.append(1)
+            started.set()
+            release.wait(5)
+            return True
+
+    w = UpdateWatcher(EventBus(), Slow(), tmp_path / uc.UPDATE_BATCH)
+    t = threading.Thread(target=w.check_now)
+    t.start()
+    assert started.wait(5)
+    w.check_now(manual=True)  # 確認中: 重ねて確かめない
+    release.set()
+    t.join(5)
+    assert len(count) == 1 and w.available
+
+
+def test_sync_now_checks_for_updates_in_the_background(db, tmp_path):
+    import threading
+
+    from remi.context import AppContext
+    from remi.server.api import RemiApi
+
+    ran = threading.Event()
+
+    class Checker:
+        folder = Path(".")
+
+        def check(self):
+            ran.set()
+            return True
+
+    api = RemiApi(AppContext(db), None)
+    api.syncNow()  # 更新の確認がない(開発中)ときも、普通に動く
+    api.updates = UpdateWatcher(api.ctx.bus, Checker(), tmp_path / uc.UPDATE_BATCH)
+    assert api.syncNow() == {"started": False}
+    assert ran.wait(5)
+    end = time.monotonic() + 5
+    while time.monotonic() < end and not api.getUpdateState()["available"]:
+        time.sleep(0.02)
+    assert api.getUpdateState()["available"]

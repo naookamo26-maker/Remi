@@ -1256,7 +1256,10 @@ class RemiApi:
     @rpc
     def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> dict[str, bool]:  # noqa: N802,N803
         """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。
-        前の「今すぐ同期」がまだ終わっていなければ受け付けない(started が False)。"""
+        前の「今すぐ同期」がまだ終わっていなければ受け付けない(started が False)。
+        ツールの更新も一緒に確かめる(待たずに裏で行い、あれば updateAvailable で届く。設計書 §2.5)。"""
+        if self.updates is not None:
+            self.updates.check_in_background()
         if self.sync is None:
             return {"started": False}
         started = self.sync.sync_now()

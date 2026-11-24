@@ -788,6 +788,20 @@ class RemiApi:
         return result
 
     @rpc
+    def checkIssueExists(self, serverId: int, issueId: int) -> dict[str, bool]:  # noqa: N802,N803
+        """Redmineにそのチケットがあるか。404(削除された・存在しない)だけ False にする。
+        権限がない(403)・つながらないなど、分からないときは True(呼び出し側は、Redmineのページを開いて確かめてもらう)。"""
+        try:
+            self._client(serverId).issue(int(issueId))
+        except RedmineError as e:
+            return {"exists": e.code != ErrorCode.NOT_FOUND}
+        except RpcError:
+            raise
+        except Exception:  # noqa: BLE001 - 確かめられなければ、あるものとして扱う
+            log.info("checkIssueExists failed for %s/%s", serverId, issueId, exc_info=True)
+        return {"exists": True}
+
+    @rpc
     def takePendingOpen(self) -> dict[str, int] | None:  # noqa: N802
         """通知を押して起動されたときに開くチケット。画面が起動時に1回だけ受け取る。"""
         if not self.pending_open:

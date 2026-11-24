@@ -508,10 +508,24 @@ body.reordering .tree .node-error { display: none; }
 .progress { display: inline-flex; align-items: center; gap: 8px; }
 .progress .bar { width: 120px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
 .progress .bar > span { display: block; height: 100%; background: var(--success); }
-.version-event { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 2px; }
-.version-event .time { color: var(--text-muted); font-size: 11px; margin-right: 6px; }
-.version-event .issue-ref { font-weight: 600; }
-.version-event .subject { color: var(--text); }
+/* 変化の記録は、1件を1枚のカードにする。列は固定(左: 種別のチップと時刻 / 右: #番号と件名)で、件名の長さに左右されない。
+   左端の帯とチップの色は、種別ごとに同じ(追加=緑・外れた=赤・完了=青・再開=黄) */
+.version-timeline { gap: 4px; }
+.version-event { --kind: var(--border); display: grid; grid-template-columns: 64px 1fr; column-gap: 12px; align-items: center;
+  text-align: left; padding: 4px 12px 4px 10px; border: 1px solid var(--border); border-left: 4px solid var(--kind);
+  border-radius: 6px; background: var(--window); color: var(--text); font-size: 13px; }
+.version-event.added { --kind: var(--success); }
+.version-event.removed { --kind: var(--danger); }
+.version-event.closed { --kind: var(--accent); }
+.version-event.reopened { --kind: var(--warning-fg); }
+.version-event .side { display: flex; flex-direction: column; align-items: stretch; gap: 1px; }
+.version-event .badge { font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; border-radius: 10px;
+  color: var(--text); background: color-mix(in srgb, var(--kind) var(--chip-mix), var(--border)); }
+.version-event.added .badge, .version-event.removed .badge, .version-event.closed .badge, .version-event.reopened .badge {
+  color: var(--kind); background: color-mix(in srgb, var(--kind) var(--chip-mix), transparent); }
+.version-event .time { color: var(--text-muted); font-size: 10.5px; line-height: 14px; text-align: center; }
+.version-event .body { line-height: 1.4; overflow-wrap: anywhere; min-width: 0; }
+.version-event .issue-ref { font-weight: 600; margin-right: 6px; }
 .version-event.added .issue-ref { color: var(--success); }
 .version-event.removed .issue-ref { color: var(--danger); }
 

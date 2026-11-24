@@ -413,7 +413,10 @@ class App {
       await call("getConversation", { serverId, issueId, limit: 1, markRead: false });
       await this.openIssue(serverId, issueId, { note });
     } catch {
-      this.openIssueInBrowser(serverId, issueId, note);
+      // Remi が持っていないチケット: 削除されていたら、Redmine のページ(見つかりません)を開かずに知らせる
+      const { exists } = await call("checkIssueExists", { serverId, issueId }).catch(() => ({ exists: true }));
+      if (exists) this.openIssueInBrowser(serverId, issueId, note);
+      else toast(t("conv.issueGone", { id: issueId }));
     }
   }
 

@@ -52,24 +52,31 @@ export function renderVersion(d, app) {
   return root;
 }
 
-/** 変化1件の行。チケットの番号を押すと、そのチケットを開く */
+/** 変化1件のカード。左: 種別のチップと時刻、右: チケットの番号(押すとそのチケットを開く)と件名、または変化の文章 */
 function eventLine(e, d, app) {
-  const issue = e.issueId ? h("a", { href: "#", class: "issue-ref", onClick: (ev) => {
-    ev.preventDefault();
-    if (e.kind === "removed") app.openIssueOrBrowser(d.serverId, e.issueId);
-    else app.openIssue(d.serverId, e.issueId);
-  } }, `#${e.issueId}`) : null;
-  const subject = e.subject ? h("span", { class: "subject" }, ` ${e.subject}`) : null;
-  const text = {
-    created: () => [t("version.event.created")],
-    added: () => [issue, subject, " ", t("version.event.added")],
-    removed: () => [issue, subject, " ", t("version.event.removed")],
-    closed: () => [issue, subject, " ", t("version.event.closed")],
-    reopened: () => [issue, subject, " ", t("version.event.reopened")],
-    due_date: () => [t("version.event.dueDate", { old: e.oldValue || t("version.noDueDate"), new: e.newValue || t("version.noDueDate") })],
-    status: () => [t("version.event.status", { old: t(`version.status.${e.oldValue}`), new: t(`version.status.${e.newValue}`) })],
-    name: () => [t("version.event.name", { old: e.oldValue || "", new: e.newValue || "" })],
-  }[e.kind]?.() || [e.kind];
-  return h("div", { class: `system version-event ${e.kind}` },
-    h("span", { class: "time" }, formatTime(e.createdAt)), " ", ...text);
+  const badge = { created: "created", added: "added", removed: "removed", closed: "closed", reopened: "reopened",
+    due_date: "dueDate", status: "status", name: "name" }[e.kind];
+  // 「追加」などのチップだけでは足りない文章は、ツールチップと読み上げで補う
+  const phrase = { added: "version.event.added", removed: "version.event.removed", closed: "version.event.closed",
+    reopened: "version.event.reopened", created: "version.event.created" }[e.kind];
+  const chip = h("span", { class: "badge", title: phrase ? t(phrase) : null }, badge ? t(`version.badge.${badge}`) : e.kind);
+  let body;
+  if (e.issueId) {
+    const issue = h("a", { href: "#", class: "issue-ref", onClick: (ev) => {
+      ev.preventDefault();
+      if (e.kind === "removed") app.openIssueOrBrowser(d.serverId, e.issueId);
+      else app.openIssue(d.serverId, e.issueId);
+    } }, `#${e.issueId}`);
+    body = [issue, e.subject ? h("span", { class: "subject" }, e.subject) : null];
+  } else {
+    body = [{
+      created: () => t("version.event.created"),
+      due_date: () => t("version.event.dueDate", { old: e.oldValue || t("version.noDueDate"), new: e.newValue || t("version.noDueDate") }),
+      status: () => t("version.event.status", { old: t(`version.status.${e.oldValue}`), new: t(`version.status.${e.newValue}`) }),
+      name: () => t("version.event.name", { old: e.oldValue || "", new: e.newValue || "" }),
+    }[e.kind]?.() || e.kind];
+  }
+  return h("div", { class: `version-event ${e.kind}` },
+    h("div", { class: "side" }, chip, h("span", { class: "time" }, formatTime(e.createdAt))),
+    h("div", { class: "body" }, ...body));
 }

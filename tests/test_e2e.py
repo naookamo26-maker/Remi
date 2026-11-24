@@ -1912,3 +1912,43 @@ def test_selection_back_and_forward(page, remi, fake):
     page.keyboard.press("Alt+ArrowLeft")
     playwright_api.expect(conv.locator("h1")).to_contain_text("ポータルの要望")
     assert not page.errors, page.errors
+
+
+def test_version_event_cards_and_deleted_issue_link(page, remi, fake):
+    """変化の記録はカード(チップ+時刻 / #番号+件名)で出す。削除されたチケットのリンクは、ページを開かずトーストで知らせる"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    long_subject = "とても長い件名" * 20
+    fake.add_issue(20, 2, long_subject, assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    # バージョンから外れ、そのチケット自体が削除された(Remi のキャッシュからも消えた)
+    fake.set_version(20, None)
+    del fake.issues[20]
+    remi.ctx.issues.delete_issues(1, [20])
+    remi.sync.sync_now()
+    card = conv.locator(".version-event.removed")
+    playwright_api.expect(card).to_be_visible(timeout=20000)
+    # カード: 左にチップと時刻、右に #番号 と件名(長くても、カードの幅からはみ出さない)
+    playwright_api.expect(card.locator(".side .badge")).to_have_text("外れた")
+    playwright_api.expect(card.locator(".side .time")).to_have_text(re.compile(r"\d+:\d+"))
+    playwright_api.expect(card.locator(".body .issue-ref")).to_have_text("#20")
+    box, parent = card.bounding_box(), conv.locator(".version-timeline").bounding_box()
+    assert box["x"] + box["width"] <= parent["x"] + parent["width"] + 1
+    # 押すと、Redmine を開かずに、削除された旨をトーストで知らせる
+    opened = []
+    remi.api.openRedmine = lambda url, external=False: opened.append(url)  # noqa: ARG005
+    card.locator(".issue-ref").click()
+    playwright_api.expect(page.locator(".toast")).to_have_text("#20 は Redmine にありません(削除された可能性があります)")
+    assert not opened
+    assert not page.errors, page.errors

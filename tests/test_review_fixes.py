@@ -203,3 +203,35 @@ def test_purge_keeps_the_open_issue(stale):
     assert sync.purge_stale(keep={1}) == 0  # いま開いているチケットは消さない
     assert issues.get(sid, 1) is not None
     assert sync.purge_stale() == 1
+
+
+def test_check_issue_exists_only_says_no_for_404(db):
+    """チケットの有無の確認: 404 のときだけ「ない」。権限なし・つながらないなど、分からないときは「ある」(Redmineのページで確かめてもらう)"""
+    from remi.api.errors import ErrorCode, RedmineError
+    from remi.context import AppContext
+    from remi.server.api import RemiApi, RpcError
+
+    class Client:
+        def __init__(self, error=None):
+            self.error = error
+
+        def issue(self, issue_id):
+            if self.error:
+                raise self.error
+            return {"id": issue_id}
+
+    class Sync:
+        def __init__(self, client):
+            self._client = client
+
+        def client(self, server_id):
+            return self._client
+
+    api = RemiApi(AppContext(db), None)
+    with pytest.raises(RpcError):  # サーバーにつながっていない
+        api.checkIssueExists(1, 5)
+    for error, exists in [(None, True), (RedmineError(ErrorCode.NOT_FOUND, 404, ""), False),
+                          (RedmineError(ErrorCode.FORBIDDEN, 403, ""), True),
+                          (RedmineError(ErrorCode.SERVER_ERROR, 500, ""), True), (OSError("down"), True)]:
+        api.sync = Sync(Client(error))
+        assert api.checkIssueExists(1, 5) == {"exists": exists}, error

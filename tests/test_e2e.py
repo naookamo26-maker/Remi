@@ -1940,7 +1940,7 @@ def test_version_event_cards_and_deleted_issue_link(page, remi, fake):
     card = conv.locator(".version-event.removed")
     playwright_api.expect(card).to_be_visible(timeout=20000)
     # カード: 左にチップと時刻、右に #番号 と件名(長くても、カードの幅からはみ出さない)
-    playwright_api.expect(card.locator(".side .badge")).to_have_text("外れた")
+    playwright_api.expect(card.locator(".side .badge")).to_have_text("除外")
     playwright_api.expect(card.locator(".side .time")).to_have_text(re.compile(r"\d+:\d+"))
     playwright_api.expect(card.locator(".body .issue-ref")).to_have_text("#20")
     box, parent = card.bounding_box(), conv.locator(".version-timeline").bounding_box()
@@ -1951,4 +1951,67 @@ def test_version_event_cards_and_deleted_issue_link(page, remi, fake):
     card.locator(".issue-ref").click()
     playwright_api.expect(page.locator(".toast")).to_have_text("#20 は Redmine にありません(削除された可能性があります)")
     assert not opened
+    assert not page.errors, page.errors
+
+
+def test_version_events_filter_by_kind(page, remi, fake):
+    """バージョンの変化の記録は、種類のボタン(1つだけ選ぶ)で絞り込める。選択は、別のバージョンを開くと「すべて」に戻る"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_version(6, 2, "v2.0")
+    fake.add_issue(20, 2, "最初のチケット", assigned_to=7, version=5)
+    fake.add_issue(22, 2, "終わらせるチケット", assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    filt = conv.locator(".version-filter")
+    playwright_api.expect(filt).to_have_count(0)  # 変化がないときは、絞り込みを出さない
+    # 追加・完了・除外・期日の変更が届く
+    fake.add_issue(21, 2, "追加されたチケット", assigned_to=7)
+    fake.set_version(21, 5)
+    fake.set_version(20, None)
+    fake.set_status(22, 5)
+    fake.update_version(5, due_date="2026-12-24")
+    remi.sync.sync_now()
+    cards = conv.locator(".version-event")
+    playwright_api.expect(conv.locator(".version-event.removed")).to_be_visible(timeout=20000)
+    labels = filt.locator("button")
+    playwright_api.expect(labels).to_have_text(["すべて", "追加", "完了", "除外", "その他"])  # 履歴にある種類だけ。並びは決まっている
+    playwright_api.expect(filt.get_by_role("button", name="すべて")).to_have_attribute("aria-pressed", "true")
+    total = cards.count()
+    assert total >= 4
+    # 1つだけ選ぶ: 選んだ種類のカードだけが残る
+    filt.get_by_role("button", name="除外").click()
+    playwright_api.expect(cards).to_have_count(1)
+    playwright_api.expect(cards.first).to_contain_text("#20")
+    playwright_api.expect(filt.get_by_role("button", name="除外")).to_have_attribute("aria-pressed", "true")
+    filt.get_by_role("button", name="追加").click()  # ほかを選ぶと、前の選択は外れる
+    playwright_api.expect(cards).to_have_count(1)
+    playwright_api.expect(cards.first).to_contain_text("#21")
+    playwright_api.expect(filt.get_by_role("button", name="除外")).to_have_attribute("aria-pressed", "false")
+    filt.get_by_role("button", name="その他").click()
+    playwright_api.expect(cards.first).to_contain_text("期日")
+    # 絞り込んだまま新しい変化が届いても、選択は保たれる
+    filt.get_by_role("button", name="追加").click()
+    fake.add_issue(23, 2, "もう1つ追加", assigned_to=7)
+    fake.set_version(23, 5)
+    remi.sync.sync_now()
+    playwright_api.expect(cards).to_have_count(2, timeout=20000)
+    playwright_api.expect(filt.get_by_role("button", name="追加")).to_have_attribute("aria-pressed", "true")
+    # 別のバージョンを開いて戻ると、「すべて」に戻る
+    page.locator(".tree .node.version", has_text="v2.0").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v2.0")
+    version.click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    playwright_api.expect(filt.get_by_role("button", name="すべて")).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(cards).to_have_count(total + 1)
     assert not page.errors, page.errors

@@ -1,10 +1,14 @@
-// 右ペイン: バージョンを選んだときの表示。概要(期日・進捗)と、変化の記録(追加・外れた・完了など)(設計書 §5.5)
+// 右ペイン: バージョンを選んだときの表示。概要(期日・進捗)と、変化の記録(追加・完了・再開・除外など)(設計書 §5.5)
 import { h, spinner } from "./dom.js";
 import { dayKey, formatDateHeading, formatTime, t } from "./i18n.js";
 import { icon } from "./icons.js";
 
 /** @typedef {import("./types.js").VersionData} VersionData */
 /** @typedef {import("./types.js").VersionEvent} VersionEvent */
+
+/** 絞り込みのボタンの並び。「その他」は、期日・ステータス・名前・作成の変化 */
+const FILTER_KINDS = ["added", "closed", "reopened", "removed", "other"];
+const kindGroup = (e) => (FILTER_KINDS.includes(e.kind) ? e.kind : "other");
 
 /**
  * @param {VersionData} d
@@ -31,22 +35,45 @@ export function renderVersion(d, app) {
     meta);
 
   const tl = h("div", { class: "timeline version-timeline", tabindex: "0", "aria-label": t("version.changes") });
-  if (!d.events.length) tl.append(h("div", { class: "system" }, t("version.noChanges")));
-  let lastDay = "";
-  let unreadShown = false;
-  for (const e of d.events) {
-    const k = dayKey(e.createdAt);
-    if (k && k !== lastDay) {
-      lastDay = k;
-      tl.append(h("div", { class: "date-sep", role: "separator" }, formatDateHeading(e.createdAt)));
+  // 種類での絞り込み(1つだけ選ぶ)。覚えておくのは、画面を開いている間だけ。別のバージョンを開くと「すべて」に戻る
+  const key = `${d.serverId}:${d.versionId}`;
+  if (app.versionFilter?.key !== key) app.versionFilter = { key, kind: "all" };
+  const present = FILTER_KINDS.filter((k) => d.events.some((e) => kindGroup(e) === k));
+  if (!present.includes(app.versionFilter.kind)) app.versionFilter.kind = "all";
+  const fillTimeline = () => {
+    const kind = app.versionFilter.kind;
+    tl.replaceChildren();
+    if (!d.events.length) tl.append(h("div", { class: "system" }, t("version.noChanges")));
+    let lastDay = "";
+    let unreadShown = false;
+    for (const e of d.events) {
+      if (kind !== "all" && kindGroup(e) !== kind) continue;
+      const k = dayKey(e.createdAt);
+      if (k && k !== lastDay) {
+        lastDay = k;
+        tl.append(h("div", { class: "date-sep", role: "separator" }, formatDateHeading(e.createdAt)));
+      }
+      if (e.unread && !unreadShown) {
+        unreadShown = true;
+        tl.append(h("div", { class: "unread-sep", role: "separator" }, t("version.unreadFrom")));
+      }
+      tl.append(eventLine(e, d, app));
     }
-    if (e.unread && !unreadShown) {
-      unreadShown = true;
-      tl.append(h("div", { class: "unread-sep", role: "separator" }, t("version.unreadFrom")));
-    }
-    tl.append(eventLine(e, d, app));
-  }
-  const root = h("div", { class: "version-view" }, header, tl);
+  };
+  fillTimeline();
+  const buttons = ["all", ...present].map((kind) => h("button", { type: "button", dataset: { kind }, title: t(`version.filter.${kind}`),
+    "aria-pressed": String(kind === app.versionFilter.kind),
+    onClick: () => {
+      app.versionFilter.kind = kind;
+      for (const b of buttons) b.setAttribute("aria-pressed", String(b.dataset.kind === kind));
+      fillTimeline();
+      tl.scrollTop = tl.scrollHeight;
+    } }, t(`version.filter.${kind}`)));
+  // 種類が1つだけ(または変化がない)ときは、絞り込む意味がないので出さない
+  const filter = present.length > 1
+    ? h("div", { class: "version-filter" }, h("div", { class: "segmented", role: "group", "aria-label": t("version.filter.label") }, buttons))
+    : null;
+  const root = h("div", { class: "version-view" }, header, filter, tl);
   // 最新の変化が見えるように、最下部から表示する
   requestAnimationFrame(() => { tl.scrollTop = tl.scrollHeight; });
   return root;

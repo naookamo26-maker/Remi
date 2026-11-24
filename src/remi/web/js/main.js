@@ -24,6 +24,8 @@ class App {
     this.current = null; // {serverId, issueId}
     this.pendingRead = false;
     /** 選択状態の「戻る・進む」の履歴(設計書 §3.2)。戻る・進むで状態を再現している間は、積まない */
+    /** バージョンの変化の記録の、種類での絞り込み(開いている間だけ覚える。version-view.js) */
+    this.versionFilter = null;
     this.navHistory = new NavHistory();
     this.navRestoring = false;
     this.navQueue = Promise.resolve();

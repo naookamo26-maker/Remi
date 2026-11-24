@@ -509,7 +509,10 @@ body.reordering .tree .node-error { display: none; }
 .progress .bar { width: 120px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
 .progress .bar > span { display: block; height: 100%; background: var(--success); }
 /* 変化の記録は、1件を1枚のカードにする。列は固定(左: 種別のチップと時刻 / 右: #番号と件名)で、件名の長さに左右されない。
-   左端の帯とチップの色は、種別ごとに同じ(追加=緑・外れた=赤・完了=青・再開=黄) */
+   左端の帯とチップの色は、種別ごとに同じ(追加=緑・除外=赤・完了=青・再開=黄) */
+/* 種類での絞り込み(チケット一覧の上部と同じ部品。狭いときは文字を省略して、マウスを乗せると全文を出す) */
+.version-filter { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--window); }
+.version-filter .segmented button { min-height: 22px; min-width: 0; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; }
 .version-timeline { gap: 4px; }
 .version-event { --kind: var(--border); display: grid; grid-template-columns: 64px 1fr; column-gap: 12px; align-items: center;
   text-align: left; padding: 4px 12px 4px 10px; border: 1px solid var(--border); border-left: 4px solid var(--kind);

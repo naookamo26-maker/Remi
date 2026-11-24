@@ -265,6 +265,29 @@ export class Tree {
     }
   }
 
+  /** そのプロジェクトが見えるように、畳んでいるサーバー・親プロジェクトを開く(開閉の保存も更新する) */
+  revealProject(serverId, projectId) {
+    const server = this.data?.servers.find((s) => s.serverId === serverId);
+    if (!server) return;
+    const path = (nodes) => {
+      for (const n of nodes) {
+        if (n.projectId === projectId) return [n];
+        const r = path(n.children);
+        if (r) return [n, ...r];
+      }
+      return null;
+    };
+    const chain = path(server.projects);
+    if (!chain) return;
+    const set = this.collapsed;
+    const before = set.size;
+    set.delete(`s:${serverId}`);
+    for (const n of chain.slice(0, -1)) set.delete(`p:${serverId}:${n.projectId}`);
+    if (set.size === before) return;
+    this.app.settings = { ...this.app.settings, tree_collapsed: [...set] };
+    this.app.saveSetting("tree_collapsed", [...set]);
+  }
+
   toggle(token) {
     const set = this.collapsed;
     if (set.has(token)) set.delete(token);

@@ -1815,3 +1815,34 @@ def test_list_header_shows_the_location_on_its_own_line(page, remi, fake):
     page.locator(".tree .node", has_text="すべて").first.click()
     playwright_api.expect(row).to_be_hidden()  # サーバー全体: 場所はない(1行で出す)
     playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
+
+
+def test_open_issue_from_notification_updates_tree_and_list_selection(page, remi, fake):
+    """通知から開いたとき、左(ツリー)・真ん中(一覧)の選択も、そのチケットに合わせる"""
+    seed(fake)
+    fake.add_project(3, "社内ポータル")
+    fake.add_issue(30, 3, "ポータルの要望", watchers={ME})
+    add_server(remi, fake)
+    end = time.monotonic() + 20
+    while time.monotonic() < end and remi.ctx.issues.get(1, 30) is None:
+        time.sleep(0.1)
+    page.goto(remi.server.start_url)
+    tree = page.locator(".tree")
+    selected = tree.locator(".node.selected")
+    conv = page.locator(".pane-conv")
+    # 別のプロジェクトを選んでいる → チケットのプロジェクトに切り替わり、一覧にそのチケットが強調される
+    tree.locator(".node", has_text="社内ポータル").click()
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内ポータル")
+    remi.ctx.bus.publish("openIssue", serverId=1, issueId=10)
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    playwright_api.expect(selected).to_have_text(re.compile("受注管理"))
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("受注管理")
+    playwright_api.expect(page.locator(".issue.selected")).to_contain_text("CSVが文字化けする")
+    # そのチケットが今の一覧にあるときは、選択を変えない(サーバー全体のまま)
+    tree.locator(".node", has_text="社内Redmine").first.click()
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
+    remi.ctx.bus.publish("openIssue", serverId=1, issueId=30)
+    playwright_api.expect(conv.locator("h1")).to_contain_text("ポータルの要望", timeout=15000)
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
+    playwright_api.expect(page.locator(".issue.selected")).to_contain_text("ポータルの要望")
+    assert not page.errors, page.errors

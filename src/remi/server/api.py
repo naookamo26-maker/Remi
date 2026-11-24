@@ -764,6 +764,7 @@ class RemiApi:
         m = self.ctx.masters
         result = {
             "serverId": serverId, "serverName": server.name, "issueId": issueId, "subject": row.subject,
+            "projectId": row.project_id,
             "url": server.issue_url(issueId), "breadcrumb": crumbs,
             "tracker": m.names(serverId, "tracker").get(row.tracker_id or -1, ""),
             "status": m.names(serverId, "status").get(row.status_id or -1, ""),

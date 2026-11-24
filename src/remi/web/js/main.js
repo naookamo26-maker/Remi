@@ -68,7 +68,7 @@ class App {
     await this.list.refresh();
     // 通知を押して起動されたときは、そのチケットを開く
     const target = await call("takePendingOpen").catch(() => null);
-    if (target) this.openIssue(target.serverId, target.issueId);
+    if (target) this.openIssue(target.serverId, target.issueId, { reveal: true });
   }
 
   // --- 更新のお知らせ(設計書 §2.5) -------------------------------------------------------
@@ -252,7 +252,11 @@ class App {
     return { title: names.at(-1) || "", crumb: names.slice(0, -1).join(" › ") || server?.name || "" };
   }
 
-  async openIssue(serverId, issueId, { note = null } = {}) {
+  /**
+   * @param {{note?: string|null, reveal?: boolean}} [opts] reveal: 通知から開くとき、左(ツリー)・真ん中(一覧)の選択も
+   *   そのチケットに合わせる
+   */
+  async openIssue(serverId, issueId, { note = null, reveal = false } = {}) {
     this.current = { serverId, issueId };
     this.list.markSelected();
     call("setOpenIssue", { serverId, issueId }).catch(() => {});
@@ -262,7 +266,27 @@ class App {
       toast(t(`errors.${e.code || "connection_failed"}`));
       return;
     }
+    if (reveal) await this.revealIssue(serverId, issueId);
     if (note) this.conv.scrollToNote(note);
+  }
+
+  // 開いたチケットが今の一覧になければ、そのプロジェクトを選び直す(あれば選択は変えず、一覧で強調するだけ)
+  async revealIssue(serverId, issueId) {
+    const cur = this.current;
+    const data = this.conv.data;
+    if (!cur || cur.serverId !== serverId || cur.issueId !== issueId) return; // 読み込み中に別の表示へ移った
+    const inList = () => this.list.raw.some((i) => i.serverId === serverId && i.issueId === issueId);
+    if (!inList() && data?.serverId === serverId && data.issueId === issueId && data.projectId) {
+      this.selection = { kind: "project", serverId, projectId: data.projectId };
+      this.tree.revealProject(serverId, data.projectId);
+      this.tree.render();
+      try {
+        await this.list.refresh();
+      } catch (e) {
+        console.warn("list refresh failed", e);
+      }
+    }
+    this.list.markSelected();
   }
 
   // 開いている会話を閉じる。送信前の添付は捨てる。keepDraft なら、入力中でまだ保存していない文章を
@@ -435,7 +459,7 @@ class App {
         if (e.error) toast(t("conv.sendFailed"));
         break;
       case "openIssue":
-        this.openIssue(e.serverId, e.issueId);
+        this.openIssue(e.serverId, e.issueId, { reveal: true });
         break;
       case "watchFinished":
         if (e.error) {

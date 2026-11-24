@@ -764,6 +764,7 @@ class RemiApi:
         m = self.ctx.masters
         result = {
             "serverId": serverId, "serverName": server.name, "issueId": issueId, "subject": row.subject,
+            "projectId": row.project_id,
             "url": server.issue_url(issueId), "breadcrumb": crumbs,
             "tracker": m.names(serverId, "tracker").get(row.tracker_id or -1, ""),
             "status": m.names(serverId, "status").get(row.status_id or -1, ""),
@@ -785,6 +786,20 @@ class RemiApi:
                 self.ctx.issues.mark_read(serverId, issueId)
                 self.ctx.bus.publish("dataChanged", serverId=serverId, issueIds=[issueId], source="read")
         return result
+
+    @rpc
+    def checkIssueExists(self, serverId: int, issueId: int) -> dict[str, bool]:  # noqa: N802,N803
+        """Redmineにそのチケットがあるか。404(削除された・存在しない)だけ False にする。
+        権限がない(403)・つながらないなど、分からないときは True(呼び出し側は、Redmineのページを開いて確かめてもらう)。"""
+        try:
+            self._client(serverId).issue(int(issueId))
+        except RedmineError as e:
+            return {"exists": e.code != ErrorCode.NOT_FOUND}
+        except RpcError:
+            raise
+        except Exception:  # noqa: BLE001 - 確かめられなければ、あるものとして扱う
+            log.info("checkIssueExists failed for %s/%s", serverId, issueId, exc_info=True)
+        return {"exists": True}
 
     @rpc
     def takePendingOpen(self) -> dict[str, int] | None:  # noqa: N802
@@ -1255,7 +1270,10 @@ class RemiApi:
     @rpc
     def syncNow(self, serverId: int | None = None, issueId: int | None = None) -> dict[str, bool]:  # noqa: N802,N803
         """今すぐ同期する(F5・同期ボタン)。開いているチケットを渡すと、そのコメントも取り直す。
-        前の「今すぐ同期」がまだ終わっていなければ受け付けない(started が False)。"""
+        前の「今すぐ同期」がまだ終わっていなければ受け付けない(started が False)。
+        ツールの更新も一緒に確かめる(待たずに裏で行い、あれば updateAvailable で届く。設計書 §2.5)。"""
+        if self.updates is not None:
+            self.updates.check_in_background()
         if self.sync is None:
             return {"started": False}
         started = self.sync.sync_now()

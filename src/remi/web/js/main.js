@@ -7,6 +7,7 @@ import { confirmDialog } from "./ui.js";
 import { setCatalog, t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { IssueList } from "./list.js";
+import { NavHistory } from "./nav-history.js";
 import { Tabs } from "./tabs.js";
 import { selectionKey, Tree } from "./tree.js";
 
@@ -22,6 +23,12 @@ class App {
     this.selection = { kind: boot.hasServers ? "all" : "none" };
     this.current = null; // {serverId, issueId}
     this.pendingRead = false;
+    /** 選択状態の「戻る・進む」の履歴(設計書 §3.2)。戻る・進むで状態を再現している間は、積まない */
+    /** バージョンの変化の記録の、種類での絞り込み(開いている間だけ覚える。version-view.js) */
+    this.versionFilter = null;
+    this.navHistory = new NavHistory();
+    this.navRestoring = false;
+    this.navQueue = Promise.resolve();
     this.tree = new Tree(this);
     this.list = new IssueList(this);
     this.conv = new Conversation(this);
@@ -45,6 +52,8 @@ class App {
     this.applyMineSide();
     darkQuery.addEventListener("change", () => this.applyTheme());
     addEventListener("keydown", (e) => this.onGlobalKey(e));
+    // マウスの「戻る」「進む」ボタン(ボタン3・4)。WebView2 の既定の動き(画面の履歴を戻る)は止める
+    addEventListener("mouseup", (e) => this.onMouseNav(e));
     addEventListener("focus", () => this.onActive(true));
     addEventListener("blur", () => this.onActive(false));
     document.addEventListener("visibilitychange", () => {
@@ -68,7 +77,8 @@ class App {
     await this.list.refresh();
     // 通知を押して起動されたときは、そのチケットを開く
     const target = await call("takePendingOpen").catch(() => null);
-    if (target) this.openIssue(target.serverId, target.issueId);
+    this.recordNav();
+    if (target) this.openIssue(target.serverId, target.issueId, { reveal: true });
   }
 
   // --- 更新のお知らせ(設計書 §2.5) -------------------------------------------------------
@@ -163,7 +173,13 @@ class App {
   // --- キー操作 ---------------------------------------------------------------------
   onGlobalKey(e) {
     const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey;
-    if (ctrl && !e.shiftKey && e.key.toLowerCase() === "w" && this.tabs.closeActive()) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      // 入力欄・ダイアログの中では、文字の操作を優先する
+      const el = e.target;
+      if (el instanceof Element && (el.closest("input, textarea, select, [contenteditable]") || document.querySelector(".backdrop"))) return;
+      e.preventDefault();
+      this.navigate(e.key === "ArrowLeft" ? -1 : 1);
+    } else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "w" && this.tabs.closeActive()) {
       e.preventDefault(); // Redmineのタブを閉じる
     } else if (e.key === "F5" || (ctrl && e.key.toLowerCase() === "r")) {
       // 画面の再読み込み(送信前の添付などを失う)はせず、Redmineから読み込み直す。Shift・Ctrl付きも同じ
@@ -204,6 +220,85 @@ class App {
     else this.showSelectionView();
     this.tree.render();
     this.list.refresh();
+    this.recordNav();
+  }
+
+  // --- 選択状態の戻る・進む ---------------------------------------------------------------
+  navState() {
+    return { selection: { ...this.selection }, current: this.current ? { ...this.current } : null };
+  }
+
+  /** 今の状態(ツリーの選択と開いているチケット)を履歴に積む */
+  recordNav() {
+    if (this.navRestoring || !this.boot.hasServers) return;
+    this.navHistory.push(this.navState());
+    this.tree.setNav(this.navHistory);
+  }
+
+  onMouseNav(e) {
+    if (e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    if (!document.body.classList.contains("browse")) this.navigate(e.button === 3 ? -1 : 1);
+  }
+
+  /** 履歴を delta(-1: 戻る・1: 進む)だけ動かす。なくなったプロジェクト・バージョン・チケットの履歴は飛ばす。
+   *  続けて押されたときは、捨てずに順に処理する */
+  navigate(delta) {
+    this.navQueue = this.navQueue.then(() => this.navigateNow(delta)).catch((e) => console.warn("navigate failed", e));
+    return this.navQueue;
+  }
+
+  async navigateNow(delta) {
+    const h = this.navHistory;
+    try {
+      for (let i = h.index + delta; i >= 0 && i < h.entries.length; i += delta) {
+        if (!(await this.navAvailable(h.entries[i]))) continue;
+        h.index = i;
+        await this.restoreNav(h.entries[i]);
+        break;
+      }
+    } finally {
+      this.tree.setNav(h);
+    }
+  }
+
+  // その履歴の選択(プロジェクトなど)と、開いていたチケットが、いまも使えるか
+  async navAvailable({ selection: sel, current }) {
+    const data = this.tree.data;
+    if (!data) return false;
+    const server = data.servers.find((s) => s.serverId === sel.serverId);
+    if (sel.kind === "none") return false;
+    if (sel.serverId && !server) return false;
+    if ((sel.kind === "project" || sel.kind === "roadmap") && !this.tree.findProject(sel.serverId, sel.projectId)) return false;
+    if (sel.kind === "version" && !this.tree.findVersion(sel.serverId, sel.versionId)) return false;
+    if (!current) return true;
+    try {
+      await call("getConversation", { serverId: current.serverId, issueId: current.issueId, limit: 1, markRead: false });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async restoreNav({ selection: sel, current }) {
+    this.navRestoring = true;
+    try {
+      this.selection = { ...sel };
+      if (sel.kind === "version") {
+        this.tree.failedVersions.delete(sel.versionId);
+        call("fetchVersion", { serverId: sel.serverId, versionId: sel.versionId }).catch(() => {});
+      }
+      if (sel.projectId) this.tree.revealProject(sel.serverId, sel.projectId);
+      this.tree.render();
+      const listing = this.list.refresh().catch((e) => console.warn("list refresh failed", e));
+      if (current) await this.openIssue(current.serverId, current.issueId);
+      else if (this.current) this.closeIssue({ keepDraft: true });
+      else this.showSelectionView();
+      await listing;
+      this.list.markSelected();
+    } finally {
+      this.navRestoring = false;
+    }
   }
 
   // 選んでいたバージョンがツリーから消えた(ウォッチをやめた・削除された)ら、そのサーバーを選び直す
@@ -252,7 +347,11 @@ class App {
     return { title: names.at(-1) || "", crumb: names.slice(0, -1).join(" › ") || server?.name || "" };
   }
 
-  async openIssue(serverId, issueId, { note = null } = {}) {
+  /**
+   * @param {{note?: string|null, reveal?: boolean}} [opts] reveal: 通知から開くとき、左(ツリー)・真ん中(一覧)の選択も
+   *   そのチケットに合わせる
+   */
+  async openIssue(serverId, issueId, { note = null, reveal = false } = {}) {
     this.current = { serverId, issueId };
     this.list.markSelected();
     call("setOpenIssue", { serverId, issueId }).catch(() => {});
@@ -262,7 +361,28 @@ class App {
       toast(t(`errors.${e.code || "connection_failed"}`));
       return;
     }
+    if (reveal) await this.revealIssue(serverId, issueId);
+    if (this.current?.serverId === serverId && this.current.issueId === issueId) this.recordNav();
     if (note) this.conv.scrollToNote(note);
+  }
+
+  // 開いたチケットが今の一覧になければ、そのプロジェクトを選び直す(あれば選択は変えず、一覧で強調するだけ)
+  async revealIssue(serverId, issueId) {
+    const cur = this.current;
+    const data = this.conv.data;
+    if (!cur || cur.serverId !== serverId || cur.issueId !== issueId) return; // 読み込み中に別の表示へ移った
+    const inList = () => this.list.raw.some((i) => i.serverId === serverId && i.issueId === issueId);
+    if (!inList() && data?.serverId === serverId && data.issueId === issueId && data.projectId) {
+      this.selection = { kind: "project", serverId, projectId: data.projectId };
+      this.tree.revealProject(serverId, data.projectId);
+      this.tree.render();
+      try {
+        await this.list.refresh();
+      } catch (e) {
+        console.warn("list refresh failed", e);
+      }
+    }
+    this.list.markSelected();
   }
 
   // 開いている会話を閉じる。送信前の添付は捨てる。keepDraft なら、入力中でまだ保存していない文章を
@@ -275,6 +395,7 @@ class App {
     call("setOpenIssue", { serverId: null, issueId: null }).catch(() => {});
     this.showSelectionView();
     this.list.render(); // 閉じたら、既読になったチケットを並び順にも反映する(開いている間は、位置を動かさない)
+    this.recordNav();
   }
 
   // チケットを開いていないときの右ペイン: バージョンを選んでいれば、その変化の記録。ほかは案内だけ
@@ -294,7 +415,10 @@ class App {
       await call("getConversation", { serverId, issueId, limit: 1, markRead: false });
       await this.openIssue(serverId, issueId, { note });
     } catch {
-      this.openIssueInBrowser(serverId, issueId, note);
+      // Remi が持っていないチケット: 削除されていたら、Redmine のページ(見つかりません)を開かずに知らせる
+      const { exists } = await call("checkIssueExists", { serverId, issueId }).catch(() => ({ exists: true }));
+      if (exists) this.openIssueInBrowser(serverId, issueId, note);
+      else toast(t("conv.issueGone", { id: issueId }));
     }
   }
 
@@ -435,7 +559,7 @@ class App {
         if (e.error) toast(t("conv.sendFailed"));
         break;
       case "openIssue":
-        this.openIssue(e.serverId, e.issueId);
+        this.openIssue(e.serverId, e.issueId, { reveal: true });
         break;
       case "watchFinished":
         if (e.error) {

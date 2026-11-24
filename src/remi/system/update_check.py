@@ -1,5 +1,6 @@
 """更新の確認(設計書 §2.5)。Remi.exe のフォルダが SVN・Git で管理されているとき、サーバーに新しいファイルがあるかを
-起動したときと6時間ごとに確かめ、あれば画面に知らせる(updateAvailable)。取り込みと再起動は Remi-update.bat が行う。
+起動したときと6時間ごと、「今すぐ同期」(同期ボタン・F5)のときに確かめ、あれば画面に知らせる(updateAvailable)。
+取り込みと再起動は Remi-update.bat が行う。
 
 - ファイルは書き換えない。Git は `git fetch`(サーバーの情報だけを取り込む)のあと、手元より新しいコミットのうち
   このフォルダに関係するものがあるかを数える。SVN は `svn status -u` で、サーバーで新しくなったものがあるかを問い合わせる
@@ -98,6 +99,7 @@ class UpdateWatcher:
         self.dismissed = False
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._checking = threading.Lock()  # 確認は同時に1つだけ(コマンドは時間がかかり、重ねても意味がない)
 
     def state(self) -> dict[str, bool]:
         with self._lock:
@@ -108,23 +110,36 @@ class UpdateWatcher:
         with self._lock:
             self.dismissed = True
 
-    def check_now(self) -> None:
-        if self.checker is None:
-            return
+    def check_now(self, manual: bool = False) -> None:
+        """確かめる。manual(「今すぐ同期」)で更新があれば、「あとで」で隠していても出し直す(利用者が自分で確かめたので)。"""
+        if self.checker is None or not self._checking.acquire(blocking=False):
+            return  # 確認中なら、その結果に任せる
         try:
-            found = self.checker.check()
-        except Exception:  # noqa: BLE001 - 確かめられなくても、Remi は止めない
-            log.exception("update check failed")
-            return
+            try:
+                found = self.checker.check()
+            except Exception:  # noqa: BLE001 - 確かめられなくても、Remi は止めない
+                log.exception("update check failed")
+                return
+        finally:
+            self._checking.release()
         if found is None:
             return
         with self._lock:
             changed = found != self.available
+            if manual and found and self.dismissed:
+                self.dismissed = False
+                changed = True
             self.available = found
         if changed:
             if found:
                 log.info("an update is available in %s", self.checker.folder)
             self.bus.publish("updateAvailable", **self.state())
+
+    def check_in_background(self) -> None:
+        """「今すぐ同期」と一緒に確かめる。コマンドに時間がかかるので、待たずに別のスレッドで行う(結果は updateAvailable で届く)。"""
+        if self.checker is None or self._stop.is_set():
+            return
+        threading.Thread(target=self.check_now, kwargs={"manual": True}, name="update-check-manual", daemon=True).start()
 
     def start(self) -> None:
         if self.checker is None:

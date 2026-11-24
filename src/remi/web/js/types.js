@@ -137,6 +137,7 @@
  * @property {string} serverName
  * @property {number} issueId
  * @property {string} subject
+ * @property {number} projectId           チケットのプロジェクト
  * @property {string} url                  RedmineでのチケットのURL
  * @property {string[]} breadcrumb         親から順のプロジェクト名
  * @property {string} tracker

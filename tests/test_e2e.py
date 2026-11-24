@@ -1815,3 +1815,203 @@ def test_list_header_shows_the_location_on_its_own_line(page, remi, fake):
     page.locator(".tree .node", has_text="すべて").first.click()
     playwright_api.expect(row).to_be_hidden()  # サーバー全体: 場所はない(1行で出す)
     playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
+
+
+def test_open_issue_from_notification_updates_tree_and_list_selection(page, remi, fake):
+    """通知から開いたとき、左(ツリー)・真ん中(一覧)の選択も、そのチケットに合わせる"""
+    seed(fake)
+    fake.add_project(3, "社内ポータル")
+    fake.add_issue(30, 3, "ポータルの要望", watchers={ME})
+    add_server(remi, fake)
+    end = time.monotonic() + 20
+    while time.monotonic() < end and remi.ctx.issues.get(1, 30) is None:
+        time.sleep(0.1)
+    page.goto(remi.server.start_url)
+    tree = page.locator(".tree")
+    selected = tree.locator(".node.selected")
+    conv = page.locator(".pane-conv")
+    # 別のプロジェクトを選んでいる → チケットのプロジェクトに切り替わり、一覧にそのチケットが強調される
+    tree.locator(".node", has_text="社内ポータル").click()
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内ポータル")
+    remi.ctx.bus.publish("openIssue", serverId=1, issueId=10)
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    playwright_api.expect(selected).to_have_text(re.compile("受注管理"))
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("受注管理")
+    playwright_api.expect(page.locator(".issue.selected")).to_contain_text("CSVが文字化けする")
+    # そのチケットが今の一覧にあるときは、選択を変えない(サーバー全体のまま)
+    tree.locator(".node", has_text="社内Redmine").first.click()
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
+    remi.ctx.bus.publish("openIssue", serverId=1, issueId=30)
+    playwright_api.expect(conv.locator("h1")).to_contain_text("ポータルの要望", timeout=15000)
+    playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
+    playwright_api.expect(page.locator(".issue.selected")).to_contain_text("ポータルの要望")
+    assert not page.errors, page.errors
+
+
+def test_selection_back_and_forward(page, remi, fake):
+    """ツリーの選択と開いたチケットを、戻る・進む(ボタン・Alt+←/→・マウスのボタン)でたどれる"""
+    seed(fake)
+    fake.add_project(3, "社内ポータル")
+    fake.add_issue(30, 3, "ポータルの要望", watchers={ME})
+    add_server(remi, fake)
+    end = time.monotonic() + 20
+    while time.monotonic() < end and remi.ctx.issues.get(1, 30) is None:
+        time.sleep(0.1)
+    page.goto(remi.server.start_url)
+    header = page.locator(".tree-header")
+    back = header.get_by_role("button", name=re.compile("^前の選択に戻る"))
+    forward = header.get_by_role("button", name=re.compile("^次の選択に進む"))
+    title = page.locator(".list-title h2")
+    conv = page.locator(".pane-conv")
+    # 文字は出さない(アイコンだけ。説明は aria-label とツールチップ)
+    playwright_api.expect(header.locator(".label")).to_have_count(0)
+    playwright_api.expect(back).to_be_disabled()
+    playwright_api.expect(forward).to_be_disabled()
+
+    page.locator(".tree .node", has_text="社内ポータル").click()
+    playwright_api.expect(title).to_have_text("社内ポータル")
+    page.locator(".tree .node", has_text="受注管理").click()
+    playwright_api.expect(title).to_have_text("受注管理")
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    playwright_api.expect(back).to_be_enabled()
+    playwright_api.expect(forward).to_be_disabled()
+
+    # 戻る(ボタン): チケットを開く前の状態 → 左・真ん中・右が前の状態に揃う
+    back.click()
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    playwright_api.expect(title).to_have_text("受注管理")
+    # Alt+←: 前のプロジェクト
+    page.locator(".tree").focus()
+    page.keyboard.press("Alt+ArrowLeft")
+    playwright_api.expect(title).to_have_text("社内ポータル")
+    playwright_api.expect(page.locator(".tree .node.selected")).to_contain_text("社内ポータル")
+    # マウスの「進む」ボタン(ボタン4)
+    page.evaluate("dispatchEvent(new MouseEvent('mouseup', {button: 4, cancelable: true}))")
+    playwright_api.expect(title).to_have_text("受注管理")
+    # 進む(ボタン)でチケットを開いた状態に戻る。一覧でも強調される
+    forward.click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    playwright_api.expect(page.locator(".issue.selected")).to_contain_text("CSVが文字化けする")
+    playwright_api.expect(forward).to_be_disabled()
+    # マウスの「戻る」ボタン(ボタン3)
+    page.evaluate("dispatchEvent(new MouseEvent('mouseup', {button: 3, cancelable: true}))")
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    playwright_api.expect(forward).to_be_enabled()  # 戻る処理が終わった印(処理中の操作は履歴に積まない)
+
+    # 戻ったあとに新しく選ぶと、進む側の履歴は捨てる
+    page.locator(".tree .node", has_text="社内ポータル").click()
+    playwright_api.expect(title).to_have_text("社内ポータル")
+    playwright_api.expect(forward).to_be_disabled()
+
+    # 入力欄の中の Alt+← は、履歴を戻さない
+    page.locator(".issue", has_text="ポータルの要望").click()
+    box = conv.get_by_role("textbox", name="コメント")
+    playwright_api.expect(box).to_be_visible(timeout=15000)
+    box.focus()
+    page.keyboard.press("Alt+ArrowLeft")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("ポータルの要望")
+    assert not page.errors, page.errors
+
+
+def test_version_event_cards_and_deleted_issue_link(page, remi, fake):
+    """変化の記録はカード(チップ+時刻 / #番号+件名)で出す。削除されたチケットのリンクは、ページを開かずトーストで知らせる"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    long_subject = "とても長い件名" * 20
+    fake.add_issue(20, 2, long_subject, assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    # バージョンから外れ、そのチケット自体が削除された(Remi のキャッシュからも消えた)
+    fake.set_version(20, None)
+    del fake.issues[20]
+    remi.ctx.issues.delete_issues(1, [20])
+    remi.sync.sync_now()
+    card = conv.locator(".version-event.removed")
+    playwright_api.expect(card).to_be_visible(timeout=20000)
+    # カード: 左にチップと時刻、右に #番号 と件名(長くても、カードの幅からはみ出さない)
+    playwright_api.expect(card.locator(".side .badge")).to_have_text("除外")
+    playwright_api.expect(card.locator(".side .time")).to_have_text(re.compile(r"\d+:\d+"))
+    playwright_api.expect(card.locator(".body .issue-ref")).to_have_text("#20")
+    box, parent = card.bounding_box(), conv.locator(".version-timeline").bounding_box()
+    assert box["x"] + box["width"] <= parent["x"] + parent["width"] + 1
+    # 押すと、Redmine を開かずに、削除された旨をトーストで知らせる
+    opened = []
+    remi.api.openRedmine = lambda url, external=False: opened.append(url)  # noqa: ARG005
+    card.locator(".issue-ref").click()
+    playwright_api.expect(page.locator(".toast")).to_have_text("#20 は Redmine にありません(削除された可能性があります)")
+    assert not opened
+    assert not page.errors, page.errors
+
+
+def test_version_events_filter_by_kind(page, remi, fake):
+    """バージョンの変化の記録は、種類のボタン(1つだけ選ぶ)で絞り込める。選択は、別のバージョンを開くと「すべて」に戻る"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_version(6, 2, "v2.0")
+    fake.add_issue(20, 2, "最初のチケット", assigned_to=7, version=5)
+    fake.add_issue(22, 2, "終わらせるチケット", assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    filt = conv.locator(".version-filter")
+    playwright_api.expect(filt).to_have_count(0)  # 変化がないときは、絞り込みを出さない
+    # 追加・完了・除外・期日の変更が届く
+    fake.add_issue(21, 2, "追加されたチケット", assigned_to=7)
+    fake.set_version(21, 5)
+    fake.set_version(20, None)
+    fake.set_status(22, 5)
+    fake.update_version(5, due_date="2026-12-24")
+    remi.sync.sync_now()
+    cards = conv.locator(".version-event")
+    playwright_api.expect(conv.locator(".version-event.removed")).to_be_visible(timeout=20000)
+    labels = filt.locator("button")
+    playwright_api.expect(labels).to_have_text(["すべて", "追加", "完了", "除外", "その他"])  # 履歴にある種類だけ。並びは決まっている
+    playwright_api.expect(filt.get_by_role("button", name="すべて")).to_have_attribute("aria-pressed", "true")
+    total = cards.count()
+    assert total >= 4
+    # 1つだけ選ぶ: 選んだ種類のカードだけが残る
+    filt.get_by_role("button", name="除外").click()
+    playwright_api.expect(cards).to_have_count(1)
+    playwright_api.expect(cards.first).to_contain_text("#20")
+    playwright_api.expect(filt.get_by_role("button", name="除外")).to_have_attribute("aria-pressed", "true")
+    filt.get_by_role("button", name="追加").click()  # ほかを選ぶと、前の選択は外れる
+    playwright_api.expect(cards).to_have_count(1)
+    playwright_api.expect(cards.first).to_contain_text("#21")
+    playwright_api.expect(filt.get_by_role("button", name="除外")).to_have_attribute("aria-pressed", "false")
+    filt.get_by_role("button", name="その他").click()
+    playwright_api.expect(cards.first).to_contain_text("期日")
+    # 絞り込んだまま新しい変化が届いても、選択は保たれる
+    filt.get_by_role("button", name="追加").click()
+    fake.add_issue(23, 2, "もう1つ追加", assigned_to=7)
+    fake.set_version(23, 5)
+    remi.sync.sync_now()
+    playwright_api.expect(cards).to_have_count(2, timeout=20000)
+    playwright_api.expect(filt.get_by_role("button", name="追加")).to_have_attribute("aria-pressed", "true")
+    # 別のバージョンを開いて戻ると、「すべて」に戻る
+    page.locator(".tree .node.version", has_text="v2.0").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v2.0")
+    version.click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    playwright_api.expect(filt.get_by_role("button", name="すべて")).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(cards).to_have_count(total + 1)
+    assert not page.errors, page.errors

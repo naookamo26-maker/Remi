@@ -29,14 +29,18 @@ export class Tree {
     this.el = h("ul", { class: "tree", role: "tree", "aria-label": t("tree.label"), tabindex: "0",
       onKeydown: (e) => this.onKey(e) });
     this.status = h("div", { class: "sync-status", "aria-live": "polite" });
-    // 設定・サーバーの追加・同期は、ツリーの上に並べる(アプリ名とバージョンはウィンドウのタイトルに出す)
-    const textButton = (iconName, label, onClick) => h("button", { type: "button", class: "btn", title: label, onClick },
-      icon(iconName), h("span", { class: "label" }, label));
+    // 設定・サーバーの追加・選択の戻る/進む・同期は、ツリーの上にアイコンだけで並べる(アプリ名とバージョンはウィンドウのタイトルに出す)
+    const iconButton = (iconName, label, onClick) => h("button", { type: "button", class: "btn icon-only", title: label,
+      "aria-label": label, onClick }, icon(iconName));
+    this.backButton = iconButton("back", t("tree.navBack"), () => app.navigate(-1));
+    this.forwardButton = iconButton("forward", t("tree.navForward"), () => app.navigate(1));
+    this.backButton.disabled = this.forwardButton.disabled = true;
     this.root = h("nav", { class: "pane pane-tree", "aria-label": t("tree.label") },
       h("header", { class: "tree-header" },
-        textButton("gear", t("tree.settings"), () => app.openSettings()),
-        textButton("plus", t("tree.addServer"), () => app.openServerDialog()),
+        iconButton("gear", t("tree.settings"), () => app.openSettings()),
+        iconButton("plus", t("tree.addServer"), () => app.openServerDialog()),
         h("span", { class: "spacer" }),
+        this.backButton, this.forwardButton,
         this.syncButton = h("button", { type: "button", class: "btn icon-only", title: t("tree.syncNow"),
           "aria-label": t("tree.syncNow"), onClick: () => app.syncNow() }, icon("sync"))),
       this.el,
@@ -263,6 +267,12 @@ export class Tree {
       toast(t(`errors.${err.code || "connection_failed"}`));
       this.refresh().catch(() => {});
     }
+  }
+
+  /** 戻る・進むボタンの押せる状態 */
+  setNav({ canBack, canForward }) {
+    this.backButton.disabled = !canBack;
+    this.forwardButton.disabled = !canForward;
   }
 
   /** そのプロジェクトが見えるように、畳んでいるサーバー・親プロジェクトを開く(開閉の保存も更新する) */

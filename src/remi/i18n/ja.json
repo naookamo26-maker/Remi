@@ -345,6 +345,8 @@
   "tree.lastSynced": "最終同期 {time}",
   "tree.loadingInitial": "チケットを取得しています…",
   "tree.loadingVersions": "ロードマップを取得しています…",
+  "tree.navBack": "前の選択に戻る(Alt+←)",
+  "tree.navForward": "次の選択に進む(Alt+→)",
   "tree.noAccess": "このプロジェクトへのアクセス権がありません",
   "tree.noServers": "サーバーが未登録です。上の「サーバーを追加」から登録してください。",
   "tree.openServerSettings": "サーバー設定を開く",

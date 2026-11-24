@@ -349,6 +349,8 @@
   "tree.lastSynced": "Last synced {time}",
   "tree.loadingInitial": "Loading issues…",
   "tree.loadingVersions": "Loading roadmaps…",
+  "tree.navBack": "Back to the previous selection (Alt+Left)",
+  "tree.navForward": "Forward to the next selection (Alt+Right)",
   "tree.noAccess": "You do not have access to this project",
   "tree.noServers": "No servers yet. Use “Add server” above.",
   "tree.openServerSettings": "Open server settings",

@@ -1846,3 +1846,69 @@ def test_open_issue_from_notification_updates_tree_and_list_selection(page, remi
     playwright_api.expect(page.locator(".list-title h2")).to_have_text("社内Redmine")
     playwright_api.expect(page.locator(".issue.selected")).to_contain_text("ポータルの要望")
     assert not page.errors, page.errors
+
+
+def test_selection_back_and_forward(page, remi, fake):
+    """ツリーの選択と開いたチケットを、戻る・進む(ボタン・Alt+←/→・マウスのボタン)でたどれる"""
+    seed(fake)
+    fake.add_project(3, "社内ポータル")
+    fake.add_issue(30, 3, "ポータルの要望", watchers={ME})
+    add_server(remi, fake)
+    end = time.monotonic() + 20
+    while time.monotonic() < end and remi.ctx.issues.get(1, 30) is None:
+        time.sleep(0.1)
+    page.goto(remi.server.start_url)
+    header = page.locator(".tree-header")
+    back = header.get_by_role("button", name=re.compile("^前の選択に戻る"))
+    forward = header.get_by_role("button", name=re.compile("^次の選択に進む"))
+    title = page.locator(".list-title h2")
+    conv = page.locator(".pane-conv")
+    # 文字は出さない(アイコンだけ。説明は aria-label とツールチップ)
+    playwright_api.expect(header.locator(".label")).to_have_count(0)
+    playwright_api.expect(back).to_be_disabled()
+    playwright_api.expect(forward).to_be_disabled()
+
+    page.locator(".tree .node", has_text="社内ポータル").click()
+    playwright_api.expect(title).to_have_text("社内ポータル")
+    page.locator(".tree .node", has_text="受注管理").click()
+    playwright_api.expect(title).to_have_text("受注管理")
+    page.locator(".issue", has_text="CSVが文字化けする").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    playwright_api.expect(back).to_be_enabled()
+    playwright_api.expect(forward).to_be_disabled()
+
+    # 戻る(ボタン): チケットを開く前の状態 → 左・真ん中・右が前の状態に揃う
+    back.click()
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    playwright_api.expect(title).to_have_text("受注管理")
+    # Alt+←: 前のプロジェクト
+    page.locator(".tree").focus()
+    page.keyboard.press("Alt+ArrowLeft")
+    playwright_api.expect(title).to_have_text("社内ポータル")
+    playwright_api.expect(page.locator(".tree .node.selected")).to_contain_text("社内ポータル")
+    # マウスの「進む」ボタン(ボタン4)
+    page.evaluate("dispatchEvent(new MouseEvent('mouseup', {button: 4, cancelable: true}))")
+    playwright_api.expect(title).to_have_text("受注管理")
+    # 進む(ボタン)でチケットを開いた状態に戻る。一覧でも強調される
+    forward.click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("CSVが文字化けする", timeout=15000)
+    playwright_api.expect(page.locator(".issue.selected")).to_contain_text("CSVが文字化けする")
+    playwright_api.expect(forward).to_be_disabled()
+    # マウスの「戻る」ボタン(ボタン3)
+    page.evaluate("dispatchEvent(new MouseEvent('mouseup', {button: 3, cancelable: true}))")
+    playwright_api.expect(conv.locator("h1")).to_have_count(0)
+    playwright_api.expect(forward).to_be_enabled()  # 戻る処理が終わった印(処理中の操作は履歴に積まない)
+
+    # 戻ったあとに新しく選ぶと、進む側の履歴は捨てる
+    page.locator(".tree .node", has_text="社内ポータル").click()
+    playwright_api.expect(title).to_have_text("社内ポータル")
+    playwright_api.expect(forward).to_be_disabled()
+
+    # 入力欄の中の Alt+← は、履歴を戻さない
+    page.locator(".issue", has_text="ポータルの要望").click()
+    box = conv.get_by_role("textbox", name="コメント")
+    playwright_api.expect(box).to_be_visible(timeout=15000)
+    box.focus()
+    page.keyboard.press("Alt+ArrowLeft")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("ポータルの要望")
+    assert not page.errors, page.errors

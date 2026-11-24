@@ -116,16 +116,12 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .splitter:hover::after, .splitter.dragging::after { background: var(--accent); }
 
 /* ---- ツリー ---- */
-/* 設定・サーバーの追加・同期のボタン。幅が足りないときは「サーバーを追加」の文言から省略する
-   (アイコンとツールチップは残す) */
+/* 設定・サーバーの追加・選択の戻る/進む・同期のボタン(アイコンだけ。説明はツールチップと aria-label) */
 .tree-header { display: flex; align-items: center; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
 .tree-header .spacer { flex: 1; }
 .tree-header .btn { min-height: 30px; padding: 0 8px; gap: 4px; min-width: 0; flex: none; }
-.tree-header .btn:nth-child(2) { flex: 0 1 auto; }
-.tree-header .btn .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-header .btn.icon-only { width: 30px; padding: 0; flex: none; }
 .pane-tree { container-type: inline-size; }
-@container (max-width: 236px) { .tree-header .btn:nth-child(2) .label { display: none; } }
 .tree { flex: 1 1 auto; overflow: auto; padding: 8px 6px; }
 .tree ul { list-style: none; margin: 0; padding: 0; }
 .node { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 8px; border-radius: 6px; cursor: pointer;

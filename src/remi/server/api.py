@@ -52,6 +52,7 @@ SETTABLE: dict[str, Callable[[Any], bool]] = {
     "version_status": lambda v: _valid_status_filter(v),
     "list_filter": lambda v: _valid_list_filter(v),
     "list_sort": lambda v: _valid_sort(v),
+    "list_presets": lambda v: issue_list.valid_presets(v),
     "unread_first": lambda v: isinstance(v, bool),
     "list_density": lambda v: v in ("standard", "compact"),
     "allow_external_images": lambda v: isinstance(v, bool),

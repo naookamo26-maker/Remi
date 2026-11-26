@@ -1323,6 +1323,128 @@ def test_sort_menu_tags_and_chip(page, remi, fake):
     assert not page.errors, page.errors
 
 
+def test_list_presets_save_apply_and_manage(page, remi, fake):
+    """一覧の条件に名前を付けて保存し、メニューから呼び出す。管理のダイアログで、名前の変更・上書き・削除ができる(設計書 §5.1)。"""
+    _open_list(page, remi, fake)
+    preset = page.locator(".lbtn-preset")
+    playwright_api.expect(preset).to_have_attribute("aria-pressed", "false")
+    preset.click()
+    playwright_api.expect(page.locator(".menu")).to_contain_text("保存したプリセットはありません")
+    playwright_api.expect(page.get_by_role("menuitem", name="プリセットの管理…")).to_be_disabled()
+    page.get_by_role("menuitem", name="いまの条件を保存…").click()
+    dialog = page.locator(".dialog")
+    save = dialog.get_by_role("button", name="保存", exact=True)
+    playwright_api.expect(save).to_be_disabled()  # 名前が空のうちは保存できない
+    dialog.get_by_label("名前").fill("既定")
+    dialog.get_by_role("button", name="保存", exact=True).click()
+    # いまの条件と同じなので、ボタンに色が付き、チップの先頭に名前が出る
+    playwright_api.expect(preset).to_have_attribute("aria-pressed", "true")
+    playwright_api.expect(page.locator(".cchip-preset")).to_have_text("既定")
+
+    # 関係・並べ替えを変えると、プリセットとは違う条件になる
+    page.locator(".segmented button[data-value=assigned]").click()
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("menuitemcheckbox", name="期日").click()
+    playwright_api.expect(page.locator(".cchip-preset")).to_have_count(0)
+    playwright_api.expect(preset).to_have_attribute("aria-pressed", "false")
+    preset.click()
+    page.get_by_role("menuitem", name="いまの条件を保存…").click()
+    playwright_api.expect(dialog.locator(".pchips")).to_contain_text("関係: 担当")
+    playwright_api.expect(dialog.locator(".pchips")).to_contain_text("並べ替え: 期日 ↑")
+    dialog.get_by_label("名前").fill("担当(期日順)")
+    dialog.get_by_role("button", name="保存", exact=True).click()
+    playwright_api.expect(page.locator(".cchip-preset")).to_have_text("担当(期日順)")
+    saved = remi.ctx.settings.get("list_presets")
+    assert [p["name"] for p in saved] == ["既定", "担当(期日順)"]
+    assert saved[1]["relation"] == "assigned" and saved[1]["sort"] == {"key": "due", "desc": False}
+
+    # 呼び出すと、条件がそのまま戻る
+    preset.click()
+    page.get_by_role("menuitemcheckbox", name="既定").click()
+    playwright_api.expect(page.locator(".cchip-preset")).to_have_text("既定")
+    playwright_api.expect(page.locator(".segmented button[data-value=all]")).to_have_attribute("aria-pressed", "true")
+    assert remi.ctx.settings.get("list_sort") == {"key": "updated", "desc": True}
+    assert remi.ctx.settings.get("relation_filter") == "all"
+    preset.click()
+    playwright_api.expect(page.get_by_role("menuitemcheckbox", name="既定")).to_have_attribute("aria-checked", "true")
+    page.get_by_role("menuitemcheckbox", name="担当(期日順)").click()
+    playwright_api.expect(page.locator(".cchip-sort")).to_contain_text("並べ替え: 期日 ↑")
+    assert remi.ctx.settings.get("relation_filter") == "assigned"
+
+    # 同じ名前で保存すると、その場所で上書きする
+    page.locator(".lbtn-sort").click()
+    page.get_by_role("button", name="降順 ↓").click()
+    preset.click()
+    page.get_by_role("menuitem", name="いまの条件を保存…").click()
+    dialog.get_by_label("名前").fill("担当(期日順)")
+    playwright_api.expect(dialog).to_contain_text("同じ名前のプリセットを上書きします。")
+    dialog.get_by_role("button", name="保存", exact=True).click()
+    saved = remi.ctx.settings.get("list_presets")
+    assert [p["name"] for p in saved] == ["既定", "担当(期日順)"] and saved[1]["sort"]["desc"] is True
+
+    # 管理: 名前の変更(重複は不可)・並べ替え・削除
+    preset.click()
+    page.get_by_role("menuitem", name="プリセットの管理…").click()
+    manage = page.locator(".dialog", has_text="プリセットの管理")
+    rows = manage.locator(".preset-list li")
+    playwright_api.expect(rows).to_have_count(2)
+    rows.nth(1).get_by_role("button", name="名前の変更").click()
+    rename = page.locator(".dialog", has_text="プリセットの名前の変更")
+    rename.get_by_label("名前").fill("既定")
+    playwright_api.expect(rename).to_contain_text("同じ名前のプリセットがあります。")
+    playwright_api.expect(rename.get_by_role("button", name="保存")).to_be_disabled()
+    rename.get_by_label("名前").fill("担当")
+    rename.get_by_role("button", name="保存").click()
+    playwright_api.expect(rows.nth(1).locator(".pname")).to_have_text("担当")
+    rows.nth(1).locator(".grip").focus()
+    page.keyboard.press("Alt+ArrowUp")
+    playwright_api.expect(rows.nth(0).locator(".pname")).to_have_text("担当")
+    rows.nth(1).get_by_role("button", name="削除").click()
+    page.locator(".dialog", has_text="プリセットの削除").get_by_role("button", name="削除").click()
+    playwright_api.expect(rows).to_have_count(1)
+    assert [p["name"] for p in remi.ctx.settings.get("list_presets")] == ["担当"]
+    assert not page.errors, page.errors
+
+
+def test_list_presets_in_milestone(page, remi, fake):
+    """マイルストーンでもプリセットを使える。ステータスはマイルストーンの設定に入れ、関係は保存も変更もしない(設計書 §5.1)。"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_issue(20, 2, "開いているチケット", assigned_to=7, version=5)
+    fake.add_issue(21, 2, "終わったチケット", assigned_to=7, version=5, status_id=5)
+    remi.ctx.settings.set("list_presets", [{"name": "未完了", "search": "", "relation": "watching",
+        "status": {"mode": "open", "names": []}, "filter": {"trackers": [], "priorities": [], "assignees": [], "due": []},
+        "sort": {"key": "updated", "desc": True}}])
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)  # マイルストーンの既定は「すべて」
+    page.locator(".lbtn-preset").click()
+    page.get_by_role("menuitemcheckbox", name="未完了").click()
+    playwright_api.expect(page.locator(".issue")).to_have_count(1)
+    playwright_api.expect(page.locator(".cchip-preset")).to_have_text("未完了")
+    assert remi.ctx.settings.get("version_status") == {"mode": "open", "names": []}
+    assert remi.ctx.settings.get("relation_filter") == "watching"  # 関係はチケットの一覧に効く
+
+    # マイルストーンで保存したものは、関係を持たない
+    page.locator(".lbtn-preset").click()
+    page.get_by_role("menuitem", name="いまの条件を保存…").click()
+    dialog = page.locator(".dialog")
+    playwright_api.expect(dialog.locator(".pchips")).not_to_contain_text("関係")
+    dialog.get_by_label("名前").fill("マイルストーン")
+    dialog.get_by_role("button", name="保存", exact=True).click()
+    playwright_api.expect(dialog).to_have_count(0)
+    assert remi.ctx.settings.get("list_presets")[1]["relation"] is None
+    assert not page.errors, page.errors
+
+
 def test_unread_first_is_in_settings_dialog(page, remi, fake):
     """「未読を上に」は、一覧のヘッダではなく、全体の設定の画面にある。"""
     _open_list(page, remi, fake, closed=False)
@@ -1951,6 +2073,51 @@ def test_version_event_cards_and_deleted_issue_link(page, remi, fake):
     card.locator(".issue-ref").click()
     playwright_api.expect(page.locator(".toast")).to_have_text("#20 は Redmine にありません(削除された可能性があります)")
     assert not opened
+    assert not page.errors, page.errors
+
+
+def test_version_events_bulk_changes_are_grouped(page, remi, fake):
+    """一括で起きた同じ種類の変化は、1枚のカードにまとめる。6件以上は、先頭の5件だけを出して畳み、開閉できる(設計書 §5.5)。"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_issue(20, 2, "最初のチケット", assigned_to=7, version=5)
+    fake.add_issue(21, 2, "除外するチケット", assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    # 7件を一度に追加し、1件を除外する
+    for n in range(30, 37):
+        fake.add_issue(n, 2, f"一括のチケット{n}", assigned_to=7)
+        fake.set_version(n, 5)
+    fake.set_version(21, None)
+    remi.sync.sync_now()
+    group = conv.locator(".version-event.added.group")
+    playwright_api.expect(group).to_have_count(1, timeout=20000)
+    playwright_api.expect(conv.locator(".version-event.added")).to_have_count(1)
+    playwright_api.expect(group.locator(".side .time")).to_contain_text("7件 · ")
+    playwright_api.expect(group.locator(".issue-ref")).to_have_count(5)  # 最初は畳んで、先頭の5件だけ
+    toggle = group.get_by_role("button", name="▾ ほか 2 件を表示")
+    playwright_api.expect(toggle).to_have_attribute("aria-expanded", "false")
+    toggle.click()
+    playwright_api.expect(group.locator(".issue-ref")).to_have_count(7)
+    group.get_by_role("button", name="▴ 折りたたむ").click()
+    playwright_api.expect(group.locator(".issue-ref")).to_have_count(5)
+    # 1件だけの変化は、これまでどおりのカード
+    removed = conv.locator(".version-event.removed")
+    playwright_api.expect(removed).to_have_count(1)
+    playwright_api.expect(removed).not_to_have_class(re.compile(r"\bgroup\b"))
+    # まとめたカードの番号を押すと、そのチケットを開く
+    group.locator(".issue-ref", has_text="#30").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("一括のチケット30")
     assert not page.errors, page.errors
 
 

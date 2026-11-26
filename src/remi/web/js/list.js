@@ -3,6 +3,7 @@ import { call } from "./api.js";
 import { clear, countText, debounce, h, spinner } from "./dom.js";
 import { formatShort, t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { managePresetsDialog, savePresetDialog } from "./presets.js";
 import { RELATIONS } from "./tree.js";
 import { closeMenu, contextMenu, isMenuOpen, popover } from "./ui.js";
 
@@ -41,6 +42,7 @@ export class IssueList {
     this.filterPop = null;
     this.searchPop = null;
     this.sortMenu = null;
+    this.presetMenu = null;
     /** 並び順を決める条件(選択・検索・絞り込み・並べ替え)。変わったら、開いている間の「並びの固定」をやめて、新しい並びにする */
     this.condKey = "";
     /** ボタンを押した瞬間に、その小さなウィンドウが開いていたか(外側のクリックで閉じたあと、開き直さないため) */
@@ -61,6 +63,7 @@ export class IssueList {
     this.searchButton = button("lbtn-search", "search", () => this.openSearch(), () => this.searchPop);
     this.sortButton = button("lbtn-sort", "sort", () => this.openSortMenu(), () => this.sortMenu);
     this.filterButton = button("lbtn-filter", "filter", () => this.toggleFilter(), () => this.filterPop);
+    this.presetButton = button("lbtn-preset", "bookmark", () => this.openPresetMenu(), () => this.presetMenu);
     this.densityButton = button("lbtn-density", "density",
       () => app.saveSetting("list_density", this.compact() ? "standard" : "compact").then(() => this.render()));
     this.densityButton.setAttribute("aria-label", t("list.density"));
@@ -107,7 +110,7 @@ export class IssueList {
       h("div", { class: "list-header" },
         this.crumbRow,
         h("div", { class: "list-title" }, this.title,
-          h("span", { class: "title-right" }, this.searchButton, this.sortButton, this.filterButton, this.densityButton, this.crumb)),
+          h("span", { class: "title-right" }, this.searchButton, this.sortButton, this.filterButton, this.presetButton, this.densityButton, this.crumb)),
         this.relationGroup,
         this.chipsEl),
       this.el);
@@ -345,6 +348,8 @@ export class IssueList {
     set(this.searchButton, search, t("list.searchButton"));
     set(this.sortButton, sortOn, sortOn ? t("list.sort.current", { name: t(`list.sort.${so.key}`), dir: so.desc ? "↓" : "↑" }) : t("list.sort.label"));
     set(this.filterButton, filterOn, t("list.f.title"));
+    const preset = this.matchedPreset();
+    set(this.presetButton, !!preset, preset ? t("list.preset.current", { name: preset.name }) : t("list.preset.label"));
     const compact = this.compact();
     this.densityButton.setAttribute("aria-pressed", String(compact));
   }
@@ -380,8 +385,14 @@ export class IssueList {
 
   renderChips() {
     const chips = this.conditionChips();
+    const preset = this.matchedPreset();
     clear(this.chipsEl);
-    this.chipsEl.hidden = !chips.length;
+    this.chipsEl.hidden = !chips.length && !preset;
+    // いまの条件がプリセットと同じなら、その名前を先頭に出す(外すボタンはない。条件を変えると消える)
+    if (preset) {
+      this.chipsEl.append(h("span", { class: "cchip cchip-preset", title: t("list.preset.current", { name: preset.name }) },
+        icon("bookmark"), h("span", { class: "t" }, preset.name)));
+    }
     for (const c of chips) {
       this.chipsEl.append(h("span", { class: `cchip cchip-${c.kind}`, title: c.label },
         h("span", { class: "t" }, c.label),
@@ -406,6 +417,66 @@ export class IssueList {
     if (GROUPS.some((g) => g !== "status" && this.selected(g).length)) values.list_filter = EMPTY_FILTER;
     if (!this.sortIsDefault()) values.list_sort = DEFAULT_SORT;
     await this.save(values);
+  }
+
+  // --- プリセット(条件に名前を付けて保存したもの) ------------------------------------------
+  presets() {
+    return this.app.settings.list_presets || [];
+  }
+
+  /** ステータスの条件の文字(未完了 / クローズ済み / すべて、または個別のステータス) */
+  statusText(st) {
+    return st.names?.length ? st.names.join("・") : t(`list.f.${st.mode}`);
+  }
+
+  /** いまの条件を、プリセットの形にする。マイルストーンでは関係で絞り込まないので、関係は持たない(呼び出しても変えない) */
+  currentPreset() {
+    const st = this.status();
+    return { search: this.searchText().trim(), relation: this.version ? null : this.relationFilter(),
+      status: st.names.length ? { mode: this.statusDefault().mode, names: [...st.names] } : { mode: st.mode, names: [] },
+      filter: this.filters(), sort: this.sort() };
+  }
+
+  /** いまの条件と同じプリセット(最初のもの)。関係を持たないプリセット・マイルストーンでは、関係を比べない */
+  matchedPreset() {
+    const cur = this.currentPreset();
+    const set = (a) => JSON.stringify([...(a || [])].sort());
+    const status = (s) => (s.names?.length ? `n:${set(s.names)}` : `m:${s.mode}`);
+    return this.presets().find((p) => p.search.trim() === cur.search
+      && (p.relation === null || cur.relation === null || p.relation === cur.relation)
+      && status(p.status) === status(cur.status)
+      && Object.keys(EMPTY_FILTER).every((k) => set(p.filter[k]) === set(cur.filter[k]))
+      && p.sort.key === cur.sort.key && p.sort.desc === cur.sort.desc) || null;
+  }
+
+  /** プリセットの条件を当てる。ステータスは、いま開いている一覧(チケット・マイルストーン)のものに入れる */
+  applyPreset(p) {
+    const values = { list_search: p.search, [this.statusKey()]: { mode: p.status.mode, names: p.status.names || [] },
+      list_filter: { ...EMPTY_FILTER, ...p.filter }, list_sort: p.sort };
+    if (p.relation !== null) values.relation_filter = p.relation;
+    return this.save(values);
+  }
+
+  async savePresets(list) {
+    await this.app.saveSetting("list_presets", list);
+    this.renderButtons();
+    this.renderChips();
+  }
+
+  openPresetMenu() {
+    const presets = this.presets();
+    const matched = this.matchedPreset();
+    const b = this.presetButton.getBoundingClientRect();
+    const items = [
+      { label: t("list.preset.label"), hint: true },
+      ...(presets.length
+        ? presets.map((p) => ({ label: p.name, checked: p === matched, onClick: () => this.applyPreset(p) }))
+        : [{ label: t("list.preset.none"), hint: true }]),
+      { sep: true },
+      { label: t("list.preset.saveMenu"), onClick: () => savePresetDialog(this) },
+      { label: t("list.preset.manageMenu"), disabled: !presets.length, onClick: () => managePresetsDialog(this) },
+    ];
+    this.presetMenu = contextMenu(b.right - 230, b.bottom + 4, items);
   }
 
   // --- 検索(🔍を押したときの小さなウィンドウ) ------------------------------------------

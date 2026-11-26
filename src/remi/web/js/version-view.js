@@ -9,6 +9,30 @@ import { icon } from "./icons.js";
 /** 絞り込みのボタンの並び。「その他」は、期日・ステータス・名前・作成の変化 */
 const FILTER_KINDS = ["added", "closed", "reopened", "removed", "other"];
 const kindGroup = (e) => (FILTER_KINDS.includes(e.kind) ? e.kind : "other");
+/** 1枚のカードにまとめる、チケットの変化の種類と、まとめる時刻の幅(まとまりの最初の変化から。一括編集でも、チケットごとに数秒ずれるため) */
+const GROUP_KINDS = new Set(["added", "closed", "reopened", "removed"]);
+const GROUP_WINDOW_MS = 2 * 60 * 1000;
+/** これより多いまとまりは、最初は畳んで、先頭のこの件数だけを出す */
+const GROUP_FOLD = 5;
+
+/**
+ * 続いて起きた同じ種類のチケットの変化を、まとまりにする。日付・「ここから新しい変化」の境目では分ける
+ * @param {VersionEvent[]} events
+ * @returns {VersionEvent[][]}
+ */
+export function groupEvents(events) {
+  const groups = [];
+  let cur = null;
+  for (const e of events) {
+    const first = cur?.[0];
+    const joins = first && GROUP_KINDS.has(e.kind) && e.kind === first.kind && !!e.unread === !!first.unread
+      && dayKey(e.createdAt) === dayKey(first.createdAt)
+      && Math.abs(Date.parse(e.createdAt) - Date.parse(first.createdAt)) <= GROUP_WINDOW_MS;
+    if (joins) cur.push(e);
+    else groups.push((cur = [e]));
+  }
+  return groups;
+}
 
 /**
  * @param {VersionData} d
@@ -37,7 +61,8 @@ export function renderVersion(d, app) {
   const tl = h("div", { class: "timeline version-timeline", tabindex: "0", "aria-label": t("version.changes") });
   // 種類での絞り込み(1つだけ選ぶ)。覚えておくのは、画面を開いている間だけ。別のバージョンを開くと「すべて」に戻る
   const key = `${d.serverId}:${d.versionId}`;
-  if (app.versionFilter?.key !== key) app.versionFilter = { key, kind: "all" };
+  // 開いたまとまり(先頭の変化の ID)も、画面を開いている間だけ覚える
+  if (app.versionFilter?.key !== key) app.versionFilter = { key, kind: "all", expanded: new Set() };
   const present = FILTER_KINDS.filter((k) => d.events.some((e) => kindGroup(e) === k));
   if (!present.includes(app.versionFilter.kind)) app.versionFilter.kind = "all";
   const fillTimeline = () => {
@@ -46,8 +71,8 @@ export function renderVersion(d, app) {
     if (!d.events.length) tl.append(h("div", { class: "system" }, t("version.noChanges")));
     let lastDay = "";
     let unreadShown = false;
-    for (const e of d.events) {
-      if (kind !== "all" && kindGroup(e) !== kind) continue;
+    for (const group of groupEvents(d.events.filter((e) => kind === "all" || kindGroup(e) === kind))) {
+      const e = group[0];
       const k = dayKey(e.createdAt);
       if (k && k !== lastDay) {
         lastDay = k;
@@ -57,7 +82,7 @@ export function renderVersion(d, app) {
         unreadShown = true;
         tl.append(h("div", { class: "unread-sep", role: "separator" }, t("version.unreadFrom")));
       }
-      tl.append(eventLine(e, d, app));
+      tl.append(group.length > 1 ? groupCard(group, d, app) : eventLine(e, d, app));
     }
   };
   fillTimeline();
@@ -79,22 +104,58 @@ export function renderVersion(d, app) {
   return root;
 }
 
-/** 変化1件のカード。左: 種別のチップと時刻、右: チケットの番号(押すとそのチケットを開く)と件名、または変化の文章 */
-function eventLine(e, d, app) {
+/** 種別のチップ。「追加」などのチップだけでは足りない文章は、ツールチップと読み上げで補う */
+function kindChip(e) {
   const badge = { created: "created", added: "added", removed: "removed", closed: "closed", reopened: "reopened",
     due_date: "dueDate", status: "status", name: "name" }[e.kind];
-  // 「追加」などのチップだけでは足りない文章は、ツールチップと読み上げで補う
   const phrase = { added: "version.event.added", removed: "version.event.removed", closed: "version.event.closed",
     reopened: "version.event.reopened", created: "version.event.created" }[e.kind];
-  const chip = h("span", { class: "badge", title: phrase ? t(phrase) : null }, badge ? t(`version.badge.${badge}`) : e.kind);
+  return h("span", { class: "badge", title: phrase ? t(phrase) : null }, badge ? t(`version.badge.${badge}`) : e.kind);
+}
+
+/** チケットの番号(押すとそのチケットを開く。除外したものは、Redmine にあるかを確かめてから開く) */
+function issueRef(e, d, app) {
+  return h("a", { href: "#", class: "issue-ref", onClick: (ev) => {
+    ev.preventDefault();
+    if (e.kind === "removed") app.openIssueOrBrowser(d.serverId, e.issueId);
+    else app.openIssue(d.serverId, e.issueId);
+  } }, `#${e.issueId}`);
+}
+
+/**
+ * 一括で起きた同じ種類の変化(2件以上)を、1枚のカードにする。左: チップと「件数 · 時刻」、右: 「#番号 件名」の行。
+ * GROUP_FOLD 件より多いときは、最初は先頭だけを出して畳み、「ほか N 件を表示」「折りたたむ」で開閉する
+ */
+function groupCard(group, d, app) {
+  const first = group[0];
+  const foldable = group.length > GROUP_FOLD;
+  const expanded = app.versionFilter.expanded;
+  const rows = h("div", { class: "rows" });
+  const fill = () => {
+    const open = !foldable || expanded.has(first.eventId);
+    rows.replaceChildren(...(open ? group : group.slice(0, GROUP_FOLD)).flatMap((e) =>
+      [issueRef(e, d, app), h("span", { class: "subject" }, e.subject || "")]));
+    if (foldable) {
+      rows.append(h("button", { type: "button", class: "toggle", "aria-expanded": String(open), onClick: () => {
+        if (open) expanded.delete(first.eventId);
+        else expanded.add(first.eventId);
+        fill();
+      } }, open ? t("version.group.fold") : t("version.group.more", { count: group.length - GROUP_FOLD })));
+    }
+  };
+  fill();
+  return h("div", { class: `version-event ${first.kind} group` },
+    h("div", { class: "side" }, kindChip(first),
+      h("span", { class: "time" }, t("version.group.countTime", { count: group.length, time: formatTime(first.createdAt) }))),
+    h("div", { class: "body" }, rows));
+}
+
+/** 変化1件のカード。左: 種別のチップと時刻、右: チケットの番号(押すとそのチケットを開く)と件名、または変化の文章 */
+function eventLine(e, d, app) {
+  const chip = kindChip(e);
   let body;
   if (e.issueId) {
-    const issue = h("a", { href: "#", class: "issue-ref", onClick: (ev) => {
-      ev.preventDefault();
-      if (e.kind === "removed") app.openIssueOrBrowser(d.serverId, e.issueId);
-      else app.openIssue(d.serverId, e.issueId);
-    } }, `#${e.issueId}`);
-    body = [issue, e.subject ? h("span", { class: "subject" }, e.subject) : null];
+    body = [issueRef(e, d, app), e.subject ? h("span", { class: "subject" }, e.subject) : null];
   } else {
     body = [{
       created: () => t("version.event.created"),

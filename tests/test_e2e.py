@@ -2076,6 +2076,51 @@ def test_version_event_cards_and_deleted_issue_link(page, remi, fake):
     assert not page.errors, page.errors
 
 
+def test_version_events_bulk_changes_are_grouped(page, remi, fake):
+    """一括で起きた同じ種類の変化は、1枚のカードにまとめる。6件以上は、先頭の5件だけを出して畳み、開閉できる(設計書 §5.5)。"""
+    seed(fake)
+    fake.add_version(5, 2, "v1.0", due_date="2026-12-01")
+    fake.add_issue(20, 2, "最初のチケット", assigned_to=7, version=5)
+    fake.add_issue(21, 2, "除外するチケット", assigned_to=7, version=5)
+    add_server(remi, fake)
+    page.goto(remi.server.start_url)
+    playwright_api.expect(page.locator(".issue")).to_have_count(2, timeout=20000)
+    row = page.locator(".tree .node", has_text="基幹システム").first
+    row.hover()
+    row.locator(".node-gear").click()
+    page.get_by_role("group", name="マイルストーンを表示する").get_by_role("button", name="オン").click()
+    version = page.locator(".tree .node.version", has_text="v1.0")
+    playwright_api.expect(version).to_be_visible(timeout=20000)
+    version.click()
+    conv = page.locator(".pane-conv")
+    playwright_api.expect(conv.locator("h1")).to_contain_text("v1.0")
+    # 7件を一度に追加し、1件を除外する
+    for n in range(30, 37):
+        fake.add_issue(n, 2, f"一括のチケット{n}", assigned_to=7)
+        fake.set_version(n, 5)
+    fake.set_version(21, None)
+    remi.sync.sync_now()
+    group = conv.locator(".version-event.added.group")
+    playwright_api.expect(group).to_have_count(1, timeout=20000)
+    playwright_api.expect(conv.locator(".version-event.added")).to_have_count(1)
+    playwright_api.expect(group.locator(".side .time")).to_contain_text("7件 · ")
+    playwright_api.expect(group.locator(".issue-ref")).to_have_count(5)  # 最初は畳んで、先頭の5件だけ
+    toggle = group.get_by_role("button", name="▾ ほか 2 件を表示")
+    playwright_api.expect(toggle).to_have_attribute("aria-expanded", "false")
+    toggle.click()
+    playwright_api.expect(group.locator(".issue-ref")).to_have_count(7)
+    group.get_by_role("button", name="▴ 折りたたむ").click()
+    playwright_api.expect(group.locator(".issue-ref")).to_have_count(5)
+    # 1件だけの変化は、これまでどおりのカード
+    removed = conv.locator(".version-event.removed")
+    playwright_api.expect(removed).to_have_count(1)
+    playwright_api.expect(removed).not_to_have_class(re.compile(r"\bgroup\b"))
+    # まとめたカードの番号を押すと、そのチケットを開く
+    group.locator(".issue-ref", has_text="#30").click()
+    playwright_api.expect(conv.locator("h1")).to_contain_text("一括のチケット30")
+    assert not page.errors, page.errors
+
+
 def test_version_events_filter_by_kind(page, remi, fake):
     """バージョンの変化の記録は、種類のボタン(1つだけ選ぶ)で絞り込める。選択は、別のバージョンを開くと「すべて」に戻る"""
     seed(fake)

@@ -544,6 +544,13 @@ body.reordering .tree .node-error { display: none; }
 .version-event .issue-ref { font-weight: 600; margin-right: 6px; }
 .version-event.added .issue-ref { color: var(--success); }
 .version-event.removed .issue-ref { color: var(--danger); }
+.version-event.group { align-items: start; }
+.version-event.group .time { white-space: nowrap; }
+.version-event .rows { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; row-gap: 2px; }
+.version-event .rows .issue-ref { margin-right: 0; }
+.version-event .rows .toggle { grid-column: 1 / -1; justify-self: start; border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--accent); font-size: 12px; }
+.version-event .rows .toggle:hover { text-decoration: underline; }
 
 /* ---- コメントの編集・削除、添付の削除 ---- */
 .msg-menu { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0 6px; border-radius: 4px;

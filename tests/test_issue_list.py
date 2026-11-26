@@ -199,3 +199,37 @@ def test_mark_all_read_in_one_statement(lst):
     assert store.unread_count(1, 1) == 1
     lst.markAllRead(serverId=1, projectId=1)
     assert store.unread_count(1, 1) == 0
+
+
+def _preset(name="担当", **kw):
+    p = {"name": name, "search": "", "relation": "assigned", "status": {"mode": "open", "names": []},
+         "filter": {"trackers": [], "priorities": [], "assignees": [], "due": []}, "sort": {"key": "due", "desc": False}}
+    p.update(kw)
+    return p
+
+
+def test_list_presets_are_validated(lst):
+    """一覧の条件のプリセット(設計書 §5.1)。名前は重複なし、関係は None(マイルストーンで保存したもの)も可。"""
+    api = lst
+    assert api.getSettings()["list_presets"] == []
+    presets = [_preset(), _preset("マイルストーン", relation=None, status={"mode": "all", "names": ["新規"]})]
+    assert api.setSetting("list_presets", presets)["list_presets"] == presets
+    from remi.server.api import RpcError
+
+    bad = [
+        {"name": "x"},  # 項目が足りない
+        [_preset(), _preset()],  # 同じ名前
+        [_preset("")],  # 空の名前
+        [_preset(" 前後に空白 ")],
+        [_preset("x" * 61)],  # 長すぎる名前
+        [_preset(relation="other")],
+        [_preset(status={"mode": "weird"})],
+        [_preset(filter={"due": ["x"]})],
+        [_preset(sort={"key": "x"})],
+        [_preset(search=5)],
+        [_preset(str(i)) for i in range(51)],  # 多すぎる
+    ]
+    for value in bad:
+        with pytest.raises(RpcError):
+            api.setSetting("list_presets", value)
+    assert api.getSettings()["list_presets"] == presets

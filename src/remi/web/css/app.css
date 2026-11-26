@@ -8,7 +8,7 @@
   --bubble-private: #FFFDF0; --bubble-private-border: #EADFA8;
   --code-bg: #F6F8FA; --code-border: #E1E4E8; --mention-bg: #C3DBF5; --mention-fg: #0B4F8A;
   --danger: #A40E26; --success: #116329; --warning-bg: #FFF8C5; --warning-fg: #6F4E00;
-  --c-filter: #1B7F4B; --c-sort: #7A4BC2; /* 絞り込み(緑)・並べ替え(紫)の色。検索は --accent */
+  --c-filter: #1B7F4B; --c-sort: #7A4BC2; --c-preset: #B4610A; /* 絞り込み(緑)・並べ替え(紫)・プリセット(オレンジ)の色。検索は --accent */
   /* 状態の丸(接続中・接続できない)。文字用の --success / --danger は、読めるようライトは暗く、ダークは明るくしているので、
      丸に使うと印象が変わる。丸は、どちらの背景でも3:1以上ある同じ色にする */
   --dot-ok: #2DA44E; --dot-error: #E5484D;
@@ -25,7 +25,7 @@
   --bubble-private: #332D1A; --bubble-private-border: #5C5130;
   --code-bg: #16171A; --code-border: #3A3D42; --mention-bg: #23466E; --mention-fg: #CFE6FF;
   --danger: #FF8A80; --success: #6FDD8B; --warning-bg: #3D3000; --warning-fg: #F2CC60;
-  --c-filter: #5FD3A0; --c-sort: #B79BEA;
+  --c-filter: #5FD3A0; --c-sort: #B79BEA; --c-preset: #F0A955;
   --dot-ok: #2DA44E; --dot-error: #E5484D;
   --chip-mix: 30%; /* 暗い背景では、16%だと青・緑・紫がどれも同じ暗い灰色に見えるので、濃くする */
 }
@@ -208,6 +208,7 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 .lbtn-search { color: var(--accent); }
 .lbtn-filter { color: var(--c-filter); }
 .lbtn-sort { color: var(--c-sort); }
+.lbtn-preset { color: var(--c-preset); }
 .lbtn-density[aria-pressed=true] { background: var(--selection); color: var(--accent); border-color: var(--accent); }
 .lbtn-search[aria-pressed=true] { background: color-mix(in srgb, var(--accent) var(--chip-mix), var(--window)); color: var(--accent); border-color: var(--accent); }
 .lbtn-filter[aria-pressed=true] { background: color-mix(in srgb, var(--c-filter) var(--chip-mix), var(--window)); color: var(--c-filter); border-color: var(--c-filter); }
@@ -224,6 +225,18 @@ body.browse :is(.backdrop, .menu, .lightbox, .toast) { display: none !important;
 :root.theme-dark .cchip-search { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, var(--window)); }
 .cchip-filter { background: color-mix(in srgb, var(--c-filter) var(--chip-mix), var(--window)); }
 :root.theme-dark .cchip-filter { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-filter) 60%, var(--window)); }
+.lbtn-preset[aria-pressed=true] { background: color-mix(in srgb, var(--c-preset) var(--chip-mix), var(--window)); color: var(--c-preset); border-color: var(--c-preset); }
+.cchip-preset { background: color-mix(in srgb, var(--c-preset) var(--chip-mix), var(--window)); padding: 0 8px; gap: 4px; font-weight: 600; }
+:root.theme-dark .cchip-preset { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-preset) 60%, var(--window)); }
+.cchip-preset svg.icon { width: 11px; height: 11px; flex: none; color: var(--c-preset); fill: currentColor; stroke: none; }
+.cchip-relation { background: var(--selection); padding: 0 8px; }
+.preset-form .field { display: flex; flex-direction: column; gap: 6px; }
+.preset-form .field > label { font-weight: 600; font-size: 12px; }
+.preset-form .pchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.preset-form .pchips .cchip { padding: 0 8px; }
+.preset-form .help { font-size: 11px; color: var(--text-muted); }
+.preset-error { font-size: 12px; color: var(--danger); }
+.preset-error.info { color: var(--text-muted); }
 .cchip-sort { background: color-mix(in srgb, var(--c-sort) var(--chip-mix), var(--window)); }
 :root.theme-dark .cchip-sort { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-sort) 60%, var(--window)); }
 button.link, .menu button.link { display: inline; min-height: 0; border: 0; background: none; padding: 0 4px; color: var(--link); font-size: 12px; cursor: pointer; }

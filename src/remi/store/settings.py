@@ -18,6 +18,9 @@ DEFAULTS: dict[str, Any] = {
     "version_status": {"mode": "all", "names": []},  # マイルストーン(バージョン)を開いたときの、ステータスの絞り込み。一覧とは別で、既定はすべて
     "list_filter": {"trackers": [], "priorities": [], "assignees": [], "due": []},  # 属性の絞り込み(名前で持つ)
     "list_sort": {"key": "updated", "desc": True},  # 並べ替え: key は updated / number / subject / status / tracker / priority / due
+    # 一覧の条件(検索・関係・ステータス・属性・並べ替え)に名前を付けて保存したもの。上から、メニューに出す順
+    # [{name, search, relation(None は関係を変えない), status: {mode, names}, filter: {...}, sort: {key, desc}}]
+    "list_presets": [],
     "unread_first": True,
     "list_density": "standard",  # 一覧の表示密度: standard / compact(設計書 §5.1)
     "allow_external_images": False,

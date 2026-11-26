@@ -40,6 +40,32 @@ def valid_sort(v: Any) -> bool:
         and isinstance(v.get("desc", True), bool)
 
 
+PRESETS_MAX = 50
+PRESET_NAME_MAX = 60
+RELATION_VALUES = ("all", "assigned", "watching", "authored")
+
+
+def valid_presets(v: Any) -> bool:
+    """一覧の条件のプリセット(設計書 §5.1)。名前は重複なし。relation が None のものは、関係を変えない(マイルストーンで保存したもの)。"""
+    if not isinstance(v, list) or len(v) > PRESETS_MAX:
+        return False
+    names = set()
+    for p in v:
+        if not (isinstance(p, dict) and set(p) == {"name", "search", "relation", "status", "filter", "sort"}):
+            return False
+        name = p["name"]
+        if not (isinstance(name, str) and name.strip() == name and 0 < len(name) <= PRESET_NAME_MAX) or name in names:
+            return False
+        names.add(name)
+        if not (isinstance(p["search"], str) and len(p["search"]) <= 200):
+            return False
+        if not (p["relation"] is None or p["relation"] in RELATION_VALUES):
+            return False
+        if not (valid_status_filter(p["status"]) and valid_list_filter(p["filter"]) and valid_sort(p["sort"])):
+            return False
+    return True
+
+
 @dataclass
 class Conditions:
     """一覧に当てる条件。空のものは、絞り込まない。"""
